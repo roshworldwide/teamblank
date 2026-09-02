@@ -44,6 +44,8 @@ __all__ = [
     "MAX_GAP_BUDGET_CLUSTERS",
     "MAX_GAP_IS_INCLUSIVE",
     "CARVER_SIGNATURES",
+    "KIND_SIGNATURE",
+    "NO_SIGNATURE_KINDS",
     "planted_byte_ranges",
     "measure_signature_false_positives",
     "is_fragmented",
@@ -59,6 +61,21 @@ __all__ = [
 SIG_ONLY = "signature-only"
 BIFRAGMENT = "bifragment"
 UNRECOVERABLE = "unrecoverable-by-design"
+
+# Which corpus kind maps to which signature row a carver would key on.  DOCX is
+# carved as ZIP, since a .docx IS a zip archive.  TXT maps to nothing: plain text
+# has no magic bytes, so signature carving cannot reach it at any offset.
+#
+# Our TXT corpus does open with an ASCII banner, and keying on that would lift
+# recall from 33 to 38 in an afternoon.  We do not, because a carver tuned to a
+# marker we planted ourselves measures nothing about carving.  Recorded in
+# docs/ai-log/entries/2026-09-03.md.
+KIND_SIGNATURE = {
+    "PNG": "PNG", "JPEG": "JPEG", "PDF": "PDF", "DOCX": "ZIP",
+    "GZIP": "GZIP", "SQLITE": "SQLITE", "MP4": "MP4",
+    "TXT": None,
+}
+NO_SIGNATURE_KINDS = frozenset(k for k, v in KIND_SIGNATURE.items() if v is None)
 
 # --------------------------------------------------------------------------
 # Reserved region at the head of the data area
@@ -583,6 +600,8 @@ def build_plan(geo, corpus, seed) -> list:
         frag = is_fragmented(ext)
         if fid in ("FRAG-06", "FRAG-07"):
             expect = UNRECOVERABLE
+        elif f.kind in NO_SIGNATURE_KINDS:
+            expect = UNRECOVERABLE
         elif frag:
             expect = BIFRAGMENT
         else:
@@ -898,8 +917,12 @@ def validate_plan(geo, placements: Sequence[Placement]) -> dict:
             problems.append("%s: bad expected_recoverable %r" % (p.name, p.expected_recoverable))
         if p.fragmented and p.expected_recoverable == SIG_ONLY:
             problems.append("%s: fragmented but labelled signature-only" % p.name)
-        if not p.fragmented and p.expected_recoverable != SIG_ONLY:
+        if (not p.fragmented and p.kind not in NO_SIGNATURE_KINDS
+                and p.expected_recoverable != SIG_ONLY):
             problems.append("%s: contiguous but labelled %r" % (p.name, p.expected_recoverable))
+        if p.kind in NO_SIGNATURE_KINDS and p.expected_recoverable != UNRECOVERABLE:
+            problems.append("%s: %s carries no signature but is labelled %r"
+                            % (p.name, p.kind, p.expected_recoverable))
 
     frag = [p for p in placements if p.fragmented]
     if len(frag) != 7:
@@ -908,9 +931,15 @@ def validate_plan(geo, placements: Sequence[Placement]) -> dict:
     if len(deleted) != 12:
         problems.append("expected 12 deleted files, got %d" % len(deleted))
     unrec = [p for p in placements if p.expected_recoverable == UNRECOVERABLE]
-    if sorted(p.frag_id for p in unrec) != ["FRAG-06", "FRAG-07"]:
-        problems.append("unrecoverable set is %r, expected FRAG-06 and FRAG-07"
-                        % sorted(p.frag_id for p in unrec))
+    unrec_frag = sorted(p.frag_id for p in unrec if p.frag_id)
+    if unrec_frag != ["FRAG-06", "FRAG-07"]:
+        problems.append("unrecoverable-by-fragmentation set is %r, expected "
+                        "FRAG-06 and FRAG-07" % unrec_frag)
+    unrec_nosig = sorted(p.name for p in unrec if not p.frag_id)
+    nosig = sorted(p.name for p in placements if p.kind in NO_SIGNATURE_KINDS)
+    if unrec_nosig != nosig:
+        problems.append("unrecoverable-by-no-signature set is %r, expected %r"
+                        % (unrec_nosig, nosig))
 
     by_fid = {p.frag_id: p for p in placements if p.frag_id}
 

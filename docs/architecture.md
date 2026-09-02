@@ -102,3 +102,96 @@ them is reproduced in the certificate rather than summarised.
 - **The Sleuth Kit is installed** as the independent carving cross-check named in the
   locked stack. It is development tooling only: never imported at runtime, never added
   to `pyproject.toml`, and the cross-check test skips when it is absent.
+
+## D2 · The confidence function, and the margin that actually protects it
+
+**Measured 2026-09-03 through shipped `structure::validate` and `confidence::confidence`.
+Reproduced by an independent checker on its own Python and Rust path. Enforced in CI by
+`core/carve/tests/residue_separation.rs`.**
+
+### The published formula
+
+```
+confidence = 0.40 * signature_integrity
+           + 0.35 * structural_validity
+           + 0.15 * entropy_consistency
+           + 0.10 * size_plausibility
+```
+
+Every term is in [0,1], computed, and independently unit tested. The UI renders all four as a
+stacked bar, because a score whose derivation is not on screen is a score a jury will not believe.
+
+### What separates a real file from a decoy
+
+Free space in the fixture carries 21 deliberate decoys — 8 bare JPEG headers and 13 bare GZIP
+headers, counted in the manifest.
+
+```
+35 planted, carvable   min 0.9000   max 1.0000   mean 0.9571
+21 residue decoys      min 0.5186   max 0.6500   mean 0.5805
+lowest true positive 0.9000 | highest false positive 0.6500 | gap 0.2500 | zero overlap
+```
+
+Per-term weighted contribution to that separation:
+
+| term | weight | contribution |
+|---|---|---|
+| signature_integrity | 0.40 | +0.0190 — *not separation, see below* |
+| structural_validity | 0.35 | **+0.3458** |
+| entropy_consistency | 0.15 | +0.0118 |
+| size_plausibility | 0.10 | +0.0000 |
+
+**Structure supplies more than the entire gap.** Size supplies exactly nothing — every decoy
+scores full marks on it. And signature integrity supplies nothing either: all 8 residue JPEGs
+resolve a valid `FF D9` footer in sequence and score a perfect 1.0000, identical to all 5 planted
+JPEGs. At the signature layer a noise blob and a photograph are indistinguishable. That is the
+empirical answer to *"why not just match magic bytes?"* — and it is why the 0.35 weight is where
+it is.
+
+Term 1's apparent +0.0190 is a kind-mix artefact, not discrimination: the residue population is
+62% footerless GZIP against 43% of the planted population. Within every kind, signature integrity
+awards a decoy exactly what it awards the real file. The CI test asserts that per-kind equality so
+the figure cannot be misread as separation later.
+
+### Three margins, and only one of them binds
+
+The admission gate is `confidence::MIN_CONFIDENCE` = 0.75. It is not 0.90, because GZIP, MP4 and
+SQLite define no terminator, so term 1 caps at 0.75 for them and a byte-perfect object of those
+kinds tops out at exactly 0.9000. The fixture plants 15 such files; a 0.90 gate would discard all
+15 to buy nothing against a highest false positive of 0.6500.
+
+| | value | what it means |
+|---|---|---|
+| population gap | 0.2500 | distance between the two distributions |
+| gate headroom | 0.1000 | decoy ceiling 0.6500 up to the 0.75 gate |
+| **structural-credit headroom** | **0.0357** | **the one that has to hold** |
+
+A decoy already scoring full marks on signature, entropy and size — which all 8 residue JPEGs
+do — carries 0.6500 for free. It clears the gate as soon as structural credit reaches
+
+```
+STRUCTURAL_BREACH_POINT = (MIN_CONFIDENCE - NON_STRUCTURE_CEILING) / W_STRUCTURE
+                        = (0.7500 - 0.6500) / 0.3500
+                        = 0.285714
+```
+
+The worst decoy today scores 0.2500 of structural credit. **The real margin is 0.0357**, and it is
+the number to quote — not the 0.2500 population gap, which describes a distance nothing enforces.
+Earlier figures of 0.4700 headroom, a 0.72 breach and a 0.9020 worst case were all computed against
+the retired 0.90 gate and are wrong.
+
+The breach point is derived in code from the weights and the gate, never hardcoded, so it moves if
+they do. Confirmed by mutation: forcing residue structural credit to 0.28 leaves the guard green,
+0.29 turns it red, and 0.30 admits four JPEG decoys at 0.7550. One residue GZIP already earns
+0.2500 of genuine partial credit — its header parses cleanly and only the DEFLATE stream fails — so
+this is a live margin, not a theoretical one.
+
+### Known limits of this measurement
+
+- Measured on one fixture. It contains no PNG, PDF, ZIP, SQLite or MP4 decoys, so false-positive
+  behaviour on those five kinds is unmeasured.
+- The residue span for footerless decoys is a policy choice. Only the adversarial ceiling of
+  0.6500 — entropy and size pinned to 1.0 for every decoy — is safe to quote against a challenge
+  to that choice.
+- This measures what `confidence()` says about a correctly recovered object. It is not a recall
+  claim, and it says nothing about what `bifragment.rs` can reassemble.
