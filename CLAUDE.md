@@ -10,10 +10,12 @@ Erasure and recovery are the same instrument pointed in two directions.
 
 ## The demo, which is the spec
 
-1. Mount a 256 MB image containing 40 planted files of known SHA-256.
-2. Carve. Recover 40/40 with confidence scores. **Recovery engine works.**
+1. Open a 256 MB image containing 40 planted files of known SHA-256. Nothing is
+   mounted: the carver reads bytes, so the image is a file, never an attached device.
+2. Carve. Recover 38 of 40 with confidence scores, and name the two the fixture
+   plants to defeat us. **Recovery engine works, and reports its own limits.**
 3. Wipe with the method appropriate to the medium. Live sector telemetry.
-4. Carve the same image again. Recover 0/40. **Erasure works, and we proved it
+4. Carve the same image again. Recover 0 of 40. **Erasure works, and we proved it
    with the tool that would have found it.**
 5. Sign the certificate. Append to the Merkle chain.
 6. Tamper with one byte of the certificate. Verification goes red.

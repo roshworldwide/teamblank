@@ -1,8 +1,52 @@
 {
+  "note": [
+    "This file is a POINTER, not the fixture manifest. The fixture is generated,",
+    "never committed: `make fixtures` writes out/fixture.img and",
+    "out/fixture.manifest.json, and out/ is gitignored. The manifest that carries",
+    "the 40 planted files, their offsets, extents and SHA-256 lives there.",
+    "What IS committed is the `expected` block below: the digests this seed and",
+    "size must reproduce. It exists so a checker can compare a hash instead of",
+    "trusting a rebuild, and so an accidental change to the corpus, the plan or",
+    "the writer fails loudly instead of quietly producing a different fixture.",
+    "`make fixtures` compares against it and EXITS 4 on a mismatch, printing both",
+    "hash pairs on stderr; the comparison runs in --quiet as well.",
+    "tests/test_fixtures.py::test_the_committed_expectation_matches_this_build",
+    "asserts the same comparison inside the suite.",
+    "If the fixture changed ON PURPOSE: rebuild with --no-check-expected, then",
+    "update this block in the SAME commit."
+  ],
   "schema": "sentinelwipe.fixtures.manifest/1",
-  "seed": null,
-  "filesystem": null,
-  "image_bytes": null,
-  "image_sha256": null,
-  "files": []
+  "generated_by": "uv run python fixtures/build_image.py --seed <seed> --size <size> --out out",
+  "generated_manifest": "out/fixture.manifest.json",
+  "generated_image": "out/fixture.img",
+  "expected": {
+    "seed": "sentinelwipe/fixture/v1",
+    "size_bytes": 268435456,
+    "filesystem": "FAT32",
+    "bytes_per_cluster": 2048,
+    "cluster_count": 130554,
+    "data_start_offset": 1060864,
+    "image_sha256": "d85612b255ff8e72e1ab8d7a34c227b67c3cb3acda75e2a92e5042758ac2df41",
+    "manifest_sha256": "36036e5db70d270540c2839f150d2037a06a20873c368bed992c957b3dbeda04",
+    "whole_image_entropy_bits_per_byte": 7.06169,
+    "max_gap_clusters": 128,
+    "max_gap_is_inclusive": true,
+    "residue_signature_false_positives": {
+      "PNG": 0,
+      "JPEG": 8,
+      "PDF": 0,
+      "ZIP": 0,
+      "GZIP": 13,
+      "SQLITE": 0,
+      "MP4": 0,
+      "BZ2": 11
+    },
+    "deleted_entries_carry_no_allocation_fields": true,
+    "counted_set": {
+      "total": 40,
+      "expected_recoverable": 38,
+      "unrecoverable_by_design": 2
+    },
+    "corpus_sha256_of_sha256s": "5ae588f427c659b6cebeba4abae30b200c0fc6d29da6babd445d1c9ab5d65e18"
+  }
 }
