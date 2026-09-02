@@ -195,3 +195,74 @@ this is a live margin, not a theoretical one.
   to that choice.
 - This measures what `confidence()` says about a correctly recovered object. It is not a recall
   claim, and it says nothing about what `bifragment.rs` can reassemble.
+
+## D3 · Demonstrated recall, and the cross-check against The Sleuth Kit
+
+**Measured 2026-09-03 against `out/fixture.img` through `core/target/release/carve`.
+Re-derived independently by an adversarial verifier joining on SHA-256. Full comparison in
+[tsk_crosscheck.md](tsk_crosscheck.md).**
+
+### Two numbers that are never the same sentence
+
+| | value | meaning |
+|---|---|---|
+| reachability ceiling | 33 of 40 | what this fixture makes reachable in principle: 28 contiguous + 5 needing reassembly |
+| **demonstrated recall** | **28 of 40** | what the contiguous engine measurably recovered, byte-exact |
+
+`bifragment.rs` is deliberately deferred, so the engine handles contiguous objects only and
+recovered 28 of the 28 contiguous-reachable files — zero shortfall, nothing lowered to reach it.
+The twelve it did not recover each carry a stated reason: five plaintext files carry no signature,
+five are stored in non-contiguous fragments, and two were fragmented deliberately to defeat it.
+
+### Admitted is not recovered
+
+The engine admits 33 objects above the 0.7500 gate; 28 are byte-exact against ground truth. Of the
+other five, four are the leading fragment of a file stored in pieces — real data, correctly
+identified, incompletely assembled. The fifth, a ZIP at offset 1,228,603, is a genuine false
+positive and scores **0.7550**: barely over the gate, the lowest admitted score in the run.
+
+That distinction only exists because we planted the corpus and know the answer. In the field a
+carver cannot tell the two apart, which is exactly why the confidence score has to be published
+per object rather than summarised into a count. `MP4@65943552` is the case that proves it: its
+length is `handover_briefing.mov`'s planted size to the byte and its structural validity is
+1.0000, yet the digest differs. A row count or an offset match calls that a recovery. Only the
+hash rejects it.
+
+### Both tools recover 28 of 40, and they are not the same 28
+
+| | count | which |
+|---|---|---|
+| both byte-exact | 21 | live, contiguous, signature-bearing |
+| TSK only | 7 | 4 live plaintext + 3 live fragmented |
+| carver only | 7 | the deleted, contiguous, signature-bearing set |
+| neither | 5 | 1 deleted plaintext + 4 deleted fragmented |
+| **union** | **35 of 40** | |
+
+Zero rows disagree on content: wherever both tools produced bytes for the same file, the digests
+match each other and the manifest.
+
+The mechanism behind the split is the whole argument. TSK's `icat` reads live files **through
+directory metadata** — filesystem parsing, not carving. The 12 deleted files are metadata-stripped
+by design (`first_cluster` and `size` both zeroed, confirmed by `istat` and a raw directory
+parse), so that path returns nothing for them: `tsk_recover` over unallocated space reports
+**"Files Recovered: 0"**. Our carver, over that same 263,948,288-byte `blkls` stream, recovers
+**7 byte-exact**. TSK 4.15.0 ships no file carver at all.
+
+Our signature scanner is itself validated against TSK: a byte-granular `sigfind` sweep over all
+512 intra-sector offsets returns 19 JPEG and 18 GZIP hits, and `carve --no-dedup` emits the
+identical offset lists, element for element, set difference empty in both directions.
+
+### Where we are worse, stated plainly
+
+On a live filesystem with intact metadata, TSK is the better tool. It reads the four live
+plaintext files out of their directory entries in microseconds; a signature carver cannot see a
+file that has no signature, and returns nothing. It also recovers three live fragmented files we
+currently cannot. The deficit is structural, not a tuning gap.
+
+The fifth plaintext file is deleted, and there neither tool recovers anything: no metadata for TSK
+to follow, no signature for us to find.
+
+### Cost
+
+`fls` 0.076 s · `tsk_recover -a` 0.070 s · `blkls` 0.309 s · `carve` whole image 1.655 s over
+268,435,456 bytes.

@@ -4,4 +4,21 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+# The library is the engine; the binary is the operator's handle on it.
+# The binary is named `carve`, not `sentinelwipe-carve`, because
+# `tests/test_carve_recall.py` already names `core/target/release/carve` as the
+# path it will measure recall through. That contract was written before this
+# file and is honoured rather than renamed.
+[lib]
+name = "sentinelwipe_carve"
+path = "src/lib.rs"
+
+[[bin]]
+name = "carve"
+path = "src/main.rs"
+
+# Zero dependencies, still. SHA-256 is hand-rolled in `carve.rs` beside the
+# hand-rolled CRC-32 in `structure/mod.rs`, and checked against the FIPS 180-4
+# vectors in unit tests and against the manifest's independently-computed
+# digests on every real run. The JSON writer is hand-rolled for the same reason.
 [dependencies]

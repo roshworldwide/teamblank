@@ -12,9 +12,10 @@ Erasure and recovery are the same instrument pointed in two directions.
 
 1. Open a 256 MB image containing 40 planted files of known SHA-256. Nothing is
    mounted: the carver reads bytes, so the image is a file, never an attached device.
-2. Carve. Recover 33 of 40 with confidence scores, and name all seven it cannot:
-   five plaintext files carry no signature, and two we fragmented deliberately to
-   defeat our own engine. **Recovery engine works, and reports its own limits.**
+2. Carve. Recover 28 of 40 byte-exact, with confidence scores. Twelve are not
+   recovered and each has a stated reason: five plaintext files carry no signature,
+   five need fragment reassembly, and two we fragmented deliberately to defeat our
+   own engine. **Recovery engine works, and reports its own limits.**
 3. Wipe with the method appropriate to the medium. Live sector telemetry.
 4. Carve the same image again. Recover 0 of 40. **Erasure works, and we proved it
    with the tool that would have found it.**

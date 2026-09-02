@@ -22,6 +22,7 @@
 //! manifest's `kind` field.
 
 pub mod bifragment;
+pub mod carve;
 pub mod confidence;
 pub mod signature;
 pub mod structure;
