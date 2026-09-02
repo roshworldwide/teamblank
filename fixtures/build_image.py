@@ -389,9 +389,14 @@ def _report(res: BuildResult, expected_path: str, verdict: str, exp) -> None:
     w("  planted                   %d files, %d fragmented, %d deleted\n"
       % (cs["total"], len(frag), sum(1 for p in res.placements if p.deleted)))
     w("  expected recoverable      %d of %d\n" % (cs["expected_recoverable"], cs["total"]))
-    w("  unrecoverable by design   %d  (%s)\n"
-      % (cs["unrecoverable_by_design"],
-         ", ".join("%s %s" % (p.frag_id, p.name) for p in unrec)))
+    nosig = [p for p in unrec if not p.frag_id]
+    byfrag = [p for p in unrec if p.frag_id]
+    w("  unrecoverable by design   %d\n" % cs["unrecoverable_by_design"])
+    if nosig:
+        w("    no signature to carve   %d  (%s)\n"
+          % (len(nosig), ", ".join(p.name for p in nosig)))
+    for p in byfrag:
+        w("    %-23s %s\n" % (p.frag_id, p.name))
     w("  residue clusters written  %d\n" % res.stats["residue_written"])
     w("  root reserve zeroed       %d clusters\n" % res.stats["root_reserve_zeroed"])
     w("\n")

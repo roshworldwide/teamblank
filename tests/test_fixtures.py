@@ -159,8 +159,24 @@ def test_counted_set_is_consistent_with_the_file_list(manifest):
     files = manifest["files"]
     unrec = [f for f in files if f["expected_recoverable"] == P.UNRECOVERABLE]
     assert cs["total"] == len(files) == 40
-    assert cs["unrecoverable_by_design"] == len(unrec) == 2
-    assert cs["expected_recoverable"] == len(files) - len(unrec) == 38
+    assert cs["unrecoverable_by_design"] == len(unrec) == 7
+    assert cs["expected_recoverable"] == len(files) - len(unrec) == 33
+
+    # Seven unreachable files, TWO DISTINCT CAUSES, pinned separately so that
+    # losing one cause cannot be masked by the other still summing to seven.
+    nosig = [f for f in unrec if f["kind"].upper() == "TXT"]
+    byfrag = sorted(f["path"] for f in unrec if f["kind"].upper() != "TXT")
+    assert len(nosig) == 5, "expected 5 plaintext files with no signature"
+    assert byfrag == ["/evidence_bag_seal.jpg", "/media_inventory.docx"], byfrag
+
+    # Plain text carries no magic bytes, so signature carving cannot reach it at
+    # any offset.  Our corpus text does open with an ASCII banner and keying on
+    # it would lift recall to 38; that is refused, because a carver tuned to a
+    # marker we planted ourselves measures nothing about carving.
+    for f in files:
+        if f["kind"].upper() == "TXT":
+            assert f["expected_recoverable"] == P.UNRECOVERABLE, f["path"]
+
     # The operator's decision, asserted rather than trusted to the narration:
     # the demo never reports a round 40 of 40.
     assert cs["expected_recoverable"] != cs["total"]
@@ -531,9 +547,18 @@ def test_the_fragmentation_ladder_is_present_and_attributable(manifest, built):
                                           + p7.extents[1].cluster_count)
     assert back <= P.MAX_GAP_BUDGET_CLUSTERS
 
-    unrec = {p.frag_id for p in built.placements
-             if p.expected_recoverable == P.UNRECOVERABLE}
-    assert unrec == {"FRAG-06", "FRAG-07"}
+    # Unreachable for a FRAGMENTATION reason is exactly FRAG-06 and FRAG-07.
+    # The plaintext files are also unreachable but for an unrelated reason (no
+    # signature at all), carry no frag_id, and must not be allowed to satisfy
+    # this assertion.
+    unrec_frag = {p.frag_id for p in built.placements
+                  if p.expected_recoverable == P.UNRECOVERABLE and p.frag_id}
+    assert unrec_frag == {"FRAG-06", "FRAG-07"}
+    unrec_nosig = {p.name for p in built.placements
+                   if p.expected_recoverable == P.UNRECOVERABLE and not p.frag_id}
+    assert unrec_nosig == {p.name for p in built.placements
+                           if p.kind in P.NO_SIGNATURE_KINDS}
+    assert len(unrec_nosig) == 5
     # The mutual interleave, and the fact that it straddles the deleted line.
     a0, a1 = by_fid["FRAG-04"].extents
     b0, b1 = by_fid["FRAG-05"].extents

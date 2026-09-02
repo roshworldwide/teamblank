@@ -27,7 +27,7 @@
     "cluster_count": 130554,
     "data_start_offset": 1060864,
     "image_sha256": "d85612b255ff8e72e1ab8d7a34c227b67c3cb3acda75e2a92e5042758ac2df41",
-    "manifest_sha256": "36036e5db70d270540c2839f150d2037a06a20873c368bed992c957b3dbeda04",
+    "manifest_sha256": "1808494ecc3cd5e21d0d9790af5478cda6aa7011b531e20ea1655e3edbc2cd69",
     "whole_image_entropy_bits_per_byte": 7.06169,
     "max_gap_clusters": 128,
     "max_gap_is_inclusive": true,
@@ -44,8 +44,8 @@
     "deleted_entries_carry_no_allocation_fields": true,
     "counted_set": {
       "total": 40,
-      "expected_recoverable": 38,
-      "unrecoverable_by_design": 2
+      "expected_recoverable": 33,
+      "unrecoverable_by_design": 7
     },
     "corpus_sha256_of_sha256s": "5ae588f427c659b6cebeba4abae30b200c0fc6d29da6babd445d1c9ab5d65e18"
   }
