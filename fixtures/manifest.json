@@ -1,0 +1,8 @@
+{
+  "schema": "sentinelwipe.fixtures.manifest/1",
+  "seed": null,
+  "filesystem": null,
+  "image_bytes": null,
+  "image_sha256": null,
+  "files": []
+}

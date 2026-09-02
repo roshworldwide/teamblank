@@ -1,0 +1,16 @@
+# build
+target/
+dist/
+node_modules/
+ui/src-tauri/target/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# fixtures are generated from a seed and are never committed
+fixtures/*.img
+fixtures/*.raw
+out/
