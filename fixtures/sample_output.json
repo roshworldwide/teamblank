@@ -1,0 +1,2696 @@
+{
+  "schema": "sentinelwipe.carve.report/1",
+  "provenance": {
+    "producer": "core/carve/examples/gen_sample_output.rs",
+    "command": "cargo run --release -p sentinelwipe-carve --example gen_sample_output",
+    "is_carve_run": false,
+    "notes": [
+      "GENERATED, never hand-written. Every value here was measured: ground truth from out/fixture.manifest.json, the four confidence terms from the shipped confidence::confidence, the structural verdict and every reason string from the shipped structure::validate, and every SHA-256 from the bytes named by the record's own extents.",
+      "This is NOT a carve run. carve.rs does not exist at the time this file was frozen. The record set is the union of the manifest's 35 planted carvable objects, each scored on its correctly assembled bytes, and every residue candidate the shipped scanner finds outside every planted extent. It is a schema exercise with real numbers, not a recovery result.",
+      "counts.admitted is therefore NOT a recall figure and must never be rendered as one. Seven of the admitted records are `reassembled`, which requires bifragment.rs; two of those seven the fixture plants as unrecoverable by construction and a forward gap search cannot rebuild them at all.",
+      "ground_truth.reachability is a CEILING on what an engine could reach on this fixture. ground_truth.demonstrated_recall is what a carver measurably recovered. They are two different numbers, they are reported in two different fields, and a report that has not measured the second one carries null there.",
+      "Every `signature-span` record here is residue and its extent is a signature-layer span, not a validator's claim: header to the format's terminator when the scanner found one, and otherwise a window equal to the largest planted object of that kind, which is the span tests/residue_separation.rs uses and which architecture.md D2 names as a policy choice. Only the adversarial ceiling of 0.6500 -- terms 3 and 4 pinned to 1.0 for every decoy -- is safe to quote against a challenge to that choice.",
+      "timing is null on purpose: a duration is the one field that would stop this file from regenerating byte-identically."
+    ]
+  },
+  "run": {
+    "phase": "pre-wipe",
+    "image_path": "out/fixture.img",
+    "image_bytes": 268435456,
+    "image_sha256": "d85612b255ff8e72e1ab8d7a34c227b67c3cb3acda75e2a92e5042758ac2df41",
+    "read_mode": "file",
+    "device": null,
+    "timing": null
+  },
+  "policy": {
+    "formula": "confidence = 0.40*signature_integrity + 0.35*structural_validity + 0.15*entropy_consistency + 0.10*size_plausibility",
+    "weights": {
+      "signature_integrity": 0.400000,
+      "structural_validity": 0.350000,
+      "entropy_consistency": 0.150000,
+      "size_plausibility": 0.100000
+    },
+    "weights_sum": 1.000000,
+    "min_confidence": 0.750000,
+    "non_structure_ceiling": 0.650000,
+    "structural_breach_point": 0.285714,
+    "signature_ladder": {
+      "header-mismatch": 0.000000,
+      "header-only": 0.500000,
+      "no-footer-defined": 0.750000,
+      "header-and-footer": 1.000000
+    },
+    "entropy_min_sample_bytes": 1024,
+    "entropy_unknown": 0.500000
+  },
+  "kind_policy": {
+    "JPEG": {
+      "defines_footer": true,
+      "entropy_band_bits_per_byte": [5.500000, 7.000000, 7.990000, 8.000000],
+      "size_bounds_bytes": [107, 1024, 16777216, 67108864]
+    },
+    "PNG": {
+      "defines_footer": true,
+      "entropy_band_bits_per_byte": [5.500000, 7.000000, 7.990000, 8.000000],
+      "size_bounds_bytes": [67, 512, 16777216, 67108864]
+    },
+    "PDF": {
+      "defines_footer": true,
+      "entropy_band_bits_per_byte": [1.000000, 3.000000, 7.990000, 8.000000],
+      "size_bounds_bytes": [300, 1024, 33554432, 134217728]
+    },
+    "ZIP": {
+      "defines_footer": true,
+      "entropy_band_bits_per_byte": [1.000000, 3.000000, 7.990000, 8.000000],
+      "size_bounds_bytes": [22, 256, 67108864, 268435456]
+    },
+    "SQLITE": {
+      "defines_footer": false,
+      "entropy_band_bits_per_byte": [0.500000, 1.500000, 7.900000, 8.000000],
+      "size_bounds_bytes": [512, 4096, 134217728, 536870912]
+    },
+    "MP4": {
+      "defines_footer": false,
+      "entropy_band_bits_per_byte": [3.000000, 6.000000, 7.990000, 8.000000],
+      "size_bounds_bytes": [16, 4096, 134217728, 536870912]
+    },
+    "GZIP": {
+      "defines_footer": false,
+      "entropy_band_bits_per_byte": [5.500000, 7.000000, 7.990000, 8.000000],
+      "size_bounds_bytes": [20, 128, 33554432, 134217728]
+    }
+  },
+  "counts": {
+    "records": 56,
+    "admitted": 35,
+    "rejected": 21,
+    "sha256_matches_planted": 35,
+    "by_kind": {
+      "JPEG": { "records": 13, "admitted": 5, "rejected": 8 },
+      "PNG": { "records": 5, "admitted": 5, "rejected": 0 },
+      "PDF": { "records": 5, "admitted": 5, "rejected": 0 },
+      "ZIP": { "records": 5, "admitted": 5, "rejected": 0 },
+      "SQLITE": { "records": 5, "admitted": 5, "rejected": 0 },
+      "MP4": { "records": 5, "admitted": 5, "rejected": 0 },
+      "GZIP": { "records": 18, "admitted": 5, "rejected": 13 }
+    },
+    "by_assembly": {
+      "contiguous": 28,
+      "reassembled": 7,
+      "signature-span": 21
+    }
+  },
+  "score_distribution": {
+    "admitted": { "n": 35, "min": 0.900000, "max": 1.000000, "mean": 0.957143 },
+    "rejected": { "n": 21, "min": 0.518570, "max": 0.650000, "mean": 0.580502 }
+  },
+  "margin": {
+    "lowest_admitted": 0.900000,
+    "highest_rejected": 0.650000,
+    "population_gap": 0.250000,
+    "gate_headroom": 0.100000,
+    "worst_rejected_structural_validity": 0.250000,
+    "structural_breach_point": 0.285714,
+    "structural_headroom": 0.035714,
+    "binds": "structural_headroom"
+  },
+  "ground_truth": {
+    "manifest_path": "out/fixture.manifest.json",
+    "manifest_sha256": "1808494ecc3cd5e21d0d9790af5478cda6aa7011b531e20ea1655e3edbc2cd69",
+    "planted_total": 40,
+    "reachability": {
+      "contiguous": 28,
+      "needs_bifragment_reassembly": 5,
+      "unreachable_by_construction": 7
+    },
+    "unreachable": [
+      {
+        "path": "/evidence_log_2026-01-14.txt",
+        "kind": "TXT",
+        "reason": "kind TXT has no row in signature::SIGNATURES: no header to scan for"
+      },
+      {
+        "path": "/interview_transcript_raw.txt",
+        "kind": "TXT",
+        "reason": "kind TXT has no row in signature::SIGNATURES: no header to scan for"
+      },
+      {
+        "path": "/sector_survey_notes.txt",
+        "kind": "TXT",
+        "reason": "kind TXT has no row in signature::SIGNATURES: no header to scan for"
+      },
+      {
+        "path": "/operator_handover.txt",
+        "kind": "TXT",
+        "reason": "kind TXT has no row in signature::SIGNATURES: no header to scan for"
+      },
+      {
+        "path": "/wipe_command_history.txt",
+        "kind": "TXT",
+        "reason": "kind TXT has no row in signature::SIGNATURES: no header to scan for"
+      },
+      {
+        "path": "/evidence_bag_seal.jpg",
+        "kind": "JPEG",
+        "reason": "2 extents stored out of physical order (extent[1] at 214110208 precedes extent[0] at 214231040); a forward gap search cannot reach them"
+      },
+      {
+        "path": "/media_inventory.docx",
+        "kind": "DOCX",
+        "reason": "3 extents; bifragment gap carving reassembles at most 2"
+      }
+    ],
+    "recall_measured": false,
+    "demonstrated_recall": null,
+    "demonstrated_recall_note": "null because no carve run produced one. carve.rs did not exist when this sample was frozen, so writing a number here would be a claim no test has made. A contiguous engine's demonstrated recall is bounded above by reachability.contiguous and is reported here only once measured."
+  },
+  "candidates": [
+    {
+      "id": "ZIP@1069056",
+      "kind": "ZIP",
+      "offset": 1069056,
+      "length": 79397,
+      "assembly": "reassembled",
+      "extents": [{ "offset": 1069056, "length": 18432 }, { "offset": 1110016, "length": 26624 }, { "offset": 1196032, "length": 34341 }],
+      "sha256": "8b3d1dd7bce506e8cf098b384ad41178b4ebb2e220d098d0ff6938a8c510a655",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 79397,
+        "score": 1.000000,
+        "detail": "ooxml entries=7 xcheck=7/7 payload=7/7 cd@78930 end=79397"
+      },
+      "entropy": {
+        "bits_per_byte": 7.887695,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/media_inventory.docx",
+        "manifest_kind": "DOCX",
+        "expected_recoverable": "unrecoverable-by-design",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@1347263",
+      "kind": "GZIP",
+      "offset": 1347263,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 1347263, "length": 127302 }],
+      "sha256": "133e800432df9f86984104317ac005b6a90917236a4c4565fe96b977dbb6e7d2",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0xD1, reserved bits 5-7 are 0xC0 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 7.545656,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.550000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xD1, reserved bits 5-7 are 0xC0 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "GZIP@8054784",
+      "kind": "GZIP",
+      "offset": 8054784,
+      "length": 109182,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 8054784, "length": 109182 }],
+      "sha256": "871561fa7fb2f836a64f686ac18f6dddc1a25f8314890a4970e6e7296f0c50a6",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 109182,
+        "score": 1.000000,
+        "detail": "gzip: 28-byte header naming 'carve_session.log', 109146 DEFLATE bytes in 1 block(s) -> 393656 bytes, CRC-32 7D84AEC6 verified, ISIZE 393656 matched, 109182 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.870278,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/carve_session.log.gz",
+        "manifest_kind": "GZIP",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "SQLITE@12900352",
+      "kind": "SQLITE",
+      "offset": 12900352,
+      "length": 192512,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 12900352, "length": 192512 }],
+      "sha256": "aca915ffe06a7924c5ba4c3e49291c172c7f10e7234d8dc3614f4407e92415d2",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 192512,
+        "score": 1.000000,
+        "detail": "sqlite page=4096 pages=47 usable=4096 page1=0x0D cells=2 end=192512"
+      },
+      "entropy": {
+        "bits_per_byte": 5.500263,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/hash_baseline.db",
+        "manifest_kind": "SQLITE",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "JPEG@18325159",
+      "kind": "JPEG",
+      "offset": 18325159,
+      "length": 61358,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 18325159, "length": 61358 }],
+      "sha256": "ce50acd2d44705c1033b1afbdd79d2dbf3bfd99079ea6d1ea42fe5f89cc32211",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "jpeg: expected a marker at offset 39375, found 00"
+      },
+      "entropy": {
+        "bits_per_byte": 7.327992,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.650000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.6500 below MIN_CONFIDENCE 0.7500; structure: jpeg: expected a marker at offset 39375, found 00",
+      "ground_truth": null
+    },
+    {
+      "id": "GZIP@18648694",
+      "kind": "GZIP",
+      "offset": 18648694,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 18648694, "length": 127302 }],
+      "sha256": "46609abb9902bd6908c0a4e8a54d27bdbe2f3f7e742260c0fefee8fe6b71650c",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0xDB, reserved bits 5-7 are 0xC0 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 7.302986,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.550000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xDB, reserved bits 5-7 are 0xC0 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "PNG@21317632",
+      "kind": "PNG",
+      "offset": 21317632,
+      "length": 260595,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 21317632, "length": 260595 }],
+      "sha256": "04aeca15f9a50b2470b02d8ae8bf9ecd8cd5f2906c5ce2d998ad8a6c4c4c4aae",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 260595,
+        "score": 1.000000,
+        "detail": "png: 288x288 depth 8 colour 2, 6 chunks all CRC-verified, 1 IDAT holding 260396 compressed bytes, 260595 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.798581,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/seizure_photo_a.png",
+        "manifest_kind": "PNG",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "PDF@26875904",
+      "kind": "PDF",
+      "offset": 26875904,
+      "length": 48983,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 26875904, "length": 48983 }],
+      "sha256": "4939ea43ddc7430e6aaf6f2cc3e25c961f7f0fe531602043af5fd28783112284",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 48983,
+        "score": 1.000000,
+        "detail": "pdf-1.7 xref=table objs=22 verified=22/22 root=21 end=48983"
+      },
+      "entropy": {
+        "bits_per_byte": 7.949122,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/acquisition_worksheet.pdf",
+        "manifest_kind": "PDF",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "PNG@32710656",
+      "kind": "PNG",
+      "offset": 32710656,
+      "length": 207661,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 32710656, "length": 207661 }],
+      "sha256": "65ead9586ff4a5193254413a944887cbfc9a8511f320bac8daf87c65abda31f2",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 207661,
+        "score": 1.000000,
+        "detail": "png: 256x256 depth 8 colour 2, 31 chunks all CRC-verified, 26 IDAT holding 207164 compressed bytes, 207661 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.824377,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/sector_map_02.png",
+        "manifest_kind": "PNG",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "JPEG@35205775",
+      "kind": "JPEG",
+      "offset": 35205775,
+      "length": 652632,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 35205775, "length": 652632 }],
+      "sha256": "4a47b4f18c69d909e010d0b77a7cf6b809a63c853e548e571d6593e20d120aa7",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "jpeg: reserved marker FF80 at offset 2, chain broken"
+      },
+      "entropy": {
+        "bits_per_byte": 6.946304,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.964202,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.144630,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.644630
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.6446 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF80 at offset 2, chain broken",
+      "ground_truth": null
+    },
+    {
+      "id": "SQLITE@37040128",
+      "kind": "SQLITE",
+      "offset": 37040128,
+      "length": 221184,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 37040128, "length": 221184 }],
+      "sha256": "bed97cbc33bd94094fbc4f5994fd74e7339ed5bc91b11a805b396c29347a3eb0",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 221184,
+        "score": 1.000000,
+        "detail": "sqlite page=4096 pages=54 usable=4096 page1=0x0D cells=2 end=221184"
+      },
+      "entropy": {
+        "bits_per_byte": 5.507579,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/carve_results.db",
+        "manifest_kind": "SQLITE",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "ZIP@43235328",
+      "kind": "ZIP",
+      "offset": 43235328,
+      "length": 32453,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 43235328, "length": 32453 }],
+      "sha256": "211a9eec0346bfafeeb4504b167f259f6913e76cd5ba0a1da3e3de2416d68adb",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 32453,
+        "score": 1.000000,
+        "detail": "ooxml entries=7 xcheck=7/7 payload=7/7 cd@31986 end=32453"
+      },
+      "entropy": {
+        "bits_per_byte": 7.883541,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/lab_procedure_v3.docx",
+        "manifest_kind": "DOCX",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "JPEG@44064338",
+      "kind": "JPEG",
+      "offset": 44064338,
+      "length": 23316,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 44064338, "length": 23316 }],
+      "sha256": "9d2f24d9caf5cde1dd5a4d0fc9f0f6f039e1e7ad3b3fee5e8059b6a73d589391",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "jpeg: reserved marker FFAD at offset 2, chain broken"
+      },
+      "entropy": {
+        "bits_per_byte": 6.179988,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.453325,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.067999,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.567999
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5680 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FFAD at offset 2, chain broken",
+      "ground_truth": null
+    },
+    {
+      "id": "PNG@51361792",
+      "kind": "PNG",
+      "offset": 51361792,
+      "length": 183350,
+      "assembly": "reassembled",
+      "extents": [{ "offset": 51361792, "length": 73728 }, { "offset": 51437568, "length": 109622 }],
+      "sha256": "442064812da9726b3586ac67a6abe586ef5e82218e39901cb310f8909d3a18b7",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 183350,
+        "score": 1.000000,
+        "detail": "png: 240x240 depth 8 colour 2, 28 chunks all CRC-verified, 23 IDAT holding 182887 compressed bytes, 183350 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.841395,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/entropy_heatmap.png",
+        "manifest_kind": "PNG",
+        "expected_recoverable": "bifragment",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@59394048",
+      "kind": "GZIP",
+      "offset": 59394048,
+      "length": 54871,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 59394048, "length": 54871 }],
+      "sha256": "1f0e879bdf7f7489a949151563f2bfd7df17cb67cbb09d876295696b4faaa432",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 54871,
+        "score": 1.000000,
+        "detail": "gzip: 26-byte header naming 'audit_trail.log', 54837 DEFLATE bytes in 1 block(s) -> 196781 bytes, CRC-32 FB4D1D67 verified, ISIZE 196781 matched, 54871 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.866883,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/audit_trail.log.gz",
+        "manifest_kind": "GZIP",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "MP4@65796096",
+      "kind": "MP4",
+      "offset": 65796096,
+      "length": 221041,
+      "assembly": "reassembled",
+      "extents": [{ "offset": 65796096, "length": 90112 }, { "offset": 65988608, "length": 130929 }],
+      "sha256": "9eba46c122a7e6220516495d94c7835e2926bccc23c0d651fe6573b4005b5708",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 221041,
+        "score": 1.000000,
+        "detail": "mp4: brand 'qt', 3 top-level boxes tiling 221041 bytes, 19 boxes walked, 1 track(s), mdat payload 220500 bytes, 55125 sample(s) totalling 220500 bytes across 1 chunk offset(s); 220500 mdat bytes are NOT covered by any checksum -- MP4 defines none"
+      },
+      "entropy": {
+        "bits_per_byte": 7.760392,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/sealing_procedure.mov",
+        "manifest_kind": "MP4",
+        "expected_recoverable": "bifragment",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "MP4@65943552",
+      "kind": "MP4",
+      "offset": 65943552,
+      "length": 66689,
+      "assembly": "reassembled",
+      "extents": [{ "offset": 65943552, "length": 32768 }, { "offset": 66119680, "length": 33921 }],
+      "sha256": "57d8b12499249296594fb2740ab3c4ae06fe6155cbb064bf04e473d3421e77ef",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 66689,
+        "score": 1.000000,
+        "detail": "mp4: brand 'qt', 3 top-level boxes tiling 66689 bytes, 19 boxes walked, 1 track(s), mdat payload 66148 bytes, 16537 sample(s) totalling 66148 bytes across 1 chunk offset(s); 66148 mdat bytes are NOT covered by any checksum -- MP4 defines none"
+      },
+      "entropy": {
+        "bits_per_byte": 7.760018,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/handover_briefing.mov",
+        "manifest_kind": "MP4",
+        "expected_recoverable": "bifragment",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "SQLITE@73611264",
+      "kind": "SQLITE",
+      "offset": 73611264,
+      "length": 139264,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 73611264, "length": 139264 }],
+      "sha256": "7ed9c3eef68aa3211243053c5542e87eb853c97765596f3b2f8195d513725dab",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 139264,
+        "score": 1.000000,
+        "detail": "sqlite page=4096 pages=34 usable=4096 page1=0x0D cells=2 end=139264"
+      },
+      "entropy": {
+        "bits_per_byte": 5.382805,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/device_registry.db",
+        "manifest_kind": "SQLITE",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "PNG@79996928",
+      "kind": "PNG",
+      "offset": 79996928,
+      "length": 208084,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 79996928, "length": 208084 }],
+      "sha256": "04cff656db334ed887dd73b1be92ec731c7ad01b53b420c48443642c1332118f",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 208084,
+        "score": 1.000000,
+        "detail": "png: 256x256 depth 8 colour 2, 31 chunks all CRC-verified, 26 IDAT holding 207587 compressed bytes, 208084 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.835591,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/sector_map_03.png",
+        "manifest_kind": "PNG",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "ZIP@85690368",
+      "kind": "ZIP",
+      "offset": 85690368,
+      "length": 63749,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 85690368, "length": 63749 }],
+      "sha256": "788f9217c6942d722eb3ff95d8e6c9a99b8e907bbd7b9d45215945ff0f9220f5",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 63749,
+        "score": 1.000000,
+        "detail": "ooxml entries=7 xcheck=7/7 payload=7/7 cd@63282 end=63749"
+      },
+      "entropy": {
+        "bits_per_byte": 7.886800,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/incident_summary.docx",
+        "manifest_kind": "DOCX",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@86478323",
+      "kind": "GZIP",
+      "offset": 86478323,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 86478323, "length": 127302 }],
+      "sha256": "cd49d93c283e57d35e1561877ab2625f05c668c84de4e31f2f164fa7b267491b",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0xE3, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 7.360938,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.550000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xE3, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "JPEG@88398058",
+      "kind": "JPEG",
+      "offset": 88398058,
+      "length": 343352,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 88398058, "length": 343352 }],
+      "sha256": "f147e589c580bc7afb12dcad48c48aff957906028c3f9f7f488310b3da6867ce",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "jpeg: reserved marker FF44 at offset 2, chain broken"
+      },
+      "entropy": {
+        "bits_per_byte": 6.886150,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.924100,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.138615,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.638615
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.6386 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF44 at offset 2, chain broken",
+      "ground_truth": null
+    },
+    {
+      "id": "GZIP@89563136",
+      "kind": "GZIP",
+      "offset": 89563136,
+      "length": 91103,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 89563136, "length": 91103 }],
+      "sha256": "442f2fb88c205048965e57b073c78fbcdde6b13e0bf4f6cc3593c6ce69d36d01",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 91103,
+        "score": 1.000000,
+        "detail": "gzip: 30-byte header naming 'controller_dump.bin', 91065 DEFLATE bytes in 1 block(s) -> 328975 bytes, CRC-32 6EBA8E27 verified, ISIZE 328975 matched, 91103 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.869959,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/controller_dump.bin.gz",
+        "manifest_kind": "GZIP",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@91161674",
+      "kind": "GZIP",
+      "offset": 91161674,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 91161674, "length": 127302 }],
+      "sha256": "544b13aa85db4975932a3a36d399a16d743e27197ef5a203413f10c874b02257",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0x5A, reserved bits 5-7 are 0x40 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 7.252739,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.550000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x5A, reserved bits 5-7 are 0x40 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "GZIP@94937895",
+      "kind": "GZIP",
+      "offset": 94937895,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 94937895, "length": 127302 }],
+      "sha256": "413db97f88fad0221e8622e800633c0ab5ae75392cfed4e21d728a5662169db8",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0x99, reserved bits 5-7 are 0x80 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 6.685699,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.790466,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.118570,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.518570
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5186 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x99, reserved bits 5-7 are 0x80 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "PDF@96673792",
+      "kind": "PDF",
+      "offset": 96673792,
+      "length": 43586,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 96673792, "length": 43586 }],
+      "sha256": "77a6c227444c6b60976ce378fa75a1c0443b6e66de1dc387de7c53a32b686669",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 43586,
+        "score": 1.000000,
+        "detail": "pdf-1.7 xref=table objs=26 verified=26/26 root=25 end=43586"
+      },
+      "entropy": {
+        "bits_per_byte": 7.939966,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/chain_of_custody.pdf",
+        "manifest_kind": "PDF",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "ZIP@101607424",
+      "kind": "ZIP",
+      "offset": 101607424,
+      "length": 40801,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 101607424, "length": 40801 }],
+      "sha256": "6114f932e1691360f0cd179db406263383ae3523d050ae31844737b83edfc3f2",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 40801,
+        "score": 1.000000,
+        "detail": "ooxml entries=7 xcheck=7/7 payload=7/7 cd@40334 end=40801"
+      },
+      "entropy": {
+        "bits_per_byte": 7.887792,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/sanitization_report.docx",
+        "manifest_kind": "DOCX",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "SQLITE@108763136",
+      "kind": "SQLITE",
+      "offset": 108763136,
+      "length": 167936,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 108763136, "length": 167936 }],
+      "sha256": "2b7d56debb9dd10bea56fe24c0975598c5995f7f6db358e0ac39972f43a033ad",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 167936,
+        "score": 1.000000,
+        "detail": "sqlite page=4096 pages=41 usable=4096 page1=0x0D cells=2 end=167936"
+      },
+      "entropy": {
+        "bits_per_byte": 5.422039,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/custody_ledger.db",
+        "manifest_kind": "SQLITE",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@114012149",
+      "kind": "GZIP",
+      "offset": 114012149,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 114012149, "length": 127302 }],
+      "sha256": "f0c9126ca789bf9308bfc7cf57330693aafdaa32511e3b257e0fd57ae4d908bb",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0x25, reserved bits 5-7 are 0x20 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 6.786457,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.857638,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.128646,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.528646
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5286 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x25, reserved bits 5-7 are 0x20 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "PDF@114669568",
+      "kind": "PDF",
+      "offset": 114669568,
+      "length": 38408,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 114669568, "length": 38408 }],
+      "sha256": "0cea32190a6ad8f0c2602df47e2bf08f7b24d8c547c0eccc44cc337e8926a278",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 38408,
+        "score": 1.000000,
+        "detail": "pdf-1.7 xref=table objs=30 verified=30/30 root=29 end=38408"
+      },
+      "entropy": {
+        "bits_per_byte": 7.907939,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/standards_checklist.pdf",
+        "manifest_kind": "PDF",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@117352295",
+      "kind": "GZIP",
+      "offset": 117352295,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 117352295, "length": 127302 }],
+      "sha256": "2d3c19ff78b85565892b969c52fc1c07c2a62073facb1913283bb0104584187a",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0xF3, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 6.963938,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.975959,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.146394,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.546394
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5464 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xF3, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "PDF@119242752",
+      "kind": "PDF",
+      "offset": 119242752,
+      "length": 54214,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 119242752, "length": 54214 }],
+      "sha256": "3c425544e1b4eaae3b439d9813f161349b020bdfbd9235168488757c962c5afe",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 54214,
+        "score": 1.000000,
+        "detail": "pdf-1.7 xref=table objs=18 verified=18/18 root=17 end=54214"
+      },
+      "entropy": {
+        "bits_per_byte": 7.943318,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/examiner_affidavit.pdf",
+        "manifest_kind": "PDF",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "JPEG@125999104",
+      "kind": "JPEG",
+      "offset": 125999104,
+      "length": 104665,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 125999104, "length": 104665 }],
+      "sha256": "80c5f8d6279049610e7943230cb7869696d0d0794e287756f5afb3ea3c1cde20",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 104665,
+        "score": 1.000000,
+        "detail": "jpeg: SOI..EOI over 104665 bytes, 10 segments, SOF0 256x256 3c, 103993 entropy bytes, 0 restart markers"
+      },
+      "entropy": {
+        "bits_per_byte": 7.899537,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/platter_surface_01.jpg",
+        "manifest_kind": "JPEG",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "JPEG@126324818",
+      "kind": "JPEG",
+      "offset": 126324818,
+      "length": 232589,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 126324818, "length": 232589 }],
+      "sha256": "89cac1defe525d8287ffc889c51ca0bc4a6d6e179a07a59b40730fa8f38da170",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "jpeg: reserved marker FF61 at offset 2, chain broken"
+      },
+      "entropy": {
+        "bits_per_byte": 6.696425,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.797616,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.119642,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.619642
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.6196 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF61 at offset 2, chain broken",
+      "ground_truth": null
+    },
+    {
+      "id": "MP4@133177344",
+      "kind": "MP4",
+      "offset": 133177344,
+      "length": 132841,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 133177344, "length": 132841 }],
+      "sha256": "fa77405fe5e5b104e686a7f5c27576d6e19fd791e32898f039a95858545739d0",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 132841,
+        "score": 1.000000,
+        "detail": "mp4: brand 'qt', 3 top-level boxes tiling 132841 bytes, 19 boxes walked, 1 track(s), mdat payload 132300 bytes, 33075 sample(s) totalling 132300 bytes across 1 chunk offset(s); 132300 mdat bytes are NOT covered by any checksum -- MP4 defines none"
+      },
+      "entropy": {
+        "bits_per_byte": 7.760346,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/bench_capture_01.mov",
+        "manifest_kind": "MP4",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "PNG@136941568",
+      "kind": "PNG",
+      "offset": 136941568,
+      "length": 158522,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 136941568, "length": 158522 }],
+      "sha256": "f2ce70dc1434d9acd958c6ab6ded28745e4c7149a570f83561a9a30a084355e5",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 158522,
+        "score": 1.000000,
+        "detail": "png: 224x224 depth 8 colour 2, 6 chunks all CRC-verified, 1 IDAT holding 158325 compressed bytes, 158522 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.809664,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/sector_map_01.png",
+        "manifest_kind": "PNG",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@143464448",
+      "kind": "GZIP",
+      "offset": 143464448,
+      "length": 127302,
+      "assembly": "reassembled",
+      "extents": [{ "offset": 143464448, "length": 69632 }, { "offset": 143566848, "length": 57670 }],
+      "sha256": "2507233008b984e7ad632ad824b8d160f1c8fdbf56af33b5bda6b75b3562d1ac",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 127302,
+        "score": 1.000000,
+        "detail": "gzip: 33-byte header naming 'imaging_transcript.txt', 127261 DEFLATE bytes in 1 block(s) -> 459249 bytes, CRC-32 441E42FF verified, ISIZE 459249 matched, 127302 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.871302,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/imaging_transcript.txt.gz",
+        "manifest_kind": "GZIP",
+        "expected_recoverable": "bifragment",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "SQLITE@150474752",
+      "kind": "SQLITE",
+      "offset": 150474752,
+      "length": 110592,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 150474752, "length": 110592 }],
+      "sha256": "aac4647e0f3f5dad2e11612799209d3a56ef649c65599a69c9affb0aef4fc401",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 110592,
+        "score": 1.000000,
+        "detail": "sqlite page=4096 pages=27 usable=4096 page1=0x0D cells=2 end=110592"
+      },
+      "entropy": {
+        "bits_per_byte": 5.318920,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/sector_index.db",
+        "manifest_kind": "SQLITE",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "JPEG@156942336",
+      "kind": "JPEG",
+      "offset": 156942336,
+      "length": 92851,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 156942336, "length": 92851 }],
+      "sha256": "53b49c5cc138e99fa94ee62c47f42a4da66c07bb0f46d8939bb62d3e0e3421b2",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 92851,
+        "score": 1.000000,
+        "detail": "jpeg: SOI..EOI over 92851 bytes, 10 segments, SOF0 352x288 3c, 92181 entropy bytes, 0 restart markers"
+      },
+      "entropy": {
+        "bits_per_byte": 7.872173,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/bench_setup_wide.jpg",
+        "manifest_kind": "JPEG",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "ZIP@163844096",
+      "kind": "ZIP",
+      "offset": 163844096,
+      "length": 50215,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 163844096, "length": 50215 }],
+      "sha256": "920b8ede6de705332e64d7ee6930b5eb456d7a14538b081cd37f48f9b217cefe",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 50215,
+        "score": 1.000000,
+        "detail": "ooxml entries=7 xcheck=7/7 payload=7/7 cd@49748 end=50215"
+      },
+      "entropy": {
+        "bits_per_byte": 7.885202,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/custody_addendum.docx",
+        "manifest_kind": "DOCX",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "PDF@170430464",
+      "kind": "PDF",
+      "offset": 170430464,
+      "length": 46056,
+      "assembly": "reassembled",
+      "extents": [{ "offset": 170430464, "length": 12288 }, { "offset": 170704896, "length": 33768 }],
+      "sha256": "b65043ef139f4979ed53aa6f832c61db003687abda766cb52d99da434744aba2",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 46056,
+        "score": 1.000000,
+        "detail": "pdf-1.7 xref=table objs=34 verified=34/34 root=33 end=46056"
+      },
+      "entropy": {
+        "bits_per_byte": 7.913562,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/disposal_certificate.pdf",
+        "manifest_kind": "PDF",
+        "expected_recoverable": "bifragment",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@173564124",
+      "kind": "GZIP",
+      "offset": 173564124,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 173564124, "length": 127302 }],
+      "sha256": "07ccb0fca7e78ce87a2e27fb32a9c8567e01878859d7ca3cba4c98167eaa1703",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.250000,
+        "detail": "gzip: header parsed over 10 bytes but the DEFLATE stream failed: distance 31 reaches 27 bytes behind the start of output"
+      },
+      "entropy": {
+        "bits_per_byte": 6.466122,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.250000,
+        "entropy_consistency": 0.644081,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.087500,
+          "entropy_consistency": 0.096612,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.584112
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5841 below MIN_CONFIDENCE 0.7500; structure: gzip: header parsed over 10 bytes but the DEFLATE stream failed: distance 31 reaches 27 bytes behind the start of output",
+      "ground_truth": null
+    },
+    {
+      "id": "JPEG@176111616",
+      "kind": "JPEG",
+      "offset": 176111616,
+      "length": 108462,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 176111616, "length": 108462 }],
+      "sha256": "7af648573406b25ecd7964c92f00e49944cb40037a25580d5b50644987576476",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 108462,
+        "score": 1.000000,
+        "detail": "jpeg: SOI..EOI over 108462 bytes, 10 segments, SOF0 288x288 3c, 107791 entropy bytes, 0 restart markers"
+      },
+      "entropy": {
+        "bits_per_byte": 7.893123,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/drive_label_macro.jpg",
+        "manifest_kind": "JPEG",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "MP4@180529152",
+      "kind": "MP4",
+      "offset": 180529152,
+      "length": 176941,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 180529152, "length": 176941 }],
+      "sha256": "7c676209552b0026c4340caf3f2c5e6e1aa14133c060a5c21efe93520e1fc197",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 176941,
+        "score": 1.000000,
+        "detail": "mp4: brand 'qt', 3 top-level boxes tiling 176941 bytes, 19 boxes walked, 1 track(s), mdat payload 176400 bytes, 44100 sample(s) totalling 176400 bytes across 1 chunk offset(s); 176400 mdat bytes are NOT covered by any checksum -- MP4 defines none"
+      },
+      "entropy": {
+        "bits_per_byte": 7.763013,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/drive_teardown.mov",
+        "manifest_kind": "MP4",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "JPEG@180788456",
+      "kind": "JPEG",
+      "offset": 180788456,
+      "length": 319576,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 180788456, "length": 319576 }],
+      "sha256": "ccce6ced127212740096e62eb54a3cd476d18d68a6e5135d126ac90c1c0696ac",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "jpeg: expected a marker at offset 59638, found 69"
+      },
+      "entropy": {
+        "bits_per_byte": 7.042552,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.650000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.6500 below MIN_CONFIDENCE 0.7500; structure: jpeg: expected a marker at offset 59638, found 69",
+      "ground_truth": null
+    },
+    {
+      "id": "JPEG@200210432",
+      "kind": "JPEG",
+      "offset": 200210432,
+      "length": 101899,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 200210432, "length": 101899 }],
+      "sha256": "da74a75c167e84a28613628606f829f0d9096142f54cbfc505d95d05dbcdf007",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 101899,
+        "score": 1.000000,
+        "detail": "jpeg: SOI..EOI over 101899 bytes, 10 segments, SOF0 320x320 3c, 101230 entropy bytes, 0 restart markers"
+      },
+      "entropy": {
+        "bits_per_byte": 7.871619,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/seizure_photo_b.jpg",
+        "manifest_kind": "JPEG",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "JPEG@214231040",
+      "kind": "JPEG",
+      "offset": 214231040,
+      "length": 107908,
+      "assembly": "reassembled",
+      "extents": [{ "offset": 214231040, "length": 36864 }, { "offset": 214110208, "length": 71044 }],
+      "sha256": "ab7a4a8ac327ecc403c686d39de90f313fcc12c3a2721694d61e3233f7a426a3",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 107908,
+        "score": 1.000000,
+        "detail": "jpeg: SOI..EOI over 107908 bytes, 10 segments, SOF0 304x304 3c, 107237 entropy bytes, 0 restart markers"
+      },
+      "entropy": {
+        "bits_per_byte": 7.876765,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 1.000000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/evidence_bag_seal.jpg",
+        "manifest_kind": "JPEG",
+        "expected_recoverable": "unrecoverable-by-design",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@216939024",
+      "kind": "GZIP",
+      "offset": 216939024,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 216939024, "length": 127302 }],
+      "sha256": "33d15ce3c94fda33c2fb2ef94aaec69533bc3880af2ef1bbe3140ad5f94445f8",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0xA0, reserved bits 5-7 are 0xA0 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 6.951068,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.967379,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.145107,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.545107
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5451 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xA0, reserved bits 5-7 are 0xA0 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "MP4@221540352",
+      "kind": "MP4",
+      "offset": 221540352,
+      "length": 88741,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 221540352, "length": 88741 }],
+      "sha256": "b6da01622ea4fe107c181221deb70a816befcbdce5cd1b65ce15bf374d3c6da8",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 88741,
+        "score": 1.000000,
+        "detail": "mp4: brand 'qt', 3 top-level boxes tiling 88741 bytes, 19 boxes walked, 1 track(s), mdat payload 88200 bytes, 22050 sample(s) totalling 88200 bytes across 1 chunk offset(s); 88200 mdat bytes are NOT covered by any checksum -- MP4 defines none"
+      },
+      "entropy": {
+        "bits_per_byte": 7.764625,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/bodycam_intake.mov",
+        "manifest_kind": "MP4",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@221743528",
+      "kind": "GZIP",
+      "offset": 221743528,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 221743528, "length": 127302 }],
+      "sha256": "c9c7dc663885f55017a75818e3d39676cbcb6cab9ea6cf4e714f5dbd4dff9506",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0xE0, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 7.054446,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.550000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xE0, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "GZIP@228945920",
+      "kind": "GZIP",
+      "offset": 228945920,
+      "length": 72692,
+      "assembly": "contiguous",
+      "extents": [{ "offset": 228945920, "length": 72692 }],
+      "sha256": "5bc3fdb1d1864abba94d1f16b9378c8053b79f35e744e52af5528bb9c3f239e7",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": true,
+        "end_relative": 72692,
+        "score": 1.000000,
+        "detail": "gzip: 28-byte header naming 'dmesg_capture.log', 72656 DEFLATE bytes in 1 block(s) -> 262286 bytes, CRC-32 B45BFD27 verified, ISIZE 262286 matched, 72692 total"
+      },
+      "entropy": {
+        "bits_per_byte": 7.867514,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 1.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.350000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.900000
+      },
+      "admitted": true,
+      "reason_code": null,
+      "reason": null,
+      "ground_truth": {
+        "path": "/dmesg_capture.log.gz",
+        "manifest_kind": "GZIP",
+        "expected_recoverable": "signature-only",
+        "sha256_matches": true
+      }
+    },
+    {
+      "id": "GZIP@237511630",
+      "kind": "GZIP",
+      "offset": 237511630,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 237511630, "length": 127302 }],
+      "sha256": "371ef00b34863b62991f873788acb385f6d2b0b50b0e6106e6a0ef497c9275d0",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0x36, reserved bits 5-7 are 0x20 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 6.968315,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 0.978877,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.146832,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.546832
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5468 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x36, reserved bits 5-7 are 0x20 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "GZIP@242973985",
+      "kind": "GZIP",
+      "offset": 242973985,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 242973985, "length": 127302 }],
+      "sha256": "778c81c68349cf0acec55d9ab3b9ae51354dc0ea800d34eba0644802075e5904",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0x58, reserved bits 5-7 are 0x40 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 7.023086,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.550000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x58, reserved bits 5-7 are 0x40 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "GZIP@243623154",
+      "kind": "GZIP",
+      "offset": 243623154,
+      "length": 127302,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 243623154, "length": 127302 }],
+      "sha256": "5d10319f2347c406e1565468e7a77f83670962363237a30ee315ff39b9cfae55",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": false,
+        "footer_found": false,
+        "ladder_rung": "no-footer-defined"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "gzip: FLG is 0xFE, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero"
+      },
+      "entropy": {
+        "bits_per_byte": 7.161394,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 0.750000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.300000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.550000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xFE, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero",
+      "ground_truth": null
+    },
+    {
+      "id": "JPEG@255993614",
+      "kind": "JPEG",
+      "offset": 255993614,
+      "length": 413384,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 255993614, "length": 413384 }],
+      "sha256": "d5f8165baa2812440e6fca87c6b495775a3ff34d0851e45cffde664b4d4de2c4",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "jpeg: reserved marker FF4E at offset 2, chain broken"
+      },
+      "entropy": {
+        "bits_per_byte": 7.164511,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.650000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.6500 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF4E at offset 2, chain broken",
+      "ground_truth": null
+    },
+    {
+      "id": "JPEG@256383792",
+      "kind": "JPEG",
+      "offset": 256383792,
+      "length": 23206,
+      "assembly": "signature-span",
+      "extents": [{ "offset": 256383792, "length": 23206 }],
+      "sha256": "2a9f8d9ed58c2fc895fd5f2b148de432b773de3aa531ef2fc670a997201d3cbf",
+      "signature": {
+        "header_matched": true,
+        "footer_defined": true,
+        "footer_found": true,
+        "ladder_rung": "header-and-footer"
+      },
+      "structure": {
+        "valid": false,
+        "end_relative": null,
+        "score": 0.000000,
+        "detail": "jpeg: reserved marker FF40 at offset 2, chain broken"
+      },
+      "entropy": {
+        "bits_per_byte": 7.417211,
+        "sampled": true
+      },
+      "confidence": {
+        "signature_integrity": 1.000000,
+        "structural_validity": 0.000000,
+        "entropy_consistency": 1.000000,
+        "size_plausibility": 1.000000,
+        "weighted": {
+          "signature_integrity": 0.400000,
+          "structural_validity": 0.000000,
+          "entropy_consistency": 0.150000,
+          "size_plausibility": 0.100000
+        },
+        "total": 0.650000
+      },
+      "admitted": false,
+      "reason_code": "below-min-confidence-structure-invalid",
+      "reason": "confidence 0.6500 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF40 at offset 2, chain broken",
+      "ground_truth": null
+    }
+  ]
+}
