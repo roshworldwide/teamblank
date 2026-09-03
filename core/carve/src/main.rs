@@ -375,11 +375,29 @@ fn parse(args: &[String]) -> Parsed {
 
 /// The string written to `run.image_path`. Schema §4.3: repo-relative, never
 /// absolute, because a report must not carry a laptop's directory layout.
+/// Does this path name a location from the root of a filesystem, rather than a
+/// location relative to the working directory?
+///
+/// This is deliberately **not** `Path::is_absolute`. On Windows that predicate
+/// requires a drive prefix, so `/private/var/tmp/fixture.img` — a perfectly
+/// ordinary absolute path on the machine the fixture was built on — reports
+/// `is_relative() == true` and would be copied into `run.image_path` whole. The
+/// report would then carry another laptop's directory layout, which is the one
+/// thing `relative_label` exists to prevent. Testing for a root component *or* a
+/// prefix catches POSIX-style and Windows-style roots on either platform.
+fn is_rooted(p: &Path) -> bool {
+    p.has_root()
+        || matches!(
+            p.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
+}
+
 fn relative_label(image: &Path, explicit: Option<&str>) -> String {
     if let Some(s) = explicit {
         return s.to_string();
     }
-    if image.is_relative() {
+    if !is_rooted(image) {
         return image.to_string_lossy().replace('\\', "/");
     }
     if let Ok(cwd) = std::env::current_dir() {
@@ -1961,9 +1979,22 @@ mod tests {
 
     #[test]
     fn an_absolute_path_never_reaches_the_report() {
+        // A POSIX-style root. On Windows this has a root and no drive prefix, so
+        // `Path::is_absolute` is false for it and an earlier version of this
+        // function copied it into the report verbatim.
         let label = relative_label(Path::new("/private/var/tmp/somewhere/fixture.img"), None);
         assert!(!label.starts_with('/'), "got {label:?}");
         assert_eq!(label, "fixture.img");
+
+        // A Windows-style root. Only asserted where the path parser understands
+        // it: on Unix `C:\a\b.img` is one ordinary relative filename.
+        #[cfg(windows)]
+        {
+            let win = relative_label(Path::new(r"D:\somewhere\else\fixture.img"), None);
+            assert_eq!(win, "fixture.img", "a drive-rooted path must not reach the report");
+            let unc = relative_label(Path::new(r"\\server\share\fixture.img"), None);
+            assert_eq!(unc, "fixture.img", "a UNC path must not reach the report");
+        }
         assert_eq!(
             relative_label(Path::new("/a/b/c.img"), Some("out/fixture.img")),
             "out/fixture.img"

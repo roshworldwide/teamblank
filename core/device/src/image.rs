@@ -108,6 +108,27 @@ impl ImageFile {
     ) -> Result<Self, DeviceError> {
         let path = path.as_ref();
         check_sector_size(logical_sector_bytes)?;
+        // Classify before opening, not after. `from_parts` also refuses a
+        // non-regular file, but it can only do so once a handle exists, and
+        // Windows refuses to hand out a handle on a directory at all — there the
+        // open fails first and the caller is told DEVICE_IO "access denied",
+        // which describes a permission problem that did not happen. Deciding
+        // here means both platforms name the same cause.
+        match std::fs::metadata(path) {
+            Ok(md) if !md.is_file() => {
+                return Err(DeviceError::Unsupported {
+                    operation: "open",
+                    detail: format!(
+                        "{} is not a regular file; ImageFile addresses files, and a \
+                         device node belongs to LinuxBlock behind its own two-factor \
+                         arming",
+                        path.display()
+                    ),
+                })
+            }
+            Ok(_) => {}
+            Err(e) => return Err(DeviceError::io("stat", e)),
+        }
         let file = OpenOptions::new()
             .read(true)
             .open(path)

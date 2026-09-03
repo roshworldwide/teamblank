@@ -58,7 +58,10 @@ REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "out"
 IMAGE = OUT / "fixture.img"
 MANIFEST = OUT / "fixture.manifest.json"
-CARVE_BIN = REPO / "core" / "target" / "release" / "carve"
+#: Cargo appends `.exe` on Windows; without this the binary is never found
+#: there and every measurement in this file skips for a reason that is not true.
+_EXE = ".exe" if os.name == "nt" else ""
+CARVE_BIN = REPO / "core" / "target" / "release" / ("carve" + _EXE)
 
 # The four weights and the gate, as published in docs/architecture.md D2 and
 # exported from core/carve/src/confidence.rs.  Duplicated here deliberately: if
