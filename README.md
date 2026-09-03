@@ -232,7 +232,16 @@ kind at runtime** — the demo machine is air-gapped and this is deliberate.
 make ui        # run the engine, rebuild both pages from THAT run, open them
 make ui-check  # token-drift + payload freshness, without running the engine
 make ui-serve  # http://localhost:8787 if a browser policy blocks file://
+make app       # the native desktop shell (needs tauri-cli once)
 ```
+
+**The desktop shell** is a **4.8 MB** `.app` over the platform's own webview — no Chromium
+bundle, which is why it is measured in megabytes rather than hundreds of them. It bundles
+exactly the two pages at compile time and nothing else, carries no IPC (the capability set
+is empty), and its CSP starts at `default-src 'none'` — a demo binary that cannot phone
+home is a property worth having, not an accident. The `desktop/` crate is deliberately
+outside the engine workspace so the webview dependency tree never touches the engine's
+lockfile or build times.
 
 [`ui/approach.html`](ui/approach.html) — eight scroll-scrubbed scenes making one argument:
 every tool asserts, this one proves. [`ui/instrument.html`](ui/instrument.html) — the tool
