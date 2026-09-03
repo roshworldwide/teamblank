@@ -193,17 +193,43 @@ cp out/fixture.img /tmp/copy.img
 `make fixtures` regenerates the fixture from a seed rather than shipping a 256 MB binary,
 and refuses to overwrite the committed digests unless `--no-check-expected` is passed.
 
-**The instrument UI** is a single self-contained file with no build step and no network
-calls: open [`ui/instrument.html`](ui/instrument.html) in a browser and press **RUN
-SEQUENCE**. It replays recorded artifacts — 48 telemetry frames at their true timestamps —
-so no engine has to be attached.
+### The frontend
+
+Two self-contained pages, in this repository, built to the **AURUM** standard (Black
+Titanium finish). No build step, no framework, no bundler, and **no network request of any
+kind at runtime** — the demo machine is air-gapped and this is deliberate.
+
+```sh
+make ui        # run the engine, rebuild both pages from THAT run, open them
+make ui-check  # token-drift + payload freshness, without running the engine
+make ui-serve  # http://localhost:8787 if a browser policy blocks file://
+```
+
+[`ui/approach.html`](ui/approach.html) — eight scroll-scrubbed scenes making one argument:
+every tool asserts, this one proves. [`ui/instrument.html`](ui/instrument.html) — the tool
+itself: target pre-flight, live sector telemetry, the timing verdict with its arithmetic,
+and all 56 carve candidates with their four confidence terms broken out.
+
+**They are an output of the engine, not a picture of it.** `make ui` carves the image,
+wipes a copy, carves again with identical parameters, regenerates `ui/payload.json` from
+those artifacts and re-inlines it into both pages. The wipe never targets `out/fixture.img`
+— it runs against a copy under `out/ui-run` with `--allow-root` pointed there, so the
+guard's containment check is what prevents a mistake rather than the script's good
+intentions, and the fixture's SHA-256 is re-verified afterwards.
+
+Because the pages are self-contained, the payload and the token layer are **copies**, and a
+copy nobody regenerates goes stale silently. `ui/inline.py` is therefore both the
+regeneration step and a drift detector: it checks all **86 primitives** in every page
+against [`ui/tokens.css`](ui/tokens.css) and exits 4 naming the token if one differs. A page
+whose gold is one digit off from the standard is exactly the defect nobody catches by eye.
 
 ### Tests
 
 ```sh
-cd core && cargo test --release        # 485 passed, 0 failed, 4 ignored
-uv run pytest tests/ -q                # 260 passed
+make test                              # cargo test --release + pytest
 ```
+
+485 cargo tests passed, 0 failed, 4 ignored. 260 pytest passed.
 
 By scope: carve lib 252 · carve bin 19 · carve integration 5 + 12 · device lib 42 ·
 wipe lib 145 · wipe bin 10. Python: fixtures, guard, guard-conformance vectors, carve
