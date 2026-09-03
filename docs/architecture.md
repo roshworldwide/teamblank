@@ -266,3 +266,94 @@ to follow, no signature for us to find.
 
 `fls` 0.076 s · `tsk_recover -a` 0.070 s · `blkls` 0.309 s · `carve` whole image 1.655 s over
 268,435,456 bytes.
+
+## D4 · Bifragment gap carving — what it recovers, and what no validator can
+
+**Measured 2026-09-03. Two adversarial verifiers re-derived these figures independently, one
+building its own measurement crate against the public API. Off by default.**
+
+### The numbers
+
+| | contiguous engine | with `--reassemble` |
+|---|---|---|
+| demonstrated recall | 28 of 40 | **30 of 40** |
+| wall clock, 256 MiB | 1.65 s | 66.4 s |
+| structure validations | — | 2,014,323 across 63 searches |
+
+Reassembly recovers `entropy_heatmap.png` (gap 1 cluster, 4,485 validations) and
+`imaging_transcript.txt.gz` (gap 16 clusters, 4,245 validations). Both carved extent lists equal
+the manifest's element for element.
+
+**The ≥60% fragmented-recall bar is not met: 2 of 5 is 40%.** The bar was not lowered and the
+figure is not rounded. Each of the three failures has a different cause and only one of them is
+ours to fix.
+
+### The search
+
+A bounded 2-D lattice over split point and gap, both quantised to the cluster grid: 256 × 128 =
+32,768 cells on this fixture. The gap bound is inclusive and agrees with the manifest's
+`max_gap_is_inclusive`, which is observable rather than academic because
+`disposal_certificate.pdf` sits exactly on it — an exclusive bound would lose the splice.
+Searching on cluster boundaries rather than bytes reduces the lattice by exactly cluster² =
+4,194,304×.
+
+### The three that did not reassemble
+
+**`disposal_certificate.pdf` — a validator gap, fixable.** Not the bound: the manifest's own
+splice is inside the lattice and is accepted. `structure::pdf` resolves `startxref` and verifies
+34 of 34 xref offsets without ever decoding a stream body, so a ~21 kB FlateDecode payload goes
+unread and ten different splices all validate. Ten accept, one is content-correct, none is
+determined.
+
+**`sealing_procedure.mov` — a limit of the format, not of this implementation.** `mdat` declares
+its own length inside the first fragment, so the object's total length is fixed by the head and
+*any* tail of the right length tiles perfectly. QuickTime carries no checksum over sample data.
+6,660 splices accept, exactly one is correct, and **no byte in the format distinguishes them.** No
+structure validator can separate these, ours or anyone's.
+
+**`handover_briefing.mov` — never searched, correctly.** `structure::mp4` accepts the contiguous
+read: right length to the byte, wrong bytes. The precondition declines to search an object that
+already validates in place, which is the right rule and here costs a recovery.
+
+### The two planted failures, and why they fail
+
+`media_inventory.docx` (3 fragments) and `evidence_bag_seal.jpg` (reversed, gap −77 clusters) are
+not recovered. The docx exhausts all 32,768 cells with zero accepting splices.
+
+One attribution was corrected under challenge. The reversed JPEG's non-recovery is
+**over-determined**: re-planting its true bytes *forward* in benign filler recovers 0 of 24
+split × gap layouts, while PNG and GZIP objects of the same shape through the same harness recover
+24 of 24. So reversal is *sufficient* to explain the failure but was not shown to be *necessary* —
+the operative cause is determinacy, because JPEG carries no checksum over entropy-coded data. The
+tri-fragment claim is the demonstrable one: a real 63,749-byte OOXML file laid out forward is
+recovered byte-exact at two fragments in 65 validations and refused at three, so the refusal is a
+property of the fragment count, not of the kind.
+
+### False positives under reassembly
+
+The margin did not move. Across 1,867,833 residue assemblies the shipped validator accepted
+**zero**, so the refusal rests on outright rejection rather than on a heuristic. Worst residue
+structural credit is 0.250000 against a breach point of 0.285714 — headroom 0.035714, unchanged.
+
+Two guards were added after a verifier fabricated an object the engine admitted at confidence
+1.0000. Writing one real 2 KiB JPEG header prefix onto free space produced admitted reassembled
+records at a rate of **13 in 100** cluster-aligned offsets. Determinacy now requires a genuine
+contradiction on the shrink side rather than counting an unspliceable neighbour as a pass, and a
+second extent below one cluster is not stated as an object. That took the rate to **2 in 100**,
+and cost no recovery.
+
+**The residual is published, not closed.** Two offsets still fabricate, both splicing the same
+59,927-byte tail, structural 0.8000, total 0.9300. The cause is in `structure/jpeg.rs`: a
+length-bearing marker inside the entropy-coded scan is treated as an anomaly to report rather than
+a fatal error, so a scan can step over residue until it lands on an `FF D9`. Making it fatal is the
+real fix and it belongs to the contiguous validator, where it would change already-published
+numbers — so it is stated here rather than patched quietly.
+
+### A correction to an earlier figure
+
+Earlier build reports quoted 0.300000 as the worst rejected-assembly structural credit. That was
+the residue population with the planted files filtered out, and it understated the image by 3.2×.
+Measured over the plants as well: `media_inventory.docx` reaches 0.957143 and `entropy_heatmap.png`
+reaches 0.989286 one cluster off its true splice, with 27 of 28 chunk CRCs verifying. Scored, those
+would be admitted at 0.9850 and 0.9963. Both are rejected today by the validator's hard gate, and
+both are now asserted as named constants so the figures cannot drift unnoticed.

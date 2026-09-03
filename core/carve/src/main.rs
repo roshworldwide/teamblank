@@ -36,6 +36,22 @@
 //! carve --phase pre-wipe  --manifest out/fixture.manifest.json out/fixture.img > pre.json
 //! carve --phase post-wipe --manifest out/fixture.manifest.json out/fixture.img > post.json
 //! ```
+//!
+//! Two-fragment reassembly is one such parameter. It is OFF by default and
+//! `--reassemble` turns it on; `--no-reassemble` states the default explicitly,
+//! so whichever way it is set, the state is on the command line and
+//! `provenance.command` republishes it on both sides. A reassembling demo runs
+//! the same two lines with `--reassemble --cluster-bytes N --max-gap-clusters N`
+//! added to each.
+//!
+//! # The one number that is not in the JSON
+//!
+//! `docs/output_schema.md` is frozen and carries no field for a validation
+//! count, so the cost of the two-fragment searches — every `structure::validate`
+//! call they spent, the failures included — is reported on **stderr** and named
+//! in `provenance.notes` so a reader of the JSON alone is told where it went.
+//! Adding a field for it would be a schema change with the ceremony §10
+//! describes, and a cost figure does not earn that.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -104,6 +120,29 @@ OPTIONS
                        (kind).full_lo — deliberately adversarial, so a reported
                        rejection is one the carver earned against the strongest
                        form of that candidate]
+  --reassemble         Attempt bounded two-fragment gap carving on every
+                       candidate the structure validator could not end
+                       contiguously. A search that returns a determined splice
+                       produces ONE record with two extents and
+                       assembly \"reassembled\"; it REPLACES the leading-fragment
+                       record for that header rather than joining it.
+                       [default: OFF — see --no-reassemble]
+  --no-reassemble      State the default explicitly. The pre-wipe and post-wipe
+                       carve must run with byte-identical parameters, and a
+                       default nobody wrote down cannot be shown to have been
+                       held constant. [default]
+  --cluster-bytes <N>  The allocation unit of the medium. The split point and
+                       the resume point of a two-fragment search are both
+                       constrained to this grid. This is a property of the MEDIUM and is
+                       never read from the fixture manifest: ground truth is
+                       read after the carve and never reaches the engine.
+                       A wrong value costs recoveries and cannot manufacture
+                       one. [default: 2048]
+  --max-gap-clusters <N>
+                       Ceiling on the gap between the two fragments, in
+                       clusters, applied INCLUSIVELY: a gap of exactly N
+                       clusters is searched. Search cost is linear in N.
+                       [default: 128]
   --no-dedup           Report every scored candidate, applying no overlap
                        suppression. This is how the suppression rule is
                        audited. [default: suppression on]
@@ -141,11 +180,25 @@ EXIT CODES
   with the run itself.
 
 NOTES
-  Contiguous objects only. bifragment.rs is deliberately deferred and is
-  never called, so counts.by_assembly.reassembled is 0 in every report this
-  binary writes. A file needing reassembly is not recovered, and
-  ground_truth.reachability records that ceiling separately from
-  ground_truth.demonstrated_recall. They are two different numbers.
+  Without --reassemble this is a contiguous engine: bifragment.rs is not
+  called, counts.by_assembly.reassembled is 0, and that zero means
+  reassembly was not ATTEMPTED rather than attempted and failed. A file
+  stored in fragments is not recovered.
+
+  With --reassemble, a candidate that did not validate contiguously pays one
+  bounded lattice search of split point x gap length, both on the cluster
+  grid. Most of those searches fail, and a failed search is the expensive
+  one; the whole cost is printed on stderr because the output schema is
+  frozen and has no field for it. Recovering a fragmented file raises what
+  the engine can reach; it does not change either published number by
+  itself. ground_truth.reachability is a CEILING read off the manifest and
+  ground_truth.demonstrated_recall is what the run measurably recovered.
+  They are two different numbers in two different fields.
+
+  The search does not go backwards and does not join three fragments. An
+  object whose second fragment lies at a lower offset than its first, or
+  which is stored in three pieces, is not recoverable by it and is reported
+  as not recovered.
 ";
 
 // ===========================================================================
@@ -229,6 +282,32 @@ fn parse(args: &[String]) -> Parsed {
                     }
                     cli.opts.residue_window = Some(n);
                 }
+                "--reassemble" => cli.opts.reassemble = true,
+                "--no-reassemble" => cli.opts.reassemble = false,
+                "--cluster-bytes" => {
+                    let v = value("--cluster-bytes", &mut i)?;
+                    let n: u64 = v
+                        .parse()
+                        .map_err(|_| format!("--cluster-bytes {v:?} is not a byte count"))?;
+                    if n == 0 {
+                        return Err("--cluster-bytes must be at least 1 byte".to_string());
+                    }
+                    cli.opts.cluster_bytes = n;
+                }
+                "--max-gap-clusters" => {
+                    let v = value("--max-gap-clusters", &mut i)?;
+                    let n: u64 = v
+                        .parse()
+                        .map_err(|_| format!("--max-gap-clusters {v:?} is not a cluster count"))?;
+                    if n == 0 {
+                        return Err(
+                            "--max-gap-clusters must be at least 1: a gap of zero clusters is a \
+                             contiguous object and sequential carving owns it"
+                                .to_string(),
+                        );
+                    }
+                    cli.opts.max_gap_clusters = n;
+                }
                 "--no-dedup" => cli.opts.dedup = false,
                 "--no-rejected" => cli.opts.report_rejected = false,
                 "--read-mode" => {
@@ -278,6 +357,17 @@ fn parse(args: &[String]) -> Parsed {
     }
     if cli.read_mode == "device" && cli.device.is_none() {
         return Parsed::Usage("--read-mode device requires --device <PATH>".to_string());
+    }
+    if cli
+        .opts
+        .max_gap_clusters
+        .checked_mul(cli.opts.cluster_bytes)
+        .is_none()
+    {
+        return Parsed::Usage(format!(
+            "--max-gap-clusters {} x --cluster-bytes {} overflows a 64-bit byte count",
+            cli.opts.max_gap_clusters, cli.opts.cluster_bytes
+        ));
     }
     cli.image = image;
     Parsed::Run(Box::new(cli))
@@ -384,6 +474,21 @@ fn main() -> ExitCode {
             None => "per-kind size_bounds().full_lo".to_string(),
         }
     );
+    if cli.opts.reassemble {
+        eprintln!(
+            "carve: reassembly ON  cluster {} bytes  max gap {} clusters ({} bytes, inclusive)  \
+             first fragment <= {} clusters",
+            cli.opts.cluster_bytes,
+            cli.opts.max_gap_clusters,
+            cli.opts.max_gap_clusters * cli.opts.cluster_bytes,
+            sentinelwipe_carve::bifragment::MAX_FIRST_FRAGMENT_CLUSTERS
+        );
+    } else {
+        eprintln!(
+            "carve: reassembly OFF (--reassemble turns it on). Contiguous objects only; \
+             counts.by_assembly.reassembled will be 0 because nothing was attempted."
+        );
+    }
 
     let report = carve(&image, &cli.opts);
     let elapsed = started.elapsed();
@@ -446,6 +551,48 @@ fn main() -> ExitCode {
             String::new()
         }
     );
+    let ra = &report.reassembly;
+    if cli.opts.reassemble {
+        eprintln!(
+            "carve: reassembly attempted {} search(es): solved {}, ambiguous {}, exhausted {}, \
+             degenerate {}, refused-contiguous {}, budget {}",
+            ra.attempted,
+            ra.solved,
+            ra.ambiguous,
+            ra.exhausted,
+            ra.degenerate,
+            ra.refused_contiguous,
+            ra.budget
+        );
+        // The schema is frozen and has no field for a cost. Saying where the
+        // number went is the difference between a missing figure and a hidden
+        // one.
+        eprintln!(
+            "carve: reassembly cost {} structure validations, {} splice(s) accepted by the \
+             validator, {} of them determined and returned. docs/output_schema.md is FROZEN and \
+             carries no field for a validation count, so this figure is reported here on stderr \
+             and is NOT in the JSON; provenance.notes says so in the report itself.",
+            ra.validations, ra.accepted_splices, ra.solved
+        );
+        for sc in &ra.solved_cost {
+            let ext = report
+                .records
+                .iter()
+                .find(|r| r.id() == sc.id)
+                .map(|r| {
+                    r.extents
+                        .iter()
+                        .map(|e| format!("{}+{}", e.offset, e.length))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_else(|| "suppressed by overlap suppression".to_string());
+            eprintln!(
+                "carve:   {} reassembled in {} validations  extents [{}]",
+                sc.id, sc.validations, ext
+            );
+        }
+    }
     eprintln!(
         "carve: wall clock {:.3} s over {} bytes",
         elapsed.as_secs_f64(),
@@ -457,9 +604,14 @@ fn main() -> ExitCode {
             g.manifest_label, g.recovered_exact, g.planted_total
         );
         eprintln!(
-            "carve: demonstrated recall (contiguous engine) {} of {} planted. \
+            "carve: demonstrated recall ({}) {} of {} planted. \
              Reachability CEILING, a different number: contiguous {}, needs bifragment {}, \
              unreachable by construction {}.",
+            if cli.opts.reassemble {
+                "contiguous engine + two-fragment reassembly"
+            } else {
+                "contiguous engine"
+            },
             g.recovered_exact,
             g.planted_total,
             g.contiguous,
@@ -844,22 +996,75 @@ fn emit(
          names."
             .to_string(),
     );
-    notes.push(
-        "CONTIGUOUS OBJECTS ONLY. bifragment.rs is deliberately deferred and was not called, so \
-         counts.by_assembly.reassembled is 0 and every extent list has exactly one entry. A \
-         planted file split across a gap was NOT recovered. That zero is the honest signal that \
-         reassembly was not attempted, not that it was attempted and failed."
-            .to_string(),
-    );
+    let ra = &report.reassembly;
+    if cli.opts.reassemble {
+        notes.push(format!(
+            "TWO-FRAGMENT REASSEMBLY WAS ON (--reassemble). A candidate the structure validator \
+             could not end contiguously was handed one bounded search over split point x gap \
+             length, both quantised to a {}-byte cluster grid, with the gap bounded INCLUSIVELY \
+             at {} clusters. {} search(es) ran: {} returned a determined two-extent splice, {} \
+             ended ambiguous (splices validated but none was pinned in both dimensions, which is \
+             a refusal and never a guess), {} exhausted the whole lattice with nothing validating, \
+             {} were degenerate. A solved search produces ONE record carrying both extents with \
+             assembly \"reassembled\"; it REPLACES the leading-fragment record for that header \
+             rather than being emitted beside it, because they are the same discovery. The search \
+             is forward-only and joins at most two fragments: an object stored in three pieces, or \
+             with its second fragment at a lower offset than its first, is not reachable by it.",
+            cli.opts.cluster_bytes,
+            cli.opts.max_gap_clusters,
+            ra.attempted,
+            ra.solved,
+            ra.ambiguous,
+            ra.exhausted,
+            ra.degenerate
+        ));
+        notes.push(
+            "REASSEMBLY ENLARGES THE FALSE-POSITIVE SURFACE, AND HERE IS BY HOW MUCH. Sequential \
+             carving gives a residue header one chance to validate; the lattice gives it one per \
+             cell of the split-point x gap-length lattice. Over this fixture's own residue candidates — all of them bare signature \
+             decoys — no assembly validates at all and the population's structural ceiling does \
+             not move. Over a stronger input, one real 2048-byte JPEG header prefix written onto \
+             free space, the search still answers with an object that is not in the image at a \
+             measured rate of 2 in 100 sampled offsets (13 in 100 before the determinacy and \
+             materiality rules that now bound it). The remainder is a structure::jpeg limit — a \
+             length-bearing marker inside the entropy-coded scan is reported rather than treated \
+             as fatal — and it is named in bifragment.rs rather than hidden. This is why \
+             --reassemble is off by default: that default is a safety property as well as a cost \
+             decision. Reproduce with `cargo test --release -p sentinelwipe-carve --lib \
+             a_real_header_prefix_over_free_space_does_not_manufacture_an_object -- --nocapture`."
+                .to_string(),
+        );
+        notes.push(format!(
+            "COST IS NOT IN THIS FILE. The {} searches spent {} structure validations, of which \
+             {} splice(s) were accepted by the validator and {} were determined and returned. \
+             docs/output_schema.md is frozen and carries no field for a validation count, so that \
+             figure is reported on stderr by the carve binary and deliberately NOT added here: \
+             adding a field is a schema change with the ceremony section 10 describes, and a cost \
+             figure does not earn it. Re-run the command in provenance.command and read stderr to \
+             reproduce it.",
+            ra.attempted, ra.validations, ra.accepted_splices, ra.solved
+        ));
+    } else {
+        notes.push(
+            "CONTIGUOUS OBJECTS ONLY. bifragment.rs was not called — --reassemble was not given — \
+             so counts.by_assembly.reassembled is 0 and every extent list has exactly one entry. \
+             A planted file split across a gap was NOT recovered. That zero is the honest signal \
+             that reassembly was not attempted, not that it was attempted and failed."
+                .to_string(),
+        );
+    }
     notes.push(format!(
         "Overlap suppression: {}. The rule is claimed-bytes. Candidates are scored first; \
          admitted candidates are then ranked by confidence.total descending, then length \
          descending, then offset, then kind, and each one whose span is disjoint from every span \
          already claimed becomes a recovery and claims its span. A rejected candidate whose \
          header falls inside a claimed span is suppressed, because those bytes already belong to \
-         a recovered object. A suppressed candidate is NOT emitted as a record: the schema \
-         publishes exactly two rejection codes and both mean 'scored under the gate', which a \
-         suppressed duplicate is not. {} candidate(s) were scanned, {} suppressed, {} recorded.",
+         a recovered object. A record claims EACH OF ITS EXTENTS and never the hull from the \
+         first to the last: the hull of a reassembled record includes the gap, and the gap is \
+         where another file can live. A suppressed candidate is NOT emitted as a record: the \
+         schema publishes exactly two rejection codes and both mean 'scored under the gate', \
+         which a suppressed duplicate is not. {} candidate(s) were scanned, {} suppressed, {} \
+         recorded.",
         if cli.opts.dedup { "applied" } else { "DISABLED by --no-dedup; every scored candidate is reported" },
         report.scanned, report.suppressed, recs.len()
     ));
@@ -917,10 +1122,22 @@ fn emit(
                  ground_truth.demonstrated_recall is what THIS run measurably recovered, \
                  verified by SHA-256 against the digests fixtures/build_image.py computed \
                  independently. They are two different numbers in two different fields and must \
-                 never be rendered as one. This engine does not reassemble, so it is bounded \
-                 above by reachability.contiguous = {}, not by contiguous + \
-                 needs_bifragment_reassembly.",
-                g.contiguous
+                 never be rendered as one. {}",
+                if cli.opts.reassemble {
+                    format!(
+                        "This run had two-fragment reassembly ON, so it is bounded above by \
+                         reachability.contiguous + reachability.needs_bifragment_reassembly = {}, \
+                         and what it actually reached is demonstrated_recall.",
+                        g.contiguous + g.bifragment
+                    )
+                } else {
+                    format!(
+                        "This run did not reassemble, so it is bounded above by \
+                         reachability.contiguous = {}, not by contiguous + \
+                         needs_bifragment_reassembly.",
+                        g.contiguous
+                    )
+                }
             ));
             if g.false_positives > 0 {
                 notes.push(format!(
@@ -1165,28 +1382,54 @@ fn emit(
             w.kv_s(
                 6,
                 "method",
-                "contiguous engine; a planted file counts as recovered only when an ADMITTED \
-                 record's SHA-256 equals the digest the manifest recorded for it. \
-                 bifragment.rs was not called, so this run is bounded above by \
-                 reachability.contiguous — which is a ceiling and is reported separately.",
+                if cli.opts.reassemble {
+                    "contiguous engine plus bounded two-fragment reassembly (--reassemble); a \
+                     planted file counts as recovered only when an ADMITTED record's SHA-256 \
+                     equals the digest the manifest recorded for it, whether that record has one \
+                     extent or two. The ceiling for this run is reachability.contiguous + \
+                     reachability.needs_bifragment_reassembly, which is a ceiling and is reported \
+                     separately."
+                } else {
+                    "contiguous engine; a planted file counts as recovered only when an ADMITTED \
+                     record's SHA-256 equals the digest the manifest recorded for it. \
+                     bifragment.rs was not called, so this run is bounded above by \
+                     reachability.contiguous — which is a ceiling and is reported separately."
+                },
                 false,
             );
             w.line(4, "},");
             w.kv_s(
                 4,
                 "demonstrated_recall_note",
-                &format!(
-                    "demonstrated recall (contiguous engine): {} of {} planted files, compared \
-                     BY SHA-256 and not by row count. The ceiling for this engine is \
-                     reachability.contiguous = {}; {} more planted files are reachable only \
-                     with bifragment reassembly, which was not run, and {} are reachable by \
-                     nothing this carver does and are named individually above.",
-                    g.recovered_exact,
-                    g.planted_total,
-                    g.contiguous,
-                    g.bifragment,
-                    g.unreachable.len()
-                ),
+                &if cli.opts.reassemble {
+                    format!(
+                        "demonstrated recall (contiguous engine + two-fragment reassembly): {} of \
+                         {} planted files, compared BY SHA-256 and not by row count. The ceiling \
+                         for this run is reachability.contiguous + \
+                         reachability.needs_bifragment_reassembly = {}; {} planted files are \
+                         reachable by nothing this carver does and are named individually above. \
+                         {} of the records here were reassembled from two extents, and what the \
+                         searches cost is on stderr, not in this file.",
+                        g.recovered_exact,
+                        g.planted_total,
+                        g.contiguous + g.bifragment,
+                        g.unreachable.len(),
+                        report.reassembly.solved
+                    )
+                } else {
+                    format!(
+                        "demonstrated recall (contiguous engine): {} of {} planted files, \
+                         compared BY SHA-256 and not by row count. The ceiling for this engine is \
+                         reachability.contiguous = {}; {} more planted files are reachable only \
+                         with bifragment reassembly, which was not run, and {} are reachable by \
+                         nothing this carver does and are named individually above.",
+                        g.recovered_exact,
+                        g.planted_total,
+                        g.contiguous,
+                        g.bifragment,
+                        g.unreachable.len()
+                    )
+                },
                 false,
             );
             w.line(2, "},");
@@ -1304,6 +1547,16 @@ fn reproducing_command(cli: &Cli) -> String {
     parts.push(format!("--min-confidence {:.4}", cli.opts.min_confidence));
     if let Some(n) = cli.opts.residue_window {
         parts.push(format!("--residue-window {n}"));
+    }
+    // Reassembly is spelled out either way. The pre-wipe and post-wipe carve
+    // must be shown to have run with identical parameters, and a default nobody
+    // wrote down cannot be shown to have been held constant.
+    if cli.opts.reassemble {
+        parts.push("--reassemble".to_string());
+        parts.push(format!("--cluster-bytes {}", cli.opts.cluster_bytes));
+        parts.push(format!("--max-gap-clusters {}", cli.opts.max_gap_clusters));
+    } else {
+        parts.push("--no-reassemble".to_string());
     }
     if !cli.opts.dedup {
         parts.push("--no-dedup".to_string());
@@ -1541,6 +1794,7 @@ impl P<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sentinelwipe_carve::carve::{DEFAULT_CLUSTER_BYTES, DEFAULT_MAX_GAP_CLUSTERS};
     use sentinelwipe_carve::confidence::MIN_CONFIDENCE;
 
     fn argv(s: &[&str]) -> Vec<String> {
@@ -1572,6 +1826,12 @@ mod tests {
         assert_eq!(c.phase, "standalone");
         assert_eq!(c.read_mode, "file");
         assert!(!c.timing, "timing is off by default so two runs agree");
+        assert!(
+            !c.opts.reassemble,
+            "reassembly is off by default; the published numbers were measured with it off"
+        );
+        assert_eq!(c.opts.cluster_bytes, DEFAULT_CLUSTER_BYTES);
+        assert_eq!(c.opts.max_gap_clusters, DEFAULT_MAX_GAP_CLUSTERS);
     }
 
     #[test]
@@ -1583,6 +1843,11 @@ mod tests {
             "0.9",
             "--residue-window",
             "4096",
+            "--reassemble",
+            "--cluster-bytes",
+            "4096",
+            "--max-gap-clusters",
+            "64",
             "--no-dedup",
             "--no-rejected",
             "--timing",
@@ -1591,10 +1856,40 @@ mod tests {
         assert_eq!(c.phase, "post-wipe");
         assert_eq!(c.opts.min_confidence, 0.9);
         assert_eq!(c.opts.residue_window, Some(4096));
+        assert!(c.opts.reassemble);
+        assert_eq!(c.opts.cluster_bytes, 4096);
+        assert_eq!(c.opts.max_gap_clusters, 64);
         assert!(!c.opts.dedup);
         assert!(!c.opts.report_rejected);
         assert!(c.timing);
         assert_eq!(c.image, PathBuf::from("out/fixture.img"));
+    }
+
+    #[test]
+    fn the_reassembly_state_is_spellable_in_both_directions() {
+        // A default nobody can write down cannot be shown to have been held
+        // constant across the wipe, so BOTH states have a flag.
+        assert!(run(&["--reassemble", "i"]).opts.reassemble);
+        assert!(!run(&["--no-reassemble", "i"]).opts.reassemble);
+        assert!(!run(&["--reassemble", "--no-reassemble", "i"]).opts.reassemble);
+        assert!(run(&["--no-reassemble", "--reassemble", "i"]).opts.reassemble);
+    }
+
+    #[test]
+    fn a_reassembling_pre_and_post_wipe_pair_still_differs_in_exactly_one_flag() {
+        let args = ["--reassemble", "--cluster-bytes", "2048", "--max-gap-clusters", "128"];
+        let pre = run(&[&["--phase", "pre-wipe"][..], &args[..], &["out/fixture.img"][..]].concat());
+        let post =
+            run(&[&["--phase", "post-wipe"][..], &args[..], &["out/fixture.img"][..]].concat());
+        assert_eq!(pre.opts, post.opts, "the engine parameters must be identical");
+        assert_ne!(pre.phase, post.phase);
+        // And the reproducing command republishes the geometry on both sides.
+        for c in [&pre, &post] {
+            let cmd = reproducing_command(c);
+            assert!(cmd.contains("--reassemble"), "{cmd}");
+            assert!(cmd.contains("--cluster-bytes 2048"), "{cmd}");
+            assert!(cmd.contains("--max-gap-clusters 128"), "{cmd}");
+        }
     }
 
     #[test]
@@ -1614,6 +1909,13 @@ mod tests {
         assert!(usage(&["--min-confidence", "banana", "i"]).contains("not a number"));
         assert!(usage(&["--min-confidence", "1.5", "i"]).contains("[0,1]"));
         assert!(usage(&["--residue-window", "0", "i"]).contains("at least 1"));
+        assert!(usage(&["--cluster-bytes", "0", "i"]).contains("at least 1 byte"));
+        assert!(usage(&["--cluster-bytes", "half", "i"]).contains("not a byte count"));
+        assert!(usage(&["--max-gap-clusters", "0", "i"]).contains("at least 1"));
+        assert!(usage(&["--max-gap-clusters", "lots", "i"]).contains("not a cluster count"));
+        assert!(usage(&["--cluster-bytes", "18446744073709551615", "--max-gap-clusters",
+                        "18446744073709551615", "i"])
+            .contains("overflows"));
         assert!(usage(&["--nope", "i"]).contains("unknown option"));
         assert!(usage(&["--min-confidence"]).contains("needs a value"));
         assert!(usage(&["a", "b"]).contains("more than one image"));
@@ -1626,6 +1928,22 @@ mod tests {
         assert!(matches!(parse(&argv(&["--help"])), Parsed::Print(_)));
         assert!(matches!(parse(&argv(&["-h"])), Parsed::Print(_)));
         assert!(matches!(parse(&argv(&["-V"])), Parsed::Print(_)));
+    }
+
+    #[test]
+    fn help_documents_every_flag_that_changes_what_the_engine_does() {
+        for flag in [
+            "--min-confidence",
+            "--residue-window",
+            "--reassemble",
+            "--no-reassemble",
+            "--cluster-bytes",
+            "--max-gap-clusters",
+            "--no-dedup",
+            "--no-rejected",
+        ] {
+            assert!(HELP.contains(flag), "--help does not document {flag}");
+        }
     }
 
     #[test]
@@ -1724,6 +2042,10 @@ mod tests {
         assert!(cmd.contains("--residue-window 8192"), "{cmd}");
         assert!(cmd.contains("--no-dedup"), "{cmd}");
         assert!(cmd.contains("--min-confidence 0.7500"), "{cmd}");
+        assert!(
+            cmd.contains("--no-reassemble"),
+            "the default state of reassembly is not on the reproducing command: {cmd}"
+        );
         assert!(cmd.ends_with("out/fixture.img"), "{cmd}");
     }
 
@@ -1790,12 +2112,115 @@ mod tests {
                 .unwrap()
                 .u(),
             0,
-            "bifragment.rs is deferred; nothing may be reported as reassembled"
+            "--reassemble was not given, so nothing may be reported as reassembled"
         );
         assert!(recs.iter().any(|r| matches!(
             r.get("admitted"),
             Some(Json::Bool(true))
         )));
+    }
+
+    /// The smallest GZIP this project builds by hand, same construction as the
+    /// engine's own tests.
+    fn tiny_gzip(payload: &[u8]) -> Vec<u8> {
+        let mut g = vec![0x1F, 0x8B, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xFF];
+        let n = payload.len() as u16;
+        g.push(0x01);
+        g.extend_from_slice(&n.to_le_bytes());
+        g.extend_from_slice(&(!n).to_le_bytes());
+        g.extend_from_slice(payload);
+        g.extend_from_slice(&sentinelwipe_carve::structure::crc32(payload).to_le_bytes());
+        g.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        g
+    }
+
+    #[test]
+    fn a_reassembled_record_emits_two_extents_and_the_report_says_where_the_cost_went() {
+        const C: usize = 512;
+        let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj = tiny_gzip(&payload);
+
+        // Two extents on the cluster grid with a three-cluster gap of filler.
+        let mut img = vec![0u8; C];
+        img.extend_from_slice(&obj[..2 * C]);
+        img.extend((0..3 * C).map(|i| ((i as u32 * 37) % 251) as u8 | 1));
+        img.extend_from_slice(&obj[2 * C..]);
+        img.extend_from_slice(&vec![0u8; C]);
+
+        let cli = run(&[
+            "--reassemble",
+            "--cluster-bytes",
+            "512",
+            "--max-gap-clusters",
+            "8",
+            "test.img",
+        ]);
+        let rep = carve(&img, &cli.opts);
+        assert_eq!(rep.reassembly.solved, 1, "the engine did not reassemble the object");
+        let json = emit(&cli, &img, "test.img", "00", &rep, None, "1970-01-01T00:00:00Z", 0);
+        let doc = Json::parse(json.as_bytes());
+
+        assert_eq!(
+            doc.get("counts")
+                .unwrap()
+                .get("by_assembly")
+                .unwrap()
+                .get("reassembled")
+                .unwrap()
+                .u(),
+            1
+        );
+
+        let rec = doc
+            .get("candidates")
+            .unwrap()
+            .arr()
+            .iter()
+            .find(|r| r.get("assembly").map(|a| a.s()) == Some("reassembled"))
+            .expect("no record carries assembly \"reassembled\"");
+        let ext = rec.get("extents").unwrap().arr();
+        assert_eq!(ext.len(), 2, "a reassembled record must publish both runs");
+        assert_eq!(
+            ext[0].get("offset").unwrap().u(),
+            rec.get("offset").unwrap().u(),
+            "schema 5: offset is extents[0].offset"
+        );
+        let total: u64 = ext.iter().map(|e| e.get("length").unwrap().u()).sum();
+        assert_eq!(
+            total,
+            rec.get("length").unwrap().u(),
+            "schema 5: length is the sum of the extents"
+        );
+        assert_eq!(total, obj.len() as u64);
+        assert!(
+            ext[0].get("offset").unwrap().u() + ext[0].get("length").unwrap().u()
+                < ext[1].get("offset").unwrap().u(),
+            "the two extents are not separated by a gap"
+        );
+
+        // The cost is NOT in the schema, and the report says so rather than
+        // leaving a reader to assume there was none.
+        assert!(
+            !json.contains("\"validations\""),
+            "a validation count reached the frozen schema"
+        );
+        let notes: Vec<String> = doc
+            .get("provenance")
+            .unwrap()
+            .get("notes")
+            .unwrap()
+            .arr()
+            .iter()
+            .map(|n| n.s().to_string())
+            .collect();
+        assert!(
+            notes.iter().any(|n| n.contains("stderr")),
+            "no note tells a reader of the JSON where the validation count went"
+        );
+        assert!(
+            notes.iter().any(|n| n.contains("REASSEMBLY WAS ON")),
+            "the report does not state that reassembly ran"
+        );
     }
 
     #[test]

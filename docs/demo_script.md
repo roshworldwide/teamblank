@@ -38,6 +38,17 @@ One narrator across every jury visit.
 - Never say the reachability ceiling as if it were a recall figure. 33 of 40 is what
   this fixture makes reachable in principle; 28 of 40 is what the engine demonstrated.
   They never belong in the same sentence.
+- The demo runs the DEFAULT path: contiguous carving, 2.3 seconds, 28 of 40. Fragment
+  reassembly is a flag and it is OFF on stage, deliberately. Turning it on finds two
+  more files and takes 66 seconds — forty times the cost for two files, which does not
+  fit a 90-second demo and should not pretend to.
+- If asked "can you recover fragmented files": yes, and say the number honestly. Two of
+  the five fragmented files reassemble byte-exact. Of the other three, one is a gap in
+  our PDF validator that we can close; one is a limit of the QuickTime format itself —
+  mdat declares its own length, so 6,660 different splices all validate and no byte in
+  the format distinguishes them, which no carver can fix; and one our MP4 validator
+  wrongly accepts whole, so the search never runs. That answer is worth more than a
+  higher number, because the second case is a fact about forensics rather than about us.
 - If asked why plaintext cannot be carved: signature carving keys on magic bytes and
   plain text has none. Our corpus text does open with an ASCII banner, and keying on it
   would lift the number to thirty-eight in an afternoon. We did not, because a carver
