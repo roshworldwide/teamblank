@@ -2138,7 +2138,11 @@ mod conformance {
             })
             .collect();
 
-        let this_file = include_str!("guard.rs");
+        // This file reads ITS OWN source: the conformance test asserts the race-test
+        // functions named in guard_vectors.json actually exist here. The path must
+        // follow any rename of this file, or the crate stops compiling -- which is
+        // loud, and loud is the right failure for a self-reference.
+        let this_file = include_str!("unix.rs");
         let py_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")

@@ -1350,9 +1350,10 @@ _DECLARED_UNGUARDED = {
 }
 
 
-def _raw_writes(paths, exempt=("guard.py",)):
+def _raw_writes(paths, exempt=("posix.py", "windows.py")):
     """Every line in the given .py files that obtains a writable handle
-    without going through open_authorized. guard.py is exempt: it IS the gate,
+    without going through open_authorized. The two guard backends are exempt:
+    each IS the gate on its platform,
     and audit_append's log is an append-only operator record, not a target."""
     found = []
     for p in paths:
@@ -1404,12 +1405,12 @@ def test_unguarded_writes_elsewhere_are_declared():
 
 def test_the_write_detector_is_not_vacuous():
     """A grep control that matches nothing is indistinguishable from one that
-    does not work. guard.py is the exempt module precisely because it DOES
-    open descriptors for writing, so running the detector over it with the
+    does not work. The POSIX backend is an exempt module precisely because it
+    DOES open descriptors for writing, so running the detector over it with the
     exemption lifted must fire. If this goes quiet, the two tests above are
     passing for the wrong reason."""
-    hits = _raw_writes([_REPO / "fixtures" / "guard.py"], exempt=())
-    assert hits, "the detector found no writable open in guard.py itself"
+    hits = _raw_writes([_REPO / "fixtures" / "guard" / "posix.py"], exempt=())
+    assert hits, "the detector found no writable open in guard/posix.py itself"
     assert any("os.open(" in t for _, _, t in hits), \
         "the detector cannot see os.open with a computed flags argument"
     assert any('"a"' in t or "'a'" in t for _, _, t in hits), \
@@ -1652,7 +1653,7 @@ def test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim(t
          promises a Decision on every refusal; a guard stopped by the kernel is
          not a guard, and an errno carries no audit line.
 
-    The Rust twin is core/device/src/guard.rs::guard::race::
+    The Rust twin is core/device/src/guard/unix.rs::guard::unix::race::
     racing_the_allowed_root_never_truncates_a_file_outside_it.
     """
     import threading
