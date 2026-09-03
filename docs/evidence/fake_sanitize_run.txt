@@ -1,0 +1,310 @@
+SENTINELWIPE — behavioural timing audit, captured evidence
+================================================================
+what            a firmware sanitize primitive that reports success without
+                doing any work, caught by timing and by a medium witness
+commit          b5bce92cedf1456654d84a18cc170d5133e2dc7d
+captured        2026-09-03T15:41:12+05:30
+run id          sentinelwipe/wipe/v1
+host            macOS 26.6.2 arm64, Apple M3, APFS
+target          a COPY of out/fixture.img (268,435,456 B) under the scratchpad.
+                The fixture itself is never a wipe target; its sha256 is
+                re-verified after every run in this repo.
+command         wipe --target <copy> --allow-root <dir> --i-understand <resolved>
+                     --sanitize ata-sanitize-block-erase
+
+THE RESULT
+----------
+  verdict                    UNVERIFIED_TIMING   (severity: unverified)
+  operation                  ATA SANITIZE BLOCK ERASE (simulated)
+  device_reported_success    True
+  return_code_trusted        False
+
+  measured elapsed           1,000 ns   (1e-06 s)
+  expected minimum           431,059,458 ns   (0.431059 s)
+  ratio measured/expected    2e-06
+  threshold                  0.05
+
+  The command returned 431,059x faster than the device's own
+  measured throughput makes physically possible.
+
+WHERE THE FLOOR COMES FROM — it is derived, never a constant
+------------------------------------------------------------
+  baseline source            observed_pass
+  baseline measured          True
+  probe bytes                268,435,456
+  probe elapsed              431,059,458 ns
+  measured write rate        622,734,175 B/s
+  work claimed               268,435,456 bytes
+
+  expected_min = work_bytes * probe_elapsed_ns / probe_bytes
+               = 268,435,456 * 431,059,458 / 268,435,456
+               = 431,059,458 ns
+
+  Computed in u128 integer arithmetic, truncating downward so rounding always
+  favours the device. A hardcoded floor would false-positive on fast NVMe; this
+  one moves with whatever the medium actually demonstrates.
+
+A SECOND, INDEPENDENT SIGNAL
+----------------------------
+  Timing is not the only witness. The medium itself is sampled before and after:
+    medium_witness_before    c82e10f39199bc4fb1728f8bf12f3049717809b47956437d3f549917b57fc9c6
+    medium_witness_after     c82e10f39199bc4fb1728f8bf12f3049717809b47956437d3f549917b57fc9c6
+    medium_unchanged         True   (over 256 sampled sectors)
+  So the claim is corroborated twice: the command was impossibly fast, AND the
+  bytes it claimed to erase are unchanged.
+
+  disposition                NOT_A_SANITIZATION_CLAIM: the primitive is not claimed by this device, so the command was simulated. The overwrite behind it is what this report's sanitization claim rests on.
+
+WHAT THIS DOES AND DOES NOT PROVE
+---------------------------------
+  It rules out the specific failure where a firmware command returns success
+  without doing the work, independently of anything the firmware reports.
+  It does NOT prove an erase happened when timing looks plausible: a device that
+  fakes host writes fast enough would inflate the measured baseline and disarm
+  this audit. Only read-back verification addresses that, and it is a separate
+  and necessary check. Every figure here is host file I/O on one laptop; no real
+  ATA or NVMe device has been timed.
+
+RAW REPORT
+==========
+{
+  "schema": "sentinelwipe.wipe.report/1",
+  "provenance": {
+    "producer": "core/wipe/src/lib.rs::run_job",
+    "command": "wipe --target /private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/p3check/t2.img --allow-root /private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/p3check --i-understand /private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/p3check/t2.img --sanitize ata-sanitize-block-erase",
+    "is_wipe_run": true,
+    "notes": [
+      "Produced by a real wipe run. Every number in this file was measured during it; none is illustrative.",
+      "The sanitization claim in `outcome` rests on read-back verification of 1024 of 524288 sectors, not on any device return code.",
+      "`audit.overwrite` is judged against the calibration probe, which is a throughput sample the overwrite did not produce. Auditing an operation against a baseline derived from itself returns a ratio of 1.0 by construction and is worth nothing.",
+      "Timing figures are wall-clock and are NOT reproducible across runs. CLAUDE.md rule 6 constrains the certificate; a byte-identity comparison must exclude every duration, rate and ratio field in this file, or bucket them. The medium's contents ARE reproducible from run_id.",
+      "`sanitize` is SIMULATED: the device reports `simulated` support for ata-sanitize-block-erase, which is not `claimed`. It destroyed nothing, and the medium witness digest is byte-identical before and after it: measured unchanged.",
+      "Verification was SAMPLED. The coverage fraction is published per pass and the unverified remainder is published beside it. A sampled read-back is not proof about the whole medium."
+    ]
+  },
+  "run": {
+    "run_id": "sentinelwipe/wipe/v1",
+    "seed_hex": "a77ebf107e7c5ba66c01d96507bddb221b75b377ce8e297c69b07a985e2ff981",
+    "target": "/private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/p3check/t2.img",
+    "target_resolved": "/private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/p3check/t2.img",
+    "elapsed_ns": 740335209,
+    "elapsed_s": 0.740335
+  },
+  "authorization": {
+    "decision_code": "ALLOW_FILE",
+    "policy_digest_payload": "policy-payload:{\"allow_device_targets\":false,\"devices\":[],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":true,\"roots\":[\"/private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/p3check\"]}",
+    "policy_digest_payload_is_not_a_digest": "The guard carries no hash primitive. This is the exact byte string fixtures/guard.py feeds to SHA-256; hash the part after the prefix to obtain the digest the Python guard publishes.",
+    "require_confirmation": true,
+    "allowed_roots": [
+      "/private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/p3check"
+    ]
+  },
+  "device": {
+    "kind": "image file",
+    "model": "unknown",
+    "serial": "unknown",
+    "firmware": "unknown",
+    "transport": "file",
+    "identity_source": "file-metadata",
+    "is_physical_medium": false,
+    "medium": "image",
+    "has_hidden_regions": false,
+    "logical_sector_bytes": 512,
+    "physical_sector_bytes": null,
+    "total_sectors": 524288,
+    "capacity_bytes": 268435456,
+    "writable": true
+  },
+  "dispatch": {
+    "method": "single_pass_seeded_random_shake128",
+    "method_selected_by": "detected-medium",
+    "passes": 1,
+    "nist_category": "Clear",
+    "legacy_shape": null,
+    "sanitize_primitive": "ata-sanitize-block-erase",
+    "sanitize_selected_by": "operator",
+    "rationale": "regular file standing in for a medium: there is no controller, so no firmware primitive exists to attempt and any that is requested is simulated and labelled so. Sanitize primitive ata-sanitize-block-erase was named by the operator rather than detected"
+  },
+  "entropy_bits_per_byte": {
+    "before": 7.06169,
+    "after": 7.999999,
+    "delta": 0.938309,
+    "bytes_measured": 268435456,
+    "estimator": "Shannon over a 256-bin byte histogram of every byte of the medium, Neumaier-compensated; the same support and the same estimator fixtures/corpus.py used for the manifest figure, so the two may be subtracted. NOT the strided per-frame telemetry sample."
+  },
+  "calibration_probe": {
+    "bytes": 33554432,
+    "sectors": 65536,
+    "pattern": "shake128_seeded_stream",
+    "duration_ns": 56408500,
+    "duration_s": 0.056409,
+    "sync_ns": 4318000,
+    "bytes_per_second": 594847088.647987,
+    "admitted_as_baseline": true,
+    "refusal": null,
+    "note": "Written before pass 1 with the FINAL pass's pattern, so every byte of it is overwritten again by the wipe and the medium's final state is identical with and without it. It exists so the behavioural audit judges the overwrite against a sample the overwrite did not produce."
+  },
+  "sanitize": {
+    "primitive": "ata-sanitize-block-erase",
+    "operation": "ATA SANITIZE BLOCK ERASE (simulated)",
+    "simulated": true,
+    "device_support": "simulated",
+    "claim_source": "not-probed",
+    "device_reported_success": true,
+    "return_code_trusted": false,
+    "measured_duration_ns": 1000,
+    "measured_duration_s": 1e-06,
+    "capacity_claimed_bytes": 268435456,
+    "medium_witness_before": "c82e10f39199bc4fb1728f8bf12f3049717809b47956437d3f549917b57fc9c6",
+    "medium_witness_after": "c82e10f39199bc4fb1728f8bf12f3049717809b47956437d3f549917b57fc9c6",
+    "medium_unchanged": true,
+    "witness_sectors": 256,
+    "disposition": "NOT_A_SANITIZATION_CLAIM: the primitive is not claimed by this device, so the command was simulated. The overwrite behind it is what this report's sanitization claim rests on.",
+    "limits": "SIMULATED. No ATA SECURITY ERASE UNIT and no NVMe Sanitize command was issued, because the target is not a physical controller. The operation was timed and audited exactly as a real one would be, and its effect on the medium was measured by reading the medium back; it wrote nothing. Nothing in this block is evidence that any data was destroyed. The data-destroying operation in this report is the overwrite, and its evidence is the read-back verification."
+  },
+  "crypto_erase": null,
+  "overwrite": {
+    "method": "single_pass_seeded_random_shake128",
+    "simulated": false,
+    "nist_category": "Clear",
+    "legacy_shape": null,
+    "bytes_written": 268435456,
+    "duration_ns": 432911500,
+    "duration_s": 0.432912,
+    "bytes_per_second": 620070051.269139,
+    "passes": [
+      {
+        "pass": 1,
+        "of": 1,
+        "pattern": "shake128_seeded_stream",
+        "sectors_written": 524288,
+        "bytes_written": 268435456,
+        "duration_ns": 431059458,
+        "sync_ns": 5314167,
+        "bytes_per_second": 622734175.107695,
+        "chunk_writes": 256,
+        "chunk_sectors_first": 2048,
+        "chunk_sectors_final": 2048,
+        "chunk_resizes": 0,
+        "max_chunk_ns": 2662000
+      }
+    ],
+    "scope_limit": "An overwrite pass against an image file overwrites the byte range of that file and nothing else. It does not reach, and this tool does not claim to reach, prior copies of those bytes held by the host filesystem (copy-on-write snapshots, journals) or remapped by the host storage controller (wear levelling, over-provisioning, bad-block retirement). Purge of the underlying physical medium is neither performed nor claimed."
+  },
+  "verification": {
+    "mode": "sampled",
+    "all_passes_verified": true,
+    "passes": [
+      {
+        "pass": 1,
+        "of": 1,
+        "mode": "sampled_read_back",
+        "pattern": "shake128_seeded_stream",
+        "verdict": "PATTERN_CONFIRMED_ON_SAMPLE",
+        "sectors_verified": 1024,
+        "sectors_unverified": 523264,
+        "bytes_verified": 524288,
+        "coverage_fraction": 0.001953,
+        "mismatched_sectors": 0,
+        "mismatches_truncated": false,
+        "duration_ns": 1827958,
+        "bytes_per_second": 286816217.878091,
+        "sample_digest_hex": "09a55d5416c2db9d58c60411505fe89c68ac6cb1c6c3b55b7d37ea68277084af",
+        "claim": "Pass 1 of 1: 1024 of 524288 sectors were read back and every one carried the expected pattern. Coverage 0.1953% of the medium. SAMPLING IS NOT PROOF OF THE WHOLE MEDIUM. This verdict covers only the sectors the sampling plan named and this run actually read back. Sectors outside the sample were not read after the pass and carry no verification claim from this run. A pass that skipped an unsampled sector would produce this same verdict. Sample positions are derived from the run seed, which is published in the certificate so a third party can reproduce them. A device whose firmware knew the seed could write only the sampled sectors and pass. This procedure detects incidental failure -- a skipped range, an ignored write, a pass that did not run -- and does not detect adversarial firmware."
+      }
+    ]
+  },
+  "audit": {
+    "schema": "sentinelwipe.wipe.audit/1",
+    "threshold_ratio": 0.05,
+    "return_code_trusted": false,
+    "overwrite": {
+      "schema": "sentinelwipe.wipe.audit/1",
+      "operation": "host overwrite: single_pass_seeded_random_shake128",
+      "code": "VERIFIED_TIMING",
+      "severity": "verified",
+      "simulated": false,
+      "device_reported_success": true,
+      "return_code_trusted": false,
+      "workload": {
+        "kind": "overwrite",
+        "capacity_bytes": 268435456,
+        "passes": 1,
+        "work_bytes": 268435456
+      },
+      "measured_duration_ns": 432911500,
+      "measured_duration_s": 0.432912,
+      "expected_min_duration_ns": 451268000,
+      "expected_min_duration_s": 0.451268,
+      "ratio_measured_over_expected_min": 0.959322,
+      "threshold_ratio": 0.05,
+      "baseline": {
+        "source": "calibration_probe",
+        "measured": true,
+        "probe_bytes": 33554432,
+        "probe_elapsed_ns": 56408500,
+        "bytes_per_second": 594847088.647987,
+        "samples_admitted": 1,
+        "samples_refused": 0
+      },
+      "note": "VERIFIED_TIMING \u00b7 host overwrite: single_pass_seeded_random_shake128 \u00b7 measured 0.432912 s against an expected minimum of 0.451268 s (0.959322 of it)."
+    },
+    "sanitize": {
+      "schema": "sentinelwipe.wipe.audit/1",
+      "operation": "ATA SANITIZE BLOCK ERASE (simulated)",
+      "code": "UNVERIFIED_TIMING",
+      "severity": "unverified",
+      "simulated": true,
+      "device_reported_success": true,
+      "return_code_trusted": false,
+      "workload": {
+        "kind": "media_sanitize",
+        "capacity_bytes": 268435456,
+        "passes": 1,
+        "work_bytes": 268435456
+      },
+      "measured_duration_ns": 1000,
+      "measured_duration_s": 1e-06,
+      "expected_min_duration_ns": 431059458,
+      "expected_min_duration_s": 0.431059,
+      "ratio_measured_over_expected_min": 2e-06,
+      "threshold_ratio": 0.05,
+      "baseline": {
+        "source": "observed_pass",
+        "measured": true,
+        "probe_bytes": 268435456,
+        "probe_elapsed_ns": 431059458,
+        "bytes_per_second": 622734175.107695,
+        "samples_admitted": 2,
+        "samples_refused": 0
+      },
+      "note": "UNVERIFIED_TIMING \u00b7 ATA SANITIZE BLOCK ERASE (simulated) \u00b7 measured 0.000001 s against an expected minimum of 0.431059 s (0.000002 of it) at a measured 622734175.107695 B/s. Device reported success; the return code was not trusted."
+    },
+    "sanitize_baseline_source": "observed_pass"
+  },
+  "telemetry": {
+    "schema": "sentinelwipe.wipe.telemetry/1",
+    "period_ms": 40,
+    "events": 11,
+    "wall_ms": 432.912459,
+    "achieved_hz": 25.409294,
+    "min_gap_ms": 16.4305,
+    "max_gap_ms": 41.518125,
+    "rate_floor_hz": 20.0,
+    "met_rate_floor": true,
+    "longest_uninstrumented_interval_ns": 7142125,
+    "longest_uninstrumented_interval_ms": 7.142125,
+    "note": "met_rate_floor is the verdict, not achieved_hz: any stretch in which nothing is written deflates events-over-wall without a frame ever being late. A frame can only be emitted from a write, so the floor is a property of the write stream; longest_uninstrumented_interval is the pass sync plus read-back sweep during which nothing was written and is the explanation for max_gap_ms when it exceeds the period."
+  },
+  "limits": [
+    "An overwrite pass against an image file overwrites the byte range of that file and nothing else. It does not reach, and this tool does not claim to reach, prior copies of those bytes held by the host filesystem (copy-on-write snapshots, journals) or remapped by the host storage controller (wear levelling, over-provisioning, bad-block retirement). Purge of the underlying physical medium is neither performed nor claimed.",
+    "SAMPLING IS NOT PROOF OF THE WHOLE MEDIUM. This verdict covers only the sectors the sampling plan named and this run actually read back. Sectors outside the sample were not read after the pass and carry no verification claim from this run. A pass that skipped an unsampled sector would produce this same verdict.",
+    "Sample positions are derived from the run seed, which is published in the certificate so a third party can reproduce them. A device whose firmware knew the seed could write only the sampled sectors and pass. This procedure detects incidental failure -- a skipped range, an ignored write, a pass that did not run -- and does not detect adversarial firmware.",
+    "SIMULATED. No ATA SECURITY ERASE UNIT and no NVMe Sanitize command was issued, because the target is not a physical controller. The operation was timed and audited exactly as a real one would be, and its effect on the medium was measured by reading the medium back; it wrote nothing. Nothing in this block is evidence that any data was destroyed. The data-destroying operation in this report is the overwrite, and its evidence is the read-back verification."
+  ],
+  "outcome": {
+    "code": "OVERWRITE_VERIFIED_BY_READ_BACK",
+    "sanitized": true,
+    "evidence": "read-back verification of the pattern each pass wrote, at the coverage published per pass in `verification`. No device return code contributed to this field."
+  }
+}

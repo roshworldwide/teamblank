@@ -320,15 +320,35 @@ def test_tmp_and_private_tmp_roots_are_one_policy():
 # ------------------------------------------- ATTACK: case-insensitive volume
 
 
-def test_ALLOW_case_variant_on_case_insensitive_volume(lab):
-    """On a case-insensitive volume FIXTURES/ and fixtures/ are one directory.
-    Inode containment allows it; a case-sensitive prefix test would refuse a
-    legitimate target."""
+def test_case_variant_spelling_of_the_root_is_refused_by_the_decision_itself(lab):
+    """On a case-insensitive volume FIXTURES/ and fixtures/ are one directory,
+    so inode containment says yes -- and open_authorized's O_NOFOLLOW descent,
+    which re-identifies the root by STRING, then says no.
+
+    MEASURED DIVERGENCE, now closed: authorize() used to return ALLOW_FILE here
+    while the open returned DENY_NOT_ALLOWLISTED.  It failed closed, so it was
+    never a hole, but --plan and the certificate's authorization.decision_code
+    both read the DECISION, and both published ALLOW_FILE for a target the
+    engine would refuse.  authorize() now takes the descent's own predicate as
+    a final conjunct, so the two agree and the refusal is recorded once, at
+    decision time, under one code.
+    """
     upper = str(lab["root"]).replace("/fixtures", "/FIXTURES")
     if not os.path.exists(upper):
         pytest.skip("volume is case-sensitive")
-    d = G.authorize(lab["policy"], os.path.join(upper, "disk.img"))
-    assert d.allowed, d.code
+    target = os.path.join(upper, "disk.img")
+    d = G.authorize(lab["policy"], target)
+    assert not d.allowed and d.code == G.DENY_NOT_ALLOWLISTED, d.code
+    with pytest.raises(G.GuardError) as ei:
+        G.open_authorized(lab["policy"], target, "r+")
+    assert ei.value.decision.code == d.code, (
+        "the decision and the open must now give the SAME code for this target")
+    # And this is not a guard that refuses everything: the same file, spelled
+    # the way the root is spelled, is still allowed and still opens.
+    ok = G.authorize(lab["policy"], str(lab["img"]))
+    assert ok.allowed and ok.code == G.ALLOW_FILE, ok.code
+    fd = G.open_authorized(lab["policy"], str(lab["img"]), "r+")
+    os.close(fd)
 
 
 def test_case_variant_is_not_a_widening(lab):
@@ -1566,6 +1586,202 @@ def _redteam_rows(tmp: str):
 
     unchanged = open(vic, "rb").read(16) == vic_before
     return rows, unchanged
+
+
+# ------------------------------------------------- ATTACK: a REAL racing thread
+
+
+def _race_lab(tmp_path, tag):
+    """A lab shaped for a racing attacker: a fixed allowed root, a target under
+    it, and a small victim OUTSIDE it whose bytes are checked every iteration."""
+    base = tmp_path / tag
+    (base / "fixtures" / "sub").mkdir(parents=True)
+    (base / "outside" / "sub").mkdir(parents=True)
+    victim = base / "outside" / "sub" / "disk.img"
+    victim.write_bytes(b"\xaa" * 4096)
+    target = base / "fixtures" / "sub" / "disk.img"
+    target.write_bytes(b"\xbb" * 4096)
+    return base, target, victim
+
+
+def test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim(tmp_path):
+    """The clause the shared conformance table cannot reach, reached.
+
+    fixtures/guard_vectors.json is a static table of (target, policy, expected
+    code) rows.  It proves the two implementations AGREE; it cannot express
+    "and now another thread renames this directory", so it excused
+    DENY_RACE_DETECTED_AT_OPEN and DENY_SYMLINK_COMPONENT_AT_OPEN as
+    inexpressible -- and that excuse is what hid a real escape.  All 85 rows
+    passed in both languages while both guards would truncate a file outside
+    every allowed root under a racing rename, because the allowed root's own
+    open omitted O_NOFOLLOW and O_TRUNC rode in the openat that established
+    identity, before the (dev,ino) re-check could fire.
+
+    This needs no table.  A thread flips the allowed root between the real
+    directory and a symlink pointing outside it while this loop calls
+    open_authorized in mode "w" -- the mode that truncates, and the mode
+    ``wipe --trace`` and fixtures/build_image.py use.  Three assertions:
+
+      1. SAFETY.  The victim outside every allowed root is byte-identical
+         afterwards and its inode never changed.  A refusal that costs data is
+         not a refusal.
+      2. REACHABILITY.  DENY_RACE_DETECTED_AT_OPEN appears in the census, so
+         the clause is known to be executed rather than merely present.
+      3. TOTALITY.  No iteration exits with a bare OSError.  open_authorized
+         promises a Decision on every refusal; a guard stopped by the kernel is
+         not a guard, and an errno carries no audit line.
+
+    The Rust twin is core/device/src/guard.rs::guard::race::
+    racing_the_allowed_root_never_truncates_a_file_outside_it.
+    """
+    import threading
+    import time
+
+    base, target, victim = _race_lab(tmp_path, "race-root")
+    root = base / "fixtures"
+    outside = base / "outside"
+    hidden = base / "fixtures.real"
+    victim_ids = os.stat(victim).st_ino, os.stat(victim).st_dev
+    victim_before = victim.read_bytes()
+
+    # The policy is fixed BEFORE the race starts.  An allowlist chosen while the
+    # attacker holds the directory entry names whatever the attacker wants.
+    policy = G.Policy(roots=[str(root)])
+    conf = os.path.realpath(str(target))
+
+    stop = threading.Event()
+
+    def flipper():
+        while not stop.is_set():
+            try:
+                os.rename(str(root), str(hidden))
+                os.symlink(str(outside), str(root))
+                os.unlink(str(root))
+                os.rename(str(hidden), str(root))
+            except OSError:
+                pass
+
+    t = threading.Thread(target=flipper, daemon=True)
+    t.start()
+    census: dict[str, int] = {}
+    kernel_errors = []
+    attempts = 0
+    deadline = time.monotonic() + 30.0
+    try:
+        while attempts < 20000 and time.monotonic() < deadline:
+            attempts += 1
+            try:
+                fd = G.open_authorized(policy, str(target), "w", conf)
+                os.close(fd)
+                census["ALLOW"] = census.get("ALLOW", 0) + 1
+            except G.GuardError as e:
+                census[e.decision.code] = census.get(e.decision.code, 0) + 1
+            except OSError as e:
+                kernel_errors.append(e.errno)
+                census["OSERROR:%s" % e.errno] = census.get("OSERROR:%s" % e.errno, 0) + 1
+            # Checked on EVERY iteration: a truncate followed by a restore would
+            # otherwise go unseen.
+            if victim.exists():
+                assert victim.stat().st_size == 4096, (
+                    "THE GUARD TRUNCATED A FILE OUTSIDE EVERY ALLOWED ROOT on "
+                    "attempt %d. census: %r" % (attempts, census))
+            if census.get(G.DENY_RACE, 0) > 0 and attempts >= 2000:
+                break
+    finally:
+        stop.set()
+        t.join(timeout=5)
+        # Put the root back so tmp_path teardown can run.
+        if os.path.islink(str(root)):
+            os.unlink(str(root))
+        if hidden.exists() and not root.exists():
+            os.rename(str(hidden), str(root))
+
+    assert victim.read_bytes() == victim_before, (
+        "a file outside the allowlist changed. census: %r" % census)
+    assert (os.stat(victim).st_ino, os.stat(victim).st_dev) == victim_ids
+    assert not kernel_errors, (
+        "open_authorized exited by errno rather than by policy %d times (%r). A "
+        "guard stopped by the kernel is not a guard. census: %r"
+        % (len(kernel_errors), sorted(set(kernel_errors)), census))
+    assert census.get(G.DENY_RACE, 0) > 0, (
+        "DENY_RACE_DETECTED_AT_OPEN was never reached in %d attempts, so this "
+        "test proved nothing about it. census: %r" % (attempts, census))
+    print("\nrace/root: %d attempts, victim intact, census: %r" % (attempts, census))
+
+
+def test_ATTACK_a_racing_thread_swapping_a_mid_path_component_hits_the_symlink_clause(
+    tmp_path,
+):
+    """The same window one level down, and the clause that was always correct.
+
+    A component BELOW the allowed root is swapped for a symlink pointing
+    outside; the O_NOFOLLOW|O_DIRECTORY descent must fail ELOOP and become
+    DENY_SYMLINK_COMPONENT_AT_OPEN rather than escaping.  This is the control
+    that shows the root's own open was a single hole rather than a general one.
+    """
+    import threading
+    import time
+
+    base, target, victim = _race_lab(tmp_path, "race-mid")
+    root = base / "fixtures"
+    sub = root / "sub"
+    outside = base / "outside" / "sub"
+    hidden = root / "sub.real"
+    victim_before = victim.read_bytes()
+    policy = G.Policy(roots=[str(root)])
+    conf = os.path.realpath(str(target))
+
+    stop = threading.Event()
+
+    def flipper():
+        while not stop.is_set():
+            try:
+                os.rename(str(sub), str(hidden))
+                os.symlink(str(outside), str(sub))
+                os.unlink(str(sub))
+                os.rename(str(hidden), str(sub))
+            except OSError:
+                pass
+
+    t = threading.Thread(target=flipper, daemon=True)
+    t.start()
+    census: dict[str, int] = {}
+    kernel_errors = []
+    attempts = 0
+    deadline = time.monotonic() + 30.0
+    try:
+        while attempts < 20000 and time.monotonic() < deadline:
+            attempts += 1
+            try:
+                fd = G.open_authorized(policy, str(target), "w", conf)
+                os.close(fd)
+                census["ALLOW"] = census.get("ALLOW", 0) + 1
+            except G.GuardError as e:
+                census[e.decision.code] = census.get(e.decision.code, 0) + 1
+            except OSError as e:
+                kernel_errors.append(e.errno)
+            if victim.exists():
+                assert victim.stat().st_size == 4096, (
+                    "THE GUARD TRUNCATED A FILE OUTSIDE EVERY ALLOWED ROOT on "
+                    "attempt %d. census: %r" % (attempts, census))
+            if census.get(G.DENY_SYMLINK_AT_OPEN, 0) > 0 and attempts >= 500:
+                break
+    finally:
+        stop.set()
+        t.join(timeout=5)
+        if os.path.islink(str(sub)):
+            os.unlink(str(sub))
+        if hidden.exists() and not sub.exists():
+            os.rename(str(hidden), str(sub))
+
+    assert victim.read_bytes() == victim_before
+    assert not kernel_errors, (
+        "open_authorized exited by errno rather than by policy: %r. census: %r"
+        % (sorted(set(kernel_errors)), census))
+    assert census.get(G.DENY_SYMLINK_AT_OPEN, 0) > 0, (
+        "DENY_SYMLINK_COMPONENT_AT_OPEN was never reached in %d attempts. "
+        "census: %r" % (attempts, census))
+    print("\nrace/mid: %d attempts, victim intact, census: %r" % (attempts, census))
 
 
 def test_redteam_table(capsys, tmp_path):

@@ -42,6 +42,19 @@ One narrator across every jury visit.
   reassembly is a flag and it is OFF on stage, deliberately. Turning it on finds two
   more files and takes 66 seconds — forty times the cost for two files, which does not
   fit a 90-second demo and should not pretend to.
+- IF ASKED WHAT THE CONFIDENCE SCORE MEANS, this is the answer, and it is the best
+  thing in the deck after the adversarial loop. A score says "this is a well-formed
+  object of this type." It does NOT say "these are the original bytes." For formats
+  carrying integrity checks over their payload — PNG chunk CRCs, GZIP CRC32, ZIP
+  per-entry CRCs — those two claims nearly coincide. For JPEG entropy-coded data and
+  MP4 sample data there is no such check, and they can diverge completely.
+  We have a case on screen: handover_briefing.mov is admitted at 0.9000 with a perfect
+  structural score and a length matching the planted file to the byte — and a different
+  SHA-256. No term fell short. The formula did exactly what it claims and was still
+  wrong. That is why we join recovery to ground truth by hash rather than by row count,
+  and why the four terms are on screen instead of a single number. In the field there
+  is no manifest to join against; the published score is what stands in for it, and it
+  has to be honest about what it can and cannot see.
 - If asked "can you recover fragmented files": yes, and say the number honestly. Two of
   the five fragmented files reassemble byte-exact. Of the other three, one is a gap in
   our PDF validator that we can close; one is a limit of the QuickTime format itself —

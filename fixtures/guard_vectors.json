@@ -1,0 +1,2232 @@
+{
+ "schema": "sentinelwipe.guard_vectors/1",
+ "codes_not_exercised": {
+  "DENY_CROSSED_MOUNT_POINT": "needs a filesystem mounted inside an allowed root, which needs privilege and which the no-mount decision in docs/architecture.md D1 forbids. DESIGNED BUT UNVERIFIED in both implementations.",
+  "DENY_INVALID_LEAF_NAME": "reachable only when realpath(target) has an empty, '.' or '..' basename, i.e. the target resolves to '/', which exists and so never takes the create branch. Defensive code in both.",
+  "DENY_NOT_A_DEVICE_NODE": "unreachable by construction: the device branch is entered only after S_ISBLK or S_ISCHR already held. Defensive code in both.",
+  "_moved": "DENY_RACE_DETECTED_AT_OPEN and DENY_SYMLINK_COMPONENT_AT_OPEN were excused here as 'not expressible in a static table in either language'. They are not inexpressible -- they are simply not TABLE rows -- and the excuse is what hid a real escape: all 85 rows passed in both languages while both guards would truncate a file outside every allowed root under a racing rename. They now live in codes_exercised_by_race_test with measured counts."
+ },
+ "codes_exercised_by_race_test": {
+  "_why": "A static table of (target, policy, expected code) rows proves the two implementations AGREE. It cannot express 'and now another process renames this directory', so the two codes that guard the window between the decision and the open cannot be reached by a row. They are reached instead by a racing test in EACH language: a thread flips one path node while a loop calls open_authorized. Each test asserts three things -- the code appears in the census (the clause is executed, not merely present), a pinned victim outside every allowed root is byte-identical afterwards with its inode unchanged (a refusal that costs data is not a refusal), and no iteration exits by errno (open_authorized is total over refusals; a guard stopped by the kernel is not a guard).",
+  "DENY_RACE_DETECTED_AT_OPEN": {
+   "rust_test": "core/device/src/guard.rs::guard::race::racing_the_allowed_root_never_truncates_a_file_outside_it",
+   "python_test": "tests/test_guard.py::test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim",
+   "measured_rust": "200,000 attempts in mode w against a thread flipping the allowed root between the real directory and a symlink pointing outside it: ALLOW=79948 DENY_NOT_ALLOWLISTED=71356 DENY_PARENT_DIRECTORY_MISSING=35614 DENY_RACE_DETECTED_AT_OPEN=13082, 0 exits by errno, victim 4096 bytes byte-identical, inode unchanged.",
+   "measured_python": "2,000 attempts in mode w against the same flip: ALLOW=187 DENY_NOT_ALLOWLISTED=604 DENY_PARENT_DIRECTORY_MISSING=442 DENY_RACE_DETECTED_AT_OPEN=767, 0 exits by errno, victim byte-identical, inode unchanged.",
+   "what_it_regresses": "The O_TRUNC that used to ride in the openat establishing the target's identity, and the allowed root's own open, which was the one open on the path that omitted O_NOFOLLOW. Measured before the fix: a 4096-byte file outside every allowed root truncated to 0 while the guard returned this very code for the same call."
+  },
+  "DENY_SYMLINK_COMPONENT_AT_OPEN": {
+   "rust_test": "core/device/src/guard.rs::guard::race::racing_a_mid_path_component_reaches_the_symlink_clause",
+   "python_test": "tests/test_guard.py::test_ATTACK_a_racing_thread_swapping_a_mid_path_component_hits_the_symlink_clause",
+   "measured_rust": "550 attempts against a thread swapping a component BELOW the root for a symlink pointing outside: ALLOW=16 DENY_NOT_ALLOWLISTED=217 DENY_PARENT_DIRECTORY_MISSING=103 DENY_RACE_DETECTED_AT_OPEN=213 DENY_SYMLINK_COMPONENT_AT_OPEN=1, 0 exits by errno, victim byte-identical.",
+   "measured_python": "500 attempts against the same swap: ALLOW=2 DENY_NOT_ALLOWLISTED=43 DENY_PARENT_DIRECTORY_MISSING=234 DENY_RACE_DETECTED_AT_OPEN=190 DENY_SYMLINK_COMPONENT_AT_OPEN=31, 0 exits by errno, victim byte-identical.",
+   "what_it_regresses": "The O_NOFOLLOW|O_DIRECTORY descent below the root, which was always correct and is the control showing the root's own open was a single hole rather than a general one."
+  }
+ },
+ "codes_exercised": 23,
+ "codes_defined": 28,
+ "purpose": [
+  "The shared conformance table for the SENTINELWIPE write guard.",
+  "The guard is implemented twice -- fixtures/guard.py drives the Python",
+  "fixture build, core/device/src/guard.rs drives the Rust wipe engine that",
+  "the Tauri frontend calls directly -- and a Python-only allowlist would be",
+  "bypassed entirely on the demo path. CLAUDE.md rule 4 makes that",
+  "unacceptable. Both implementations run every row below and must produce",
+  "the recorded decision code. Drift fails a test instead of silently",
+  "opening a hole.",
+  "",
+  "EXPECTATIONS ARE MEASURED, NOT AUTHORED. Every expect_code was produced",
+  "by running fixtures/guard.py, which is the source of truth for policy.",
+  "",
+  "ROW ORDER IS PART OF THE TABLE. Some rows create files; run them in order.",
+  "",
+  "A table of only refusals proves nothing, so the positive controls are",
+  "here too: legitimate targets, both create modes, the macOS firmlink",
+  "aliasing of one root, and one ALLOW_DEVICE that proves the device path",
+  "can still say yes behind the platform blanket."
+ ],
+ "placeholders": {
+  "{lab}": "the harness's lab directory AS SPELLED (created under /tmp)",
+  "{lab_real}": "realpath of {lab}; on macOS the two differ because the system temp directory is reached through a symlinked ancestor",
+  "{home}": "realpath of the invoking user's home directory",
+  "{boot_device}": "the /dev/diskNsM whose st_rdev equals st_dev of '/'",
+  "{boot_whole_disk}": "/dev/ + the whole-disk name derived from it",
+  "{lab_real_first_component}": "the first path component of {lab_real}"
+ },
+ "row_fields": {
+  "platform": "'native' evaluates under the real platform; 'linux' is the test seam that bypasses device clause D0 AND ONLY D0, so the allowlist, environment, alias, boot-disk and confirmation clauses have a test that can fail on a macOS host",
+  "open": "when true the harness must also call open_authorized and must obtain a descriptor iff expect_allowed. A refusal that arrives as an OSError is a FAILURE: it means the guard said yes and only the kernel said no",
+  "expect_code_any": "present only where the resolution is invocation-dependent; the code must be one of these",
+  "allow_open_divergence": "authorize and open_authorized are recorded as disagreeing on this row, fail-closed",
+  "requires": "host predicates; a row whose predicates are unmet is skipped by both harnesses and counted"
+ },
+ "lab": {
+  "dirs": [
+   "fixtures",
+   "fixtures/sub",
+   "fixtures-evil",
+   "outside",
+   "outside/sub"
+  ],
+  "files": [
+   {
+    "path": "fixtures/disk.img",
+    "bytes": 262144,
+    "fill": 0
+   },
+   {
+    "path": "fixtures/trunc.img",
+    "bytes": 262144,
+    "fill": 0
+   },
+   {
+    "path": "fixtures/tiny.img",
+    "bytes": 10,
+    "fill": 120
+   },
+   {
+    "path": "fixtures/caf\u00e9.img",
+    "bytes": 262144,
+    "fill": 0
+   },
+   {
+    "path": "fixtures/sub/d.img",
+    "bytes": 262144,
+    "fill": 0
+   },
+   {
+    "path": "fixtures-evil/disk.img",
+    "bytes": 262144,
+    "fill": 0
+   },
+   {
+    "path": "outside/victim.img",
+    "bytes": 262144,
+    "fill": 170
+   },
+   {
+    "path": "outside/sub/d.img",
+    "bytes": 262144,
+    "fill": 170
+   }
+  ],
+  "symlinks": [
+   {
+    "link": "fixtures/s_victim.img",
+    "to": "{lab_real}/outside/victim.img"
+   },
+   {
+    "link": "fixtures/s_disk0.img",
+    "to": "/dev/disk0"
+   },
+   {
+    "link": "fixtures/s_rdisk0.img",
+    "to": "/dev/rdisk0"
+   },
+   {
+    "link": "fixtures/s_etc",
+    "to": "/etc"
+   },
+   {
+    "link": "fixtures/s_new.img",
+    "to": "{lab_real}/outside/planted.img"
+   },
+   {
+    "link": "fixtures/cyc_a",
+    "to": "{lab_real}/fixtures/cyc_b"
+   },
+   {
+    "link": "fixtures/cyc_b",
+    "to": "{lab_real}/fixtures/cyc_a"
+   },
+   {
+    "link": "fixtures/s_outsub",
+    "to": "{lab_real}/outside/sub"
+   }
+  ],
+  "hardlinks": [
+   {
+    "link": "fixtures/h_victim.img",
+    "to": "{lab_real}/outside/victim.img"
+   }
+  ],
+  "fifos": [
+   "fixtures/p"
+  ]
+ },
+ "policies": {
+  "default": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "digest_payload_tpl": "{\"allow_device_targets\":false,\"devices\":[],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":false,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "confirming": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "require_confirmation": true,
+   "digest_payload_tpl": "{\"allow_device_targets\":false,\"devices\":[],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":true,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "sized": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "min_file_bytes": 65536,
+   "digest_payload_tpl": "{\"allow_device_targets\":false,\"devices\":[],\"max_file_bytes\":8589934592,\"min_file_bytes\":65536,\"require_confirmation\":false,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "capped": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "max_file_bytes": 1024,
+   "digest_payload_tpl": "{\"allow_device_targets\":false,\"devices\":[],\"max_file_bytes\":1024,\"min_file_bytes\":0,\"require_confirmation\":false,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "armed_disk0": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "devices": [
+    "/dev/disk0"
+   ],
+   "allow_device_targets": true,
+   "require_confirmation": true,
+   "digest_payload_tpl": "{\"allow_device_targets\":true,\"devices\":[\"/dev/disk0\"],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":true,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "armed_null": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "devices": [
+    "/dev/null"
+   ],
+   "allow_device_targets": true,
+   "require_confirmation": true,
+   "digest_payload_tpl": "{\"allow_device_targets\":true,\"devices\":[\"/dev/null\"],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":true,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "armed_null_alias": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "devices": [
+    "/dev/./null"
+   ],
+   "allow_device_targets": true,
+   "require_confirmation": true,
+   "digest_payload_tpl": "{\"allow_device_targets\":true,\"devices\":[\"/dev/./null\"],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":true,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "armed_boot": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "devices": [
+    "{boot_device}"
+   ],
+   "allow_device_targets": true,
+   "require_confirmation": true,
+   "digest_payload_tpl": "{\"allow_device_targets\":true,\"devices\":[\"/dev/disk3s5\"],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":true,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "armed_boot_whole": {
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "devices": [
+    "{boot_whole_disk}"
+   ],
+   "allow_device_targets": true,
+   "require_confirmation": true,
+   "digest_payload_tpl": "{\"allow_device_targets\":true,\"devices\":[\"/dev/disk3\"],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":true,\"roots\":[\"{lab_real}/fixtures\"]}"
+  },
+  "root_via_realpath": {
+   "roots": [
+    "{lab_real}/fixtures"
+   ],
+   "digest_payload_tpl": "{\"allow_device_targets\":false,\"devices\":[],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":false,\"roots\":[\"{lab_real}/fixtures\"]}"
+  }
+ },
+ "rows": [
+  {
+   "name": "CONTROL legitimate fixture image, r+",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL same image read-only",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL create a new file in the root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/created_x.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_CREATE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL w creates when absent",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/created_w.img"
+   },
+   "mode": "w",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_CREATE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL w truncates an existing file in the root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/trunc.img"
+   },
+   "mode": "w",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL confirmation that names the resolved target",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL confirmation on create",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/created_conf.img"
+   },
+   "mode": "x",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_CREATE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL dotdot that returns inside the root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/sub/../disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL trailing slash",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img/"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL doubled separators",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}//fixtures//disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL dot components",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/./././disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL root spelled through the alias, target spelled as realpath",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab_real}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "note": "one directory, two irreducible path strings. A string-prefix containment test denies one of them; inode identity accepts both",
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL root spelled as realpath, target spelled through the alias",
+   "policy": "root_via_realpath",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL NFC filename with a combining accent",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/caf\u00e9.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL 40-level deep target under the root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/sub/d.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": true,
+   "expect_code": "ALLOW_FILE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  },
+  {
+   "name": "CONTROL case-variant spelling of the root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/FIXTURES/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:{lab_real}/FIXTURES"
+   ],
+   "note": "case-insensitive volume: inode containment alone ALLOWS this, because FIXTURES/ and fixtures/ are one directory, while the O_NOFOLLOW descent re-identifies the root by STRING and refuses it (os.path.relpath yields '../FIXTURES/disk.img'). THE DIVERGENCE IS CLOSED: authorize() now applies the descent's own predicate as a final conjunct, after the type check, so the decision and the open give the same code. This row carried allow_open_divergence with expect_code ALLOW_FILE until 2026-09-03. It was never a hole -- it failed closed -- but --plan and the certificate's authorization.decision_code both read the DECISION, so both published ALLOW_FILE for a target the engine would refuse.",
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "symlink under root -> file outside root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/s_victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "symlink under root -> /dev/disk0",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/s_disk0.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/disk0"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:/dev/disk0"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "symlink under root -> /dev/rdisk0",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/s_rdisk0.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/rdisk0"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:/dev/rdisk0"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "symlinked DIRECTORY component -> /etc",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/s_etc/hosts"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "CREATE through a dangling symlink out of the root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/s_new.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "symlink cycle a -> b -> a",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/cyc_a"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_TARGET_MISSING",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_TARGET_MISSING"
+  },
+  {
+   "name": "symlinked directory component -> outside/sub",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/s_outsub/d.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "hardlink under root, inode outside root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/h_victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_MULTIPLE_HARDLINKS",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_MULTIPLE_HARDLINKS"
+  },
+  {
+   "name": "dotdot escape",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/../outside/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "dotdot escape with doubled separators",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}//fixtures/../outside//victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "dotdot escape with dot components",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/./../outside/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "sibling prefix confusion (fixtures-evil)",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures-evil/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "relative path",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "disk.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "disk.img"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_RELATIVE_PATH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_RELATIVE_PATH"
+  },
+  {
+   "name": "NUL smuggling",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab_real}/fixtures/disk.img\u0000/dev/disk0"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "{lab_real}/fixtures/disk.img"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NUL_IN_PATH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NUL_IN_PATH"
+  },
+  {
+   "name": "empty target",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": ""
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_EMPTY_TARGET",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_EMPTY_TARGET"
+  },
+  {
+   "name": "create outside the root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/outside/new.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "create with a missing parent",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/nodir/new.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_PARENT_DIRECTORY_MISSING",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_PARENT_DIRECTORY_MISSING"
+  },
+  {
+   "name": "case-variant spelling of a directory OUTSIDE the root",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/OUTSIDE/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:{lab_real}/OUTSIDE"
+   ],
+   "note": "case folding must not widen the allowed set",
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "/.vol/<dev>/<ino> of a file outside the root",
+   "policy": "default",
+   "target": {
+    "kind": "volfs",
+    "of": "{lab_real}/outside/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "darwin",
+    "volfs"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_SYNTHETIC_NAMESPACE_PATH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_SYNTHETIC_NAMESPACE_PATH"
+  },
+  {
+   "name": "/.vol/<dev>/<ino-of-root>/disk.img composed under the root",
+   "policy": "default",
+   "target": {
+    "kind": "volfs",
+    "of": "{lab_real}/fixtures",
+    "suffix": "/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "darwin",
+    "volfs"
+   ],
+   "note": "containment MATCHES here -- the walk hits the allowed root's own inode. Only the /.vol refusal stops it.",
+   "expect_allowed": false,
+   "expect_code": "DENY_SYNTHETIC_NAMESPACE_PATH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_SYNTHETIC_NAMESPACE_PATH"
+  },
+  {
+   "name": "/.vol create",
+   "policy": "default",
+   "target": {
+    "kind": "volfs",
+    "of": "{lab_real}/fixtures",
+    "suffix": "/new.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "darwin",
+    "volfs"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_SYNTHETIC_NAMESPACE_PATH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_SYNTHETIC_NAMESPACE_PATH"
+  },
+  {
+   "name": "/.vol still refused under the linux seam",
+   "policy": "default",
+   "target": {
+    "kind": "volfs",
+    "of": "{lab_real}/fixtures",
+    "suffix": "/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "linux",
+   "open": false,
+   "requires": [
+    "darwin",
+    "volfs"
+   ],
+   "note": "the platform seam bypasses D0 and only D0; the /.vol FILE rule keys on the real platform",
+   "expect_allowed": false,
+   "expect_code": "DENY_SYNTHETIC_NAMESPACE_PATH",
+   "expect_kind": "file"
+  },
+  {
+   "name": "raw /dev/disk0, default policy",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/disk0"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/disk0"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:/dev/disk0"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "raw /dev/rdisk0, default policy",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/rdisk0"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/rdisk0"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:/dev/rdisk0"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "/dev/null, default policy",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/null"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "/dev/stdout",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/stdout"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/stdout"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "note": "what /dev/stdout resolves to depends on how the harness was invoked (pipe under a test runner, character device on a tty), so the row fixes the SET of admissible refusals exactly as guard.py's own test_ATTACK_dev_stdout does. Every member is a containment or device refusal; none is an incidental hygiene one.",
+   "expect_code_any": [
+    "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+    "DENY_DEVICE_MODE_NOT_ENABLED",
+    "DENY_NOT_ALLOWLISTED",
+    "DENY_TARGET_MISSING"
+   ],
+   "expect_allowed": false,
+   "measured_code_on_generator_host": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "/dev/fd/N pointing at a file outside the root",
+   "policy": "default",
+   "target": {
+    "kind": "devfd",
+    "of": "{lab_real}/outside/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "note": "realpath does NOT rewrite /dev/fd/N; stat DOES report the underlying regular file. Containment is the only clause left.",
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "/dev/disk0 allowlisted, env unset",
+   "policy": "armed_disk0",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/disk0"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/disk0"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:/dev/disk0"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "/dev/disk0 allowlisted + env set  [THE MEASURED DEFECT]",
+   "policy": "armed_disk0",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/disk0"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/disk0"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:/dev/disk0"
+   ],
+   "note": "the regression row. The refusal must be a POLICY refusal with a device code -- never an OSError from lack of privilege.",
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "/dev/./disk0 alias of an allowlisted device",
+   "policy": "armed_disk0",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/./disk0"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/disk0"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "path_exists:/dev/disk0"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "BOOT DISK allowlisted, all three factors",
+   "policy": "armed_boot",
+   "target": {
+    "kind": "path",
+    "tpl": "{boot_device}"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "{boot_device}"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "boot_device"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "WHOLE BOOT DISK allowlisted, all three factors",
+   "policy": "armed_boot_whole",
+   "target": {
+    "kind": "path",
+    "tpl": "{boot_whole_disk}"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "{boot_whole_disk}"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "native",
+   "open": true,
+   "requires": [
+    "boot_whole_disk"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM",
+   "expect_kind": "device",
+   "expect_fd": false,
+   "expect_open_code": "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
+  },
+  {
+   "name": "D1 devices disabled in the policy",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/null"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_MODE_NOT_ENABLED",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D2 environment factor absent",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/null"
+   },
+   "env": {},
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_ENV_NOT_SET",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D2 environment factor set to 0",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/null"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "0"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_ENV_NOT_SET",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D2 environment factor set to true",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/null"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "true"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_ENV_NOT_SET",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D3 device not on the allowlist",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/zero"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/zero"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [
+    "path_exists:/dev/zero"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_NOT_ALLOWLISTED",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D4 an allowlisted alias is still an alias",
+   "policy": "armed_null_alias",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/./null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/null"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_NAME_IS_AN_ALIAS",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D5 the running system's disk, all factors present",
+   "policy": "armed_boot",
+   "target": {
+    "kind": "path",
+    "tpl": "{boot_device}"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "{boot_device}"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [
+    "boot_device"
+   ],
+   "note": "the clause that makes 'wipe the demo laptop' unreachable by misconfiguration, reached for the first time on this host",
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_BACKS_RUNNING_SYSTEM",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D5 covers the whole disk as well as the slice",
+   "policy": "armed_boot_whole",
+   "target": {
+    "kind": "path",
+    "tpl": "{boot_whole_disk}"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "{boot_whole_disk}"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [
+    "boot_whole_disk"
+   ],
+   "expect_allowed": false,
+   "expect_code": "DENY_DEVICE_BACKS_RUNNING_SYSTEM",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D6 confirmation absent for a device",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_ABSENT",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D6 confirmation '' for a device",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": ""
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D6 confirmation 'dev/null' for a device",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "dev/null"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D6 confirmation '/dev/nul' for a device",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/nul"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D6 confirmation '/dev/null ' for a device",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/null "
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "device"
+  },
+  {
+   "name": "D6 confirmation 'yes' for a device",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "yes"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "device"
+  },
+  {
+   "name": "CONTROL the device path can actually say yes",
+   "policy": "armed_null",
+   "target": {
+    "kind": "path",
+    "tpl": "/dev/null"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "/dev/null"
+   },
+   "env": {
+    "SENTINELWIPE_DEVICE_MODE": "1"
+   },
+   "platform": "linux",
+   "open": false,
+   "requires": [],
+   "note": "without this every device row above could pass because the device path refuses everything",
+   "expect_allowed": true,
+   "expect_code": "ALLOW_DEVICE",
+   "expect_kind": "device"
+  },
+  {
+   "name": "no confirmation at all",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_ABSENT",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_CONFIRMATION_ABSENT"
+  },
+  {
+   "name": "empty confirmation",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": ""
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_CONFIRMATION_MISMATCH"
+  },
+  {
+   "name": "confirmation naming an off-allowlist file",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/outside/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "note": "a refused target never reaches the confirmation clause",
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "no confirmation, target outside the allowed root",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/outside/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "wrong confirmation, target outside the allowed root",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/outside/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "yes"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "no confirmation, target is a hardlink to an inode outside the root",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/h_victim.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_MULTIPLE_HARDLINKS",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_MULTIPLE_HARDLINKS"
+  },
+  {
+   "name": "no confirmation, target is a directory",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_A_REGULAR_FILE",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_A_REGULAR_FILE"
+  },
+  {
+   "name": "no confirmation, create outside the allowed root",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/outside/new_conf.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "oversized file outside the root is refused by containment, not size",
+   "policy": "capped",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/outside/victim.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "note": "ordering is not cosmetic: with the size check first the certificate would quote DENY_SIZE_OUT_OF_BOUNDS for a target the allowlist is what actually refused",
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "directory outside the root is refused by containment, not by type",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/outside"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_ALLOWLISTED",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_ALLOWLISTED"
+  },
+  {
+   "name": "confirmation one character short",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved_drop_last"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_CONFIRMATION_MISMATCH"
+  },
+  {
+   "name": "confirmation for a DIFFERENT allowed file",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved_plus",
+    "suffix": ".other"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_CONFIRMATION_MISMATCH"
+  },
+  {
+   "name": "confirmation naming the argument, not the resolution",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/sub/../disk.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "literal",
+    "tpl": "{lab}/fixtures/sub/../disk.img"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "note": "the value that must be matched is the guard's resolution",
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_MISMATCH",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_CONFIRMATION_MISMATCH"
+  },
+  {
+   "name": "confirmation absent on a create",
+   "policy": "confirming",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/created_noconf.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_CONFIRMATION_ABSENT",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_CONFIRMATION_ABSENT"
+  },
+  {
+   "name": "target is a directory",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_A_REGULAR_FILE",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_NOT_A_REGULAR_FILE"
+  },
+  {
+   "name": "target is a FIFO",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/p"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": false,
+   "requires": [],
+   "note": "open is not attempted: opening a FIFO blocks. authorize refuses it.",
+   "expect_allowed": false,
+   "expect_code": "DENY_NOT_A_REGULAR_FILE",
+   "expect_kind": "file"
+  },
+  {
+   "name": "target below the size floor",
+   "policy": "sized",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/tiny.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_SIZE_OUT_OF_BOUNDS",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_SIZE_OUT_OF_BOUNDS"
+  },
+  {
+   "name": "target above the size ceiling",
+   "policy": "capped",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "r+",
+   "confirmation": {
+    "kind": "resolved"
+   },
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_SIZE_OUT_OF_BOUNDS",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_SIZE_OUT_OF_BOUNDS"
+  },
+  {
+   "name": "mode x over an existing file",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_TARGET_ALREADY_EXISTS",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_TARGET_ALREADY_EXISTS"
+  },
+  {
+   "name": "unsupported mode 'a'",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/disk.img"
+   },
+   "mode": "a",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_UNSUPPORTED_MODE",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_UNSUPPORTED_MODE"
+  },
+  {
+   "name": "missing target in mode r+",
+   "policy": "default",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/absent.img"
+   },
+   "mode": "r+",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "expect_allowed": false,
+   "expect_code": "DENY_TARGET_MISSING",
+   "expect_kind": "file",
+   "expect_fd": false,
+   "expect_open_code": "DENY_TARGET_MISSING"
+  },
+  {
+   "name": "size floor does not apply to a create",
+   "policy": "sized",
+   "target": {
+    "kind": "path",
+    "tpl": "{lab}/fixtures/created_sized.img"
+   },
+   "mode": "x",
+   "confirmation": null,
+   "env": {},
+   "platform": "native",
+   "open": true,
+   "requires": [],
+   "note": "'w' truncates and 'x' creates; the size a file happens to have now is not a policy question",
+   "expect_allowed": true,
+   "expect_code": "ALLOW_CREATE",
+   "expect_kind": "file",
+   "expect_fd": true,
+   "expect_open_code": ""
+  }
+ ],
+ "policy_rows": [
+  {
+   "name": "POLICY root /",
+   "roots": [
+    "/"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root /dev",
+   "roots": [
+    "/dev"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root /Volumes",
+   "roots": [
+    "/Volumes"
+   ],
+   "expect": "POLICY_ERROR",
+   "requires": [
+    "path_exists:/Volumes"
+   ]
+  },
+  {
+   "name": "POLICY root /tmp",
+   "roots": [
+    "/tmp"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root /etc",
+   "roots": [
+    "/etc"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root /System",
+   "roots": [
+    "/System"
+   ],
+   "expect": "POLICY_ERROR",
+   "requires": [
+    "path_exists:/System"
+   ]
+  },
+  {
+   "name": "POLICY root /private",
+   "roots": [
+    "/private"
+   ],
+   "expect": "POLICY_ERROR",
+   "requires": [
+    "path_exists:/private"
+   ]
+  },
+  {
+   "name": "POLICY root /usr",
+   "roots": [
+    "/usr"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root /var",
+   "roots": [
+    "/var"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root /.vol",
+   "roots": [
+    "/.vol"
+   ],
+   "expect": "POLICY_ERROR",
+   "requires": [
+    "path_exists:/.vol"
+   ]
+  },
+  {
+   "name": "POLICY root $HOME",
+   "roots": [
+    "{home}"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root nonexistent",
+   "roots": [
+    "{lab}/does-not-exist"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root is a regular file",
+   "roots": [
+    "{lab}/fixtures/disk.img"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root is relative",
+   "roots": [
+    "fixtures"
+   ],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY roots empty",
+   "roots": [],
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY root one component deep",
+   "roots": [
+    "{lab_real_first_component}"
+   ],
+   "expect": "POLICY_ERROR",
+   "note": "MIN_ROOT_DEPTH is 2: '/' and '/Users' are refused"
+  },
+  {
+   "name": "POLICY root symlinked to /etc",
+   "roots": [
+    "{lab}/fixtures/s_etc"
+   ],
+   "expect": "POLICY_ERROR",
+   "note": "found by test_ATTACK_symlinked_root_itself: a string-only forbidden list misses realpath('/etc') == '/private/etc'"
+  },
+  {
+   "name": "POLICY devices armed without confirmation",
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "devices": [
+    "/dev/disk0"
+   ],
+   "allow_device_targets": true,
+   "require_confirmation": false,
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "POLICY nonsensical size bounds",
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "min_file_bytes": 100,
+   "max_file_bytes": 10,
+   "expect": "POLICY_ERROR"
+  },
+  {
+   "name": "CONTROL POLICY a legitimate root is accepted",
+   "roots": [
+    "{lab}/fixtures"
+   ],
+   "expect": "OK"
+  },
+  {
+   "name": "CONTROL POLICY two spellings of one root are one policy",
+   "roots": [
+    "{lab}/fixtures",
+    "{lab_real}/fixtures"
+   ],
+   "expect": "OK"
+  }
+ ]
+}

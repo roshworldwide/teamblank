@@ -4,4 +4,24 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+# Named explicitly so the dependent crates spell it one way. `sentinelwipe-wipe`
+# depends on this crate by path (a workspace sibling, not a fetched dependency)
+# and binds its driver to `Device`; see core/wipe/Cargo.toml for that note.
+[lib]
+name = "sentinelwipe_device"
+path = "src/lib.rs"
+
 [dependencies]
+
+# NECESSARY ADDITION, ANNOUNCED. `linux.rs` is gated behind this feature per the
+# phase brief; a `#[cfg(feature = "linux-block")]` with no `[features]` section
+# is a cfg that can never be turned on, so `cargo build --features linux-block`
+# would fail and "compiles on macOS" would be unverifiable. Zero dependencies
+# added: this declares a feature, not a crate.
+#
+# Nothing in `core/wipe` turns it on. The driver holds `D: Device` and never
+# names `LinuxBlock`, so the default build of the wipe layer does not type-check
+# linux.rs and does not need to.
+[features]
+default = []
+linux-block = []

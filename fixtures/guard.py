@@ -213,6 +213,22 @@ def _forbidden_ids() -> dict:
     return out
 
 
+def _reachable_by_descent(policy, walk_from: str, resolved: str) -> bool:
+    """Whether `walk_from` is reachable from its matching root's own spelling
+    by name -- the predicate open_authorized's O_NOFOLLOW descent applies.
+
+    authorize() calls this as a final conjunct so the decision and the open
+    cannot disagree. Inode containment and a name-based descent are different
+    tests and on a case-insensitive volume they measurably diverge; the
+    certificate quotes the decision, so the decision is the stricter of the two.
+    """
+    root_real = _matching_root_real(policy, walk_from)
+    if root_real is None:
+        return False
+    parts = _rel_parts(resolved, root_real)
+    return bool(parts)
+
+
 def contained_by_inode(resolved: str, root_ids: Sequence[Tuple[int, int]]
                        ) -> Optional[Tuple[int, int]]:
     """Walk `resolved` upward comparing (st_dev, st_ino) against root_ids.
@@ -423,6 +439,33 @@ def _deny(code: str, detail: str, target: str, policy: Policy, *,
 def authorize(policy: Policy, path: str, confirmation: Optional[str] = None,
               *, mode: str = "r+", env: Optional[dict] = None,
               _platform: Optional[str] = None) -> Decision:
+    """Decide whether `path` may be opened under `policy`. TOTAL: returns a
+    Decision for every input, and never raises OSError.
+
+    The totality is not decoration. os.path.realpath is NOT race-safe on
+    CPython 3.11: posixpath._joinrealpath calls os.readlink outside the
+    try/except that guards its lstat, so a path component that changes between
+    those two syscalls raises EINVAL, and one that vanishes raises ENOENT.
+    MEASURED under a racing rename: 384 EINVAL and 1,014 ENOENT escaped
+    authorize() in a single 40,000-attempt run. A guard that exits by kernel
+    errno rather than by policy produces no audit line and crashes a caller
+    that catches only GuardError -- this project's own conformance harnesses
+    already call that outcome a failure. Every such failure is therefore
+    mapped to DENY_RACE, which is the true statement about what happened.
+    """
+    try:
+        return _authorize(policy, path, confirmation, mode=mode, env=env,
+                          _platform=_platform)
+    except OSError as e:
+        return _deny(DENY_RACE,
+                     f"path resolution failed while the filesystem changed "
+                     f"underneath it: {e.strerror}",
+                     path if isinstance(path, str) else str(path), policy)
+
+
+def _authorize(policy: Policy, path: str, confirmation: Optional[str] = None,
+               *, mode: str = "r+", env: Optional[dict] = None,
+               _platform: Optional[str] = None) -> Decision:
     """Decide whether `path` may be opened under `policy`. Pure: no fd, no
     side effect, no mutation of anything on disk.
 
@@ -534,6 +577,26 @@ def authorize(policy: Policy, path: str, confirmation: Optional[str] = None,
                      f"(mode {statmod.filemode(st.st_mode)})",
                      path, policy, resolved=resolved)
 
+    # AND the descent's own predicate, so this decision is a SOUND predicate for
+    # open_authorized rather than merely a necessary one. Containment above is
+    # inode identity, which is case-insensitive by nature on APFS; the descent
+    # re-identifies the root by STRING because it has to walk components.
+    # MEASURED DIVERGENCE: '<lab>/FIXTURES/disk.img' under a root spelled
+    # '<lab>/fixtures' was ALLOW_FILE here and DENY_NOT_ALLOWLISTED at open. It
+    # failed closed, so it was never a hole -- but --plan and the certificate's
+    # authorization.decision_code both read the DECISION, so they published
+    # ALLOW_FILE for a target the engine would refuse. The stricter half wins.
+    #
+    # It sits AFTER the type check on purpose: the allowed root itself is a
+    # directory that no descent can reach "strictly below" itself, and the
+    # controlling reason for refusing a directory is that it is a directory.
+    if not _reachable_by_descent(policy, resolved, resolved):
+        return _deny(DENY_NOT_ALLOWLISTED,
+                     f"{resolved} is inside an allowed root by inode but is not "
+                     f"reachable from that root's own spelling by name; the open "
+                     f"would refuse it",
+                     path, policy, resolved=resolved)
+
     if st.st_nlink != 1:
         return _deny(DENY_HARDLINK,
                      f"{resolved} has {st.st_nlink} links; a hardlink can place an "
@@ -613,6 +676,14 @@ def _authorize_create(policy: Policy, path: str, resolved: str,
                      path, policy, resolved=os.path.join(parent, leaf))
 
     resolved = os.path.join(parent, leaf)
+    # The create path takes the same conjunct, against the parent the descent
+    # will actually walk from. See the file branch above for the measured reason.
+    if not _reachable_by_descent(policy, parent, resolved):
+        return _deny(DENY_NOT_ALLOWLISTED,
+                     f"{parent} is inside an allowed root by inode but is not "
+                     f"reachable from that root's own spelling by name; the open "
+                     f"would refuse it",
+                     path, policy, resolved=resolved)
 
     pst = _ids(parent)
     if pst is None:
@@ -739,6 +810,26 @@ def open_authorized(policy: Policy, path: str, mode: str,
                     *, env: Optional[dict] = None) -> int:
     """The only way to obtain a descriptor on a fixture or wipe target.
 
+    TOTAL over refusals: raises GuardError and never a bare OSError, so every
+    exit is a Decision an audit line can carry. The docstring below promises
+    that; this wrapper is what makes the promise true. See authorize() for the
+    measured reason it is needed -- realpath is not race-safe -- and note that
+    _matching_root_real() calls realpath on the open path too.
+    """
+    try:
+        return _open_authorized(policy, path, mode, confirmation, env=env)
+    except OSError as e:
+        raise GuardError(_deny(
+            DENY_RACE,
+            f"open failed while the filesystem changed underneath it: "
+            f"{e.strerror}", path, policy)) from None
+
+
+def _open_authorized(policy: Policy, path: str, mode: str,
+                     confirmation: Optional[str] = None,
+                     *, env: Optional[dict] = None) -> int:
+    """The only way to obtain a descriptor on a fixture or wipe target.
+
     Returns a raw file descriptor. The CALLER owns it and must close it.
     Raises GuardError, whose .decision carries the refusing clause, on any
     refusal -- including a refusal discovered only at open time.
@@ -775,7 +866,31 @@ def open_authorized(policy: Policy, path: str, mode: str,
                                "target does not sit strictly below its root",
                                path, policy, resolved=resolved))
 
-    dirfd = os.open(root_real, os.O_RDONLY | os.O_DIRECTORY)
+    # O_NOFOLLOW on the ROOT's own open, not only on the descent. root_real is
+    # already a realpath, so its final component is symlink-free by
+    # construction and no legitimate root is lost -- but if the root's
+    # directory entry is swapped for a symlink between the decision and this
+    # instant, following it would start the descent outside the allowlist.
+    # This was the one open on the path that omitted O_NOFOLLOW; a racing
+    # rename escaped through it and truncated a file outside every allowed
+    # root before the identity re-check could fire.
+    #
+    # The errno mapping is the same one the descent uses, so that every exit
+    # from open_authorized is a Decision an audit line can carry. A guard
+    # stopped by the kernel is not a guard: a bare OSError here would escape a
+    # caller that catches only GuardError, and would produce no audit record.
+    try:
+        dirfd = os.open(root_real,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.EMLINK, errno.ENOTDIR):
+            raise GuardError(_deny(
+                DENY_SYMLINK_AT_OPEN,
+                "allowed root is a symlink or not a directory at open time",
+                path, policy, resolved=resolved)) from None
+        raise GuardError(_deny(
+            DENY_RACE, f"allowed root could not be opened: {e.strerror}",
+            path, policy, resolved=resolved)) from None
     try:
         for comp in parts[:-1]:
             try:
@@ -800,8 +915,13 @@ def open_authorized(policy: Policy, path: str, mode: str,
         elif norm == "x":
             flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
         else:                                   # "w"
+            # Deliberately NO O_TRUNC. O_TRUNC in this openat would make the
+            # kernel zero the file in the same syscall that establishes its
+            # identity -- before the (dev,ino) re-check below can prove the fd
+            # landed on the file the decision authorised. The truncation is
+            # performed after that proof, at the ftruncate below.
             flags = os.O_RDWR | os.O_NOFOLLOW
-            flags |= (os.O_CREAT | os.O_EXCL) if creating else os.O_TRUNC
+            flags |= (os.O_CREAT | os.O_EXCL) if creating else 0
         try:
             fd = os.open(parts[-1], flags, 0o600, dir_fd=dirfd)
         except OSError as e:
@@ -842,6 +962,12 @@ def open_authorized(policy: Policy, path: str, mode: str,
     except GuardError:
         os.close(fd)
         raise
+    if norm == "w" and not creating:
+        # The truncation O_TRUNC would have done, moved to after the type,
+        # nlink and (dev,ino) proofs. A refused run now costs no data: the
+        # file the decision named is still the file being emptied, and a file
+        # the operator never confirmed is never emptied at all.
+        os.ftruncate(fd, 0)
     return fd
 
 
