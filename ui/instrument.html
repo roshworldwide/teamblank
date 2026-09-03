@@ -1,0 +1,489 @@
+<title>SENTINELWIPE Instrument</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SENTINELWIPE">
+<meta name="theme-color" content="#07090A">
+<style>
+:root{
+  --void:#07090A; --panel:#0D1113; --line:#1A2226; --dim:#4A5A61; --read:#A8BEC6;
+  --live:#35E08A; --warn:#E0A030; --destroy:#E0483C; --seal:#48C8E0;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --u:4px;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--void);color:var(--read);font-family:var(--mono);
+  font-variant-numeric:tabular-nums;font-size:12px;line-height:1.45;
+  -webkit-font-smoothing:antialiased;overscroll-behavior:none}
+body{display:flex;flex-direction:column;min-height:100dvh;padding-top:env(safe-area-inset-top);
+  padding-bottom:env(safe-area-inset-bottom)}
+.mono-n{font-variant-numeric:tabular-nums}
+.lbl{color:var(--dim);text-transform:uppercase;letter-spacing:.12em;font-size:9px}
+.val{color:var(--read)}
+.live{color:var(--live)} .warn{color:var(--warn)} .destroy{color:var(--destroy)} .seal{color:var(--seal)}
+.panel{background:var(--panel);border:1px solid var(--line);box-shadow:inset 0 1px 0 rgba(255,255,255,.02)}
+hr{border:0;border-top:1px solid var(--line)}
+
+/* ---- masthead ---------------------------------------------------- */
+#top{border-bottom:1px solid var(--line);background:var(--panel);
+  display:flex;align-items:baseline;gap:10px;padding:7px 8px;white-space:nowrap;overflow:hidden}
+#top h1{font-size:11px;letter-spacing:.18em;font-weight:600;color:var(--read);flex:0 0 auto}
+#top h1 b{color:var(--live);font-weight:600}
+#phase{font-size:9px;letter-spacing:.12em;color:var(--dim);margin-left:auto;
+  overflow:hidden;text-overflow:ellipsis;min-width:0}
+#strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);
+  border-bottom:1px solid var(--line)}
+#strip div{background:var(--panel);padding:4px 6px;min-width:0}
+#strip .v{font-size:13px;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ---- sector map -------------------------------------------------- */
+#mapwrap{padding:6px 8px 0}
+#maphd{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding-bottom:4px}
+#map{display:block;width:100%;height:auto;image-rendering:pixelated;
+  border:1px solid var(--line);background:#050708}
+#legend{display:flex;flex-wrap:wrap;gap:10px;padding:5px 0 0}
+#legend span{display:flex;align-items:center;gap:4px;font-size:9px;color:var(--dim);
+  text-transform:uppercase;letter-spacing:.1em}
+#legend i{width:8px;height:8px;display:inline-block;border:1px solid rgba(255,255,255,.08)}
+
+/* ---- transport --------------------------------------------------- */
+#tp{display:flex;gap:1px;background:var(--line);border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);margin-top:6px}
+#tp button{flex:1;min-height:44px;background:var(--panel);border:0;color:var(--read);
+  font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  cursor:pointer;padding:0 4px}
+#tp button:active{background:#141a1d}
+#tp button[disabled]{color:var(--dim)}
+#tp button.go{color:var(--live)}
+#tp button.tamper{color:var(--destroy)}
+#tp button:focus-visible{outline:1px solid var(--live);outline-offset:-2px}
+
+/* ---- tabs (phone) ------------------------------------------------ */
+#tabs{display:flex;gap:1px;background:var(--line);border-bottom:1px solid var(--line)}
+#tabs button{flex:1;min-height:38px;background:var(--panel);border:0;color:var(--dim);
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;cursor:pointer}
+#tabs button[aria-selected="true"]{color:var(--live);box-shadow:inset 0 -2px 0 var(--live)}
+#tabs button:focus-visible{outline:1px solid var(--live);outline-offset:-2px}
+.pane{display:none;flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch}
+.pane[data-on="1"]{display:block}
+
+/* ---- carve table ------------------------------------------------- */
+.thead,.trow{display:grid;grid-template-columns:38px 1fr 62px 74px;gap:6px;
+  padding:3px 8px;align-items:center}
+.thead{position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--line);z-index:2}
+.trow{border-bottom:1px solid rgba(26,34,38,.55)}
+.trow.rej{color:var(--dim)}
+.trow .k{font-size:10px;letter-spacing:.06em}
+.trow .o{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar{position:relative;height:9px;background:#0a0e10;border:1px solid var(--line)}
+.bar i{position:absolute;top:0;bottom:0;display:block}
+.bar .g{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--read);opacity:.55}
+.sc{font-size:10px;text-align:right}
+#emptynote{padding:10px 8px;border-bottom:1px solid var(--line)}
+
+/* ---- signal (hex + entropy) -------------------------------------- */
+#sig{padding:6px 8px}
+#hex{font-size:10px;line-height:1.5;white-space:pre;overflow-x:auto;color:var(--read);
+  border:1px solid var(--line);background:#050708;padding:6px}
+#hex .off{color:var(--dim)}
+#hex .asc{color:var(--dim)}
+#ent{display:block;width:100%;height:auto;border:1px solid var(--line);background:#050708;margin-top:6px}
+
+/* ---- certificate ------------------------------------------------- */
+#cert{padding:6px 8px 14px}
+.crow{display:grid;grid-template-columns:112px 1fr;gap:8px;padding:3px 0;
+  border-bottom:1px solid rgba(26,34,38,.5)}
+.crow .k{color:var(--dim);text-transform:uppercase;letter-spacing:.1em;font-size:9px;padding-top:2px}
+.crow .v{word-break:break-all;font-size:11px}
+#limits{border:1px solid var(--warn);padding:6px;margin-top:8px}
+#limits .h{color:var(--warn);font-size:9px;letter-spacing:.14em;text-transform:uppercase}
+#limits ul{margin:4px 0 0 14px}
+#limits li{color:var(--warn);font-size:10px;line-height:1.5;margin-bottom:3px}
+#sealbox{border:1px solid var(--line);padding:6px;margin-top:8px}
+#sealbox.on{border-color:var(--seal)}
+#sealbox.bad{border-color:var(--destroy)}
+#sealbox .h{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+#sealbox.on .h{color:var(--seal)} #sealbox.bad .h{color:var(--destroy)}
+#root{word-break:break-all;font-size:10px;color:var(--dim)}
+#sealbox.on #root{color:var(--seal)}
+#sealbox.bad #root{color:var(--destroy)}
+.sealed{animation:seal 400ms ease-out 1}
+@keyframes seal{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.sealed{animation:none}}
+
+/* ---- desktop ----------------------------------------------------- */
+@media (min-width:900px){
+  body{height:100dvh;overflow:hidden}
+  #grid{flex:1;min-height:0;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;
+    gap:1px;background:var(--line)}
+  #tabs{display:none}
+  #paneA{grid-column:1;grid-row:1;overflow:auto}
+  #paneB{grid-column:1;grid-row:2;overflow:auto}
+  #paneC{grid-column:2;grid-row:1;overflow:auto}
+  #paneD{grid-column:2;grid-row:2;overflow:auto}
+  .pane{display:block!important;background:var(--panel)}
+  #strip{grid-template-columns:repeat(8,1fr)}
+  #hex{font-size:11px}
+}
+</style>
+
+<div id="top">
+  <h1>SENTINEL<b>WIPE</b></h1><span class="lbl" style="flex:0 0 auto">Forensic instrument</span>
+  <div id="phase">IDLE</div>
+</div>
+<div id="strip"></div>
+
+<div id="grid">
+  <section id="paneA" class="pane" data-on="1">
+    <div id="mapwrap">
+      <div id="maphd">
+        <span class="lbl">A · Sector map</span>
+        <span class="lbl" id="mapmeta"></span>
+      </div>
+      <canvas id="map"></canvas>
+      <div id="legend">
+        <span><i style="background:#313D43"></i>untouched</span>
+        <span><i style="background:#35E08A"></i>recoverable</span>
+        <span><i style="background:#E0483C"></i>writing</span>
+        <span><i style="background:#0F1417"></i>wiped + verified</span>
+      </div>
+    </div>
+    <div id="tp">
+      <button id="bPlay" class="go">Run sequence</button>
+      <button id="bStep">Step</button>
+      <button id="bRate">1&#215;</button>
+      <button id="bReset">Reset</button>
+    </div>
+  </section>
+
+  <div id="tabs" role="tablist">
+    <button id="tC" role="tab" aria-selected="false">Carve</button>
+    <button id="tB" role="tab" aria-selected="false">Signal</button>
+    <button id="tD" role="tab" aria-selected="false">Certificate</button>
+  </div>
+
+  <section id="paneC" class="pane">
+    <div class="thead lbl"><span>Type</span><span>Offset / size</span><span>Confidence</span><span style="text-align:right">Score · sha256</span></div>
+    <div id="emptynote" style="display:none"></div>
+    <div id="rows"></div>
+  </section>
+
+  <section id="paneB" class="pane">
+    <div id="sig">
+      <div class="lbl" style="padding-bottom:4px">B · Sector under the write head</div>
+      <div id="hex">awaiting telemetry</div>
+      <div class="lbl" style="padding:8px 0 4px">Shannon entropy, bits/byte, over written span</div>
+      <canvas id="ent"></canvas>
+    </div>
+  </section>
+
+  <section id="paneD" class="pane">
+    <div id="cert">
+      <div class="lbl" style="padding-bottom:6px">D · Certificate of sanitization</div>
+      <div id="cfields"></div>
+      <div id="limits"><div class="h">Limitations &#183; printed, never hidden</div><ul id="limlist"></ul></div>
+      <div id="sealbox"><div class="h" id="sealh">Unsigned</div><div id="root">&#8212;</div></div>
+      <div id="tp2" style="display:flex;gap:1px;background:var(--line);margin-top:8px">
+        <button id="bSign" style="flex:1;min-height:44px;background:var(--panel);border:0;color:var(--seal);font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase">Sign &amp; anchor</button>
+        <button id="bTamper" style="flex:1;min-height:44px;background:var(--panel);border:0;color:var(--destroy);font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase">Tamper 1 byte</button>
+      </div>
+    </div>
+  </section>
+</div>
+<script id="payload" type="application/json">{"pre":{"c":{"records":58,"admitted":33,"rejected":25,"sha256_matches_planted":28,"by_kind":{"JPEG":{"records":13,"admitted":5,"rejected":8},"PNG":{"records":5,"admitted":5,"rejected":0},"PDF":{"records":5,"admitted":4,"rejected":1},"ZIP":{"records":8,"admitted":5,"rejected":3},"SQLITE":{"records":5,"admitted":5,"rejected":0},"MP4":{"records":4,"admitted":4,"rejected":0},"GZIP":{"records":18,"admitted":5,"rejected":13}},"by_assembly":{"contiguous":30,"reassembled":0,"signature-span":28}},"rows":[{"k":"ZIP","o":1069056,"l":161299,"a":false,"f":"signature-span","t":0.657,"w":[0.4,0.007,0.15,0.1],"s":"2d14be379467","e":[[1069056,161299]]},{"k":"ZIP","o":1069434,"l":160921,"a":false,"f":"signature-span","t":0.657,"w":[0.4,0.007,0.15,0.1],"s":"111401b0572d","e":[[1069434,160921]]},{"k":"ZIP","o":1069734,"l":160621,"a":false,"f":"signature-span","t":0.657,"w":[0.4,0.007,0.15,0.1],"s":"f0975e801832","e":[[1069734,160621]]},{"k":"ZIP","o":1228603,"l":1752,"a":true,"f":"signature-span","t":0.755,"w":[0.4,0.105,0.15,0.1],"s":"f0745a2eb6e1","e":[[1228603,1752]]},{"k":"GZIP","o":1347263,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"38287e56e887","e":[[1347263,128]]},{"k":"GZIP","o":8054784,"l":109182,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"871561fa7fb2","e":[[8054784,109182]]},{"k":"SQLITE","o":12900352,"l":192512,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"aca915ffe06a","e":[[12900352,192512]]},{"k":"JPEG","o":18325159,"l":61358,"a":false,"f":"signature-span","t":0.65,"w":[0.4,0.0,0.15,0.1],"s":"ce50acd2d447","e":[[18325159,61358]]},{"k":"GZIP","o":18648694,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"edd6ec396495","e":[[18648694,128]]},{"k":"PNG","o":21317632,"l":260595,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"04aeca15f9a5","e":[[21317632,260595]]},{"k":"PDF","o":26875904,"l":48983,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"4939ea43ddc7","e":[[26875904,48983]]},{"k":"PNG","o":32710656,"l":207661,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"65ead9586ff4","e":[[32710656,207661]]},{"k":"JPEG","o":35205775,"l":652632,"a":false,"f":"signature-span","t":0.6446,"w":[0.4,0.0,0.1446,0.1],"s":"4a47b4f18c69","e":[[35205775,652632]]},{"k":"SQLITE","o":37040128,"l":221184,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"bed97cbc33bd","e":[[37040128,221184]]},{"k":"ZIP","o":43235328,"l":32453,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"211a9eec0346","e":[[43235328,32453]]},{"k":"JPEG","o":44064338,"l":23316,"a":false,"f":"signature-span","t":0.568,"w":[0.4,0.0,0.068,0.1],"s":"9d2f24d9caf5","e":[[44064338,23316]]},{"k":"PNG","o":51361792,"l":185398,"a":true,"f":"signature-span","t":0.9394,"w":[0.4,0.2894,0.15,0.1],"s":"24fafea008d4","e":[[51361792,185398]]},{"k":"GZIP","o":59394048,"l":54871,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"1f0e879bdf7f","e":[[59394048,54871]]},{"k":"MP4","o":65943552,"l":66689,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"1c97d0ca983f","e":[[65943552,66689]]},{"k":"SQLITE","o":73611264,"l":139264,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"7ed9c3eef68a","e":[[73611264,139264]]},{"k":"PNG","o":79996928,"l":208084,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"04cff656db33","e":[[79996928,208084]]},{"k":"ZIP","o":85690368,"l":63749,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"788f9217c694","e":[[85690368,63749]]},{"k":"GZIP","o":86478323,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"3ad87288996a","e":[[86478323,128]]},{"k":"JPEG","o":88398058,"l":343352,"a":false,"f":"signature-span","t":0.6386,"w":[0.4,0.0,0.1386,0.1],"s":"f147e589c580","e":[[88398058,343352]]},{"k":"GZIP","o":89563136,"l":91103,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"442f2fb88c20","e":[[89563136,91103]]},{"k":"GZIP","o":91161674,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"af83594a1c78","e":[[91161674,128]]},{"k":"GZIP","o":94937895,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"48bb37c32dbd","e":[[94937895,128]]},{"k":"PDF","o":96673792,"l":43586,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"77a6c227444c","e":[[96673792,43586]]},{"k":"ZIP","o":101607424,"l":40801,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"6114f932e169","e":[[101607424,40801]]},{"k":"SQLITE","o":108763136,"l":167936,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"2b7d56debb9d","e":[[108763136,167936]]},{"k":"GZIP","o":114012149,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"6413a645b62a","e":[[114012149,128]]},{"k":"PDF","o":114669568,"l":38408,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"0cea32190a6a","e":[[114669568,38408]]},{"k":"GZIP","o":117352295,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"1443b82d69ea","e":[[117352295,128]]},{"k":"PDF","o":119242752,"l":54214,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"3c425544e1b4","e":[[119242752,54214]]},{"k":"JPEG","o":125999104,"l":104665,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"80c5f8d62790","e":[[125999104,104665]]},{"k":"JPEG","o":126324818,"l":232589,"a":false,"f":"signature-span","t":0.6196,"w":[0.4,0.0,0.1196,0.1],"s":"89cac1defe52","e":[[126324818,232589]]},{"k":"MP4","o":133177344,"l":132841,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"fa77405fe5e5","e":[[133177344,132841]]},{"k":"PNG","o":136941568,"l":158522,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"f2ce70dc1434","e":[[136941568,158522]]},{"k":"GZIP","o":143464448,"l":69712,"a":true,"f":"contiguous","t":0.76,"w":[0.3,0.21,0.15,0.1],"s":"89716a4db1a1","e":[[143464448,69712]]},{"k":"SQLITE","o":150474752,"l":110592,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"aac4647e0f3f","e":[[150474752,110592]]},{"k":"JPEG","o":156942336,"l":92851,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"53b49c5cc138","e":[[156942336,92851]]},{"k":"ZIP","o":163844096,"l":50215,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"920b8ede6de7","e":[[163844096,50215]]},{"k":"PDF","o":170430464,"l":308199,"a":false,"f":"signature-span","t":0.72,"w":[0.4,0.07,0.15,0.1],"s":"3d0e45b4a215","e":[[170430464,308199]]},{"k":"GZIP","o":173564124,"l":128,"a":false,"f":"signature-span","t":0.5625,"w":[0.3,0.0875,0.075,0.1],"s":"993506a34e9b","e":[[173564124,128]]},{"k":"JPEG","o":176111616,"l":108462,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"7af648573406","e":[[176111616,108462]]},{"k":"MP4","o":180529152,"l":176941,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"7c676209552b","e":[[180529152,176941]]},{"k":"JPEG","o":180788456,"l":319576,"a":false,"f":"signature-span","t":0.65,"w":[0.4,0.0,0.15,0.1],"s":"ccce6ced1272","e":[[180788456,319576]]},{"k":"JPEG","o":200210432,"l":101899,"a":true,"f":"contiguous","t":1.0,"w":[0.4,0.35,0.15,0.1],"s":"da74a75c167e","e":[[200210432,101899]]},{"k":"JPEG","o":214231040,"l":53062,"a":true,"f":"signature-span","t":0.93,"w":[0.4,0.28,0.15,0.1],"s":"e8921ef425bf","e":[[214231040,53062]]},{"k":"GZIP","o":216939024,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"88e92d75c0dd","e":[[216939024,128]]},{"k":"MP4","o":221540352,"l":88741,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"b6da01622ea4","e":[[221540352,88741]]},{"k":"GZIP","o":221743528,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"a7421efbef16","e":[[221743528,128]]},{"k":"GZIP","o":228945920,"l":72692,"a":true,"f":"contiguous","t":0.9,"w":[0.3,0.35,0.15,0.1],"s":"5bc3fdb1d186","e":[[228945920,72692]]},{"k":"GZIP","o":237511630,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"d808d6bf8a0d","e":[[237511630,128]]},{"k":"GZIP","o":242973985,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"2814ed6a0e35","e":[[242973985,128]]},{"k":"GZIP","o":243623154,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"d1f49cb039b3","e":[[243623154,128]]},{"k":"JPEG","o":255993614,"l":413384,"a":false,"f":"signature-span","t":0.65,"w":[0.4,0.0,0.15,0.1],"s":"d5f8165baa28","e":[[255993614,413384]]},{"k":"JPEG","o":256383792,"l":23206,"a":false,"f":"signature-span","t":0.65,"w":[0.4,0.0,0.15,0.1],"s":"2a9f8d9ed58c","e":[[256383792,23206]]}]},"post":{"c":{"records":30,"admitted":0,"rejected":30,"sha256_matches_planted":0,"by_kind":{"JPEG":{"records":17,"admitted":0,"rejected":17},"GZIP":{"records":13,"admitted":0,"rejected":13}},"by_assembly":{"contiguous":0,"reassembled":0,"signature-span":30}},"rows":[{"k":"JPEG","o":7689609,"l":59590,"a":false,"f":"signature-span","t":0.5465,"w":[0.4,0.0,0.0465,0.1],"s":"d216683abbe0","e":[[7689609,59590]]},{"k":"GZIP","o":13065270,"l":128,"a":false,"f":"signature-span","t":0.5275,"w":[0.3,0.0525,0.075,0.1],"s":"d99a1e8be12e","e":[[13065270,128]]},{"k":"GZIP","o":15136064,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"5fdb35897b18","e":[[15136064,128]]},{"k":"JPEG","o":78024864,"l":281071,"a":false,"f":"signature-span","t":0.5095,"w":[0.4,0.0,0.0095,0.1],"s":"5c71b72e1d3d","e":[[78024864,281071]]},{"k":"JPEG","o":92362882,"l":54620,"a":false,"f":"signature-span","t":0.556,"w":[0.4,0.0,0.056,0.1],"s":"654fc8f22b04","e":[[92362882,54620]]},{"k":"JPEG","o":100277860,"l":40997,"a":false,"f":"signature-span","t":0.5653,"w":[0.4,0.0,0.0653,0.1],"s":"2ade5241ce62","e":[[100277860,40997]]},{"k":"GZIP","o":107358903,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"380bcf67e411","e":[[107358903,128]]},{"k":"JPEG","o":114812735,"l":6803,"a":false,"f":"signature-span","t":0.65,"w":[0.4,0.0,0.15,0.1],"s":"a598261e3219","e":[[114812735,6803]]},{"k":"GZIP","o":128953558,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"ea09e138c6aa","e":[[128953558,128]]},{"k":"JPEG","o":135023582,"l":46838,"a":false,"f":"signature-span","t":0.5636,"w":[0.4,0.0,0.0636,0.1],"s":"18b462bc33e3","e":[[135023582,46838]]},{"k":"GZIP","o":140323125,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"5e0123d648ac","e":[[140323125,128]]},{"k":"GZIP","o":142471248,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"8d3764c12245","e":[[142471248,128]]},{"k":"JPEG","o":147080228,"l":93092,"a":false,"f":"signature-span","t":0.5313,"w":[0.4,0.0,0.0313,0.1],"s":"52684dd2eef7","e":[[147080228,93092]]},{"k":"GZIP","o":161499135,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"519dfbc961e8","e":[[161499135,128]]},{"k":"GZIP","o":177325120,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"4c3a06377ed7","e":[[177325120,128]]},{"k":"JPEG","o":181389442,"l":26270,"a":false,"f":"signature-span","t":0.6135,"w":[0.4,0.0,0.1135,0.1],"s":"d59d6d0e6733","e":[[181389442,26270]]},{"k":"JPEG","o":184213145,"l":22781,"a":false,"f":"signature-span","t":0.6206,"w":[0.4,0.0,0.1206,0.1],"s":"5f2a56494ceb","e":[[184213145,22781]]},{"k":"JPEG","o":202156866,"l":131223,"a":false,"f":"signature-span","t":0.5179,"w":[0.4,0.0,0.0179,0.1],"s":"c73b6f684a86","e":[[202156866,131223]]},{"k":"GZIP","o":215940719,"l":128,"a":false,"f":"signature-span","t":0.5275,"w":[0.3,0.0525,0.075,0.1],"s":"e1d0e0c4687d","e":[[215940719,128]]},{"k":"JPEG","o":223331659,"l":3738,"a":false,"f":"signature-span","t":0.65,"w":[0.4,0.0,0.15,0.1],"s":"72c4a15e6bdb","e":[[223331659,3738]]},{"k":"GZIP","o":224097709,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"c7688decfa69","e":[[224097709,128]]},{"k":"GZIP","o":234205368,"l":128,"a":false,"f":"signature-span","t":0.5275,"w":[0.3,0.0525,0.075,0.1],"s":"780e43c38824","e":[[234205368,128]]},{"k":"JPEG","o":239246127,"l":36652,"a":false,"f":"signature-span","t":0.5634,"w":[0.4,0.0,0.0634,0.1],"s":"404dc2591edd","e":[[239246127,36652]]},{"k":"JPEG","o":245204209,"l":74543,"a":false,"f":"signature-span","t":0.5389,"w":[0.4,0.0,0.0389,0.1],"s":"eb8e69f48b11","e":[[245204209,74543]]},{"k":"JPEG","o":247098682,"l":265114,"a":false,"f":"signature-span","t":0.5108,"w":[0.4,0.0,0.0108,0.1],"s":"5adc6b1b6a7f","e":[[247098682,265114]]},{"k":"JPEG","o":249767255,"l":155893,"a":false,"f":"signature-span","t":0.5164,"w":[0.4,0.0,0.0164,0.1],"s":"a1032518ae07","e":[[249767255,155893]]},{"k":"JPEG","o":251829736,"l":21293,"a":false,"f":"signature-span","t":0.6452,"w":[0.4,0.0,0.1452,0.1],"s":"025d9a54029f","e":[[251829736,21293]]},{"k":"GZIP","o":258178490,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"7982a1346a08","e":[[258178490,128]]},{"k":"JPEG","o":264139427,"l":86625,"a":false,"f":"signature-span","t":0.5327,"w":[0.4,0.0,0.0327,0.1],"s":"bb251637ed59","e":[[264139427,86625]]},{"k":"GZIP","o":266294907,"l":128,"a":false,"f":"signature-span","t":0.475,"w":[0.3,0.0,0.075,0.1],"s":"042f82a77621","e":[[266294907,128]]}]},"wipe":{"schema":"sentinelwipe.wipe.report/1","provenance":{"producer":"core/wipe/src/lib.rs::run_job","command":"wipe --target /private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/uidata/demo.img --allow-root /private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/uidata --i-understand /private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/uidata/demo.img --period-ms 8 --trace /private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/uidata/telemetry.jsonl","is_wipe_run":true,"notes":["Produced by a real wipe run. Every number in this file was measured during it; none is illustrative.","The sanitization claim in `outcome` rests on read-back verification of 1024 of 524288 sectors, not on any device return code.","`audit.overwrite` is judged against the calibration probe, which is a throughput sample the overwrite did not produce. Auditing an operation against a baseline derived from itself returns a ratio of 1.0 by construction and is worth nothing.","Timing figures are wall-clock and are NOT reproducible across runs. CLAUDE.md rule 6 constrains the certificate; a byte-identity comparison must exclude every duration, rate and ratio field in this file, or bucket them. The medium's contents ARE reproducible from run_id.","Verification was SAMPLED, and `outcome.code` says so: OVERWRITE_VERIFIED_ON_SAMPLE, `whole_medium_claim` false, coverage 0.001953 of the medium. The longest run of consecutive sectors no sample touched is 2815 sectors (1441280 bytes); a region of that size left unwiped between sample points produces this same verdict. `--verify exhaustive` reads every sector and returns OVERWRITE_VERIFIED_WHOLE_MEDIUM instead.","`audit.overwrite.expected_min_duration_ns` is derived from the calibration probe, whose size is the operator-chosen --probe-bytes (33554432 B here). The probe carries a fixed fsync cost amortised over fewer bytes than the wipe, so it UNDER-measures the device and the expected minimum is an upper bound on the true floor \u2014 the audit errs toward firing, never toward silence. Measured on a 256 MiB medium: 192.24 MB/s at 1 MiB, 352.39 at 4 MiB, 560.05 at the 32 MiB default, 606.29 at 256 MiB, a 3.15x span in the published ratio for one identical operation. This run's overwrite ratio 0.881699 sits 17.633970x above the 0.050000 firing line."]},"run":{"run_id":"sentinelwipe/wipe/v1","seed_hex":"a77ebf107e7c5ba66c01d96507bddb221b75b377ce8e297c69b07a985e2ff981","target":"/private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/uidata/demo.img","target_resolved":"/private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/uidata/demo.img","elapsed_ns":748349416,"elapsed_s":0.748349},"authorization":{"decision_code":"ALLOW_FILE","policy_digest_payload":"policy-payload:{\"allow_device_targets\":false,\"devices\":[],\"max_file_bytes\":8589934592,\"min_file_bytes\":0,\"require_confirmation\":true,\"roots\":[\"/private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/uidata\"]}","policy_digest_payload_is_not_a_digest":"The guard carries no hash primitive. This is the exact byte string fixtures/guard.py feeds to SHA-256; hash the part after the prefix to obtain the digest the Python guard publishes.","require_confirmation":true,"allowed_roots":["/private/tmp/claude-501/-Users-rosh-Personal-Hackathons-Smart-India-Hackathon-2026/5359b3e0-570d-4c4a-8e34-811e4ae7bed9/scratchpad/uidata"]},"device":{"kind":"image file","model":"unknown","serial":"unknown","firmware":"unknown","transport":"file","identity_source":"file-metadata","is_physical_medium":false,"medium":"image","has_hidden_regions":false,"logical_sector_bytes":512,"physical_sector_bytes":null,"total_sectors":524288,"capacity_bytes":268435456,"writable":true},"dispatch":{"method":"single_pass_seeded_random_shake128","method_selected_by":"detected-medium","passes":1,"nist_category":"Clear","legacy_shape":null,"sanitize_primitive":null,"sanitize_selected_by":"detected-medium","rationale":"regular file standing in for a medium: there is no controller, so no firmware primitive exists to attempt and any that is requested is simulated and labelled so"},"entropy_bits_per_byte":{"before":7.06169,"after":7.999999,"delta":0.938309,"bytes_measured":268435456,"estimator":"Shannon over a 256-bin byte histogram of every byte of the medium, Neumaier-compensated; the same support and the same estimator fixtures/corpus.py used for the manifest figure, so the two may be subtracted. Printed TRUNCATED to six places, not rounded, so a measured 7.9999995 never prints as the unattainable 8.000000; `delta` is the difference of the two printed values, so these three numbers subtract exactly. NOT the strided per-frame telemetry sample."},"calibration_probe":{"bytes":33554432,"sectors":65536,"pattern":"shake128_seeded_stream","duration_ns":61914500,"duration_s":0.061914,"sync_ns":9245292,"bytes_per_second":541947879.73738,"admitted_as_baseline":true,"refusal":null,"note":"Written before pass 1 with the FINAL pass's pattern, so every byte of it is overwritten again by the wipe and the medium's final state is identical with and without it. It exists so the behavioural audit judges the overwrite against a sample the overwrite did not produce."},"sanitize":null,"crypto_erase":null,"overwrite":{"method":"single_pass_seeded_random_shake128","simulated":false,"nist_category":"Clear","legacy_shape":null,"bytes_written":268435456,"duration_ns":436719375,"duration_s":0.436719,"bytes_per_second":614663491.859046,"passes":[{"pass":1,"of":1,"pattern":"shake128_seeded_stream","sectors_written":524288,"bytes_written":268435456,"duration_ns":434824500,"sync_ns":5667333,"bytes_per_second":617342067.891759,"chunk_writes":256,"chunk_sectors_first":2048,"chunk_sectors_final":2048,"chunk_resizes":0,"max_chunk_ns":2606500}],"scope_limit":"An overwrite pass against an image file overwrites the byte range of that file and nothing else. It does not reach, and this tool does not claim to reach, prior copies of those bytes held by the host filesystem (copy-on-write snapshots, journals) or remapped by the host storage controller (wear levelling, over-provisioning, bad-block retirement). Purge of the underlying physical medium is neither performed nor claimed."},"verification":{"mode":"sampled","all_passes_verified":true,"coverage_fraction":0.001953,"sectors_verified_min":1024,"sectors_unverified_max":523264,"largest_unsampled_run_sectors":2815,"passes":[{"pass":1,"of":1,"mode":"sampled_read_back","pattern":"shake128_seeded_stream","verdict":"PATTERN_CONFIRMED_ON_SAMPLE","sectors_verified":1024,"sectors_unverified":523264,"bytes_verified":524288,"coverage_fraction":0.001953,"largest_unsampled_run_sectors":2815,"mismatched_sectors":0,"mismatches_truncated":false,"duration_ns":1869458,"bytes_per_second":280449199.71457,"sample_digest_hex":"09a55d5416c2db9d58c60411505fe89c68ac6cb1c6c3b55b7d37ea68277084af","claim":"Pass 1 of 1: 1024 of 524288 sectors were read back and every one carried the expected pattern. Coverage 0.1953% of the medium. The longest run of consecutive sectors this sample did not touch is 2815 sectors (1441280 bytes): an unwiped region of that size, positioned between two sample points, would produce this same verdict with zero mismatches. SAMPLING IS NOT PROOF OF THE WHOLE MEDIUM. This verdict covers only the sectors the sampling plan named and this run actually read back. Sectors outside the sample were not read after the pass and carry no verification claim from this run. A pass that skipped an unsampled sector would produce this same verdict. Sample positions are derived from the run seed, which is published in the certificate so a third party can reproduce them. A device whose firmware knew the seed could write only the sampled sectors and pass. This procedure detects incidental failure -- a skipped range, an ignored write, a pass that did not run -- and does not detect adversarial firmware."}]},"audit":{"schema":"sentinelwipe.wipe.audit/1","threshold_ratio":0.05,"return_code_trusted":false,"overwrite":{"schema":"sentinelwipe.wipe.audit/1","operation":"host overwrite: single_pass_seeded_random_shake128","code":"VERIFIED_TIMING","severity":"verified","simulated":false,"device_reported_success":true,"return_code_trusted":false,"workload":{"kind":"overwrite","capacity_bytes":268435456,"passes":1,"work_bytes":268435456},"measured_duration_ns":436719375,"measured_duration_s":0.436719,"expected_min_duration_ns":495316000,"expected_min_duration_s":0.495316,"ratio_measured_over_expected_min":0.881699,"threshold_ratio":0.05,"baseline":{"source":"calibration_probe","measured":true,"probe_bytes":33554432,"probe_elapsed_ns":61914500,"bytes_per_second":541947879.73738,"samples_admitted":1,"samples_refused":0},"note":"VERIFIED_TIMING \u00b7 host overwrite: single_pass_seeded_random_shake128 \u00b7 measured 0.436719 s against an expected minimum of 0.495316 s (0.881699 of it)."},"sanitize":null,"sanitize_baseline_source":null,"observed_pass_baseline_withheld":false,"observed_pass_baseline_rule":"A completed overwrite pass is promoted into the sanitize's baseline ONLY when `audit.overwrite` verified that pass. A sample this report calls physically impossible may not become this report's definition of physically possible; when it is withheld the sanitize is judged against the calibration probe alone, which is the stricter of the two."},"telemetry":{"schema":"sentinelwipe.wipe.telemetry/1","period_ms":8,"events":48,"wall_ms":436.720417,"achieved_hz":109.910135,"min_gap_ms":6.198958,"max_gap_ms":10.167833,"rate_floor_hz":20.0,"met_rate_floor":true,"longest_uninstrumented_interval_ns":7536791,"longest_uninstrumented_interval_ms":7.536791,"note":"met_rate_floor is the verdict, not achieved_hz: any stretch in which nothing is written deflates events-over-wall without a frame ever being late. A frame can only be emitted from a write, so the floor is a property of the write stream; longest_uninstrumented_interval is the pass sync plus read-back sweep during which nothing was written and is the explanation for max_gap_ms when it exceeds the period."},"limits":["An overwrite pass against an image file overwrites the byte range of that file and nothing else. It does not reach, and this tool does not claim to reach, prior copies of those bytes held by the host filesystem (copy-on-write snapshots, journals) or remapped by the host storage controller (wear levelling, over-provisioning, bad-block retirement). Purge of the underlying physical medium is neither performed nor claimed.","SAMPLING IS NOT PROOF OF THE WHOLE MEDIUM. This verdict covers only the sectors the sampling plan named and this run actually read back. Sectors outside the sample were not read after the pass and carry no verification claim from this run. A pass that skipped an unsampled sector would produce this same verdict.","Sample positions are derived from the run seed, which is published in the certificate so a third party can reproduce them. A device whose firmware knew the seed could write only the sampled sectors and pass. This procedure detects incidental failure -- a skipped range, an ignored write, a pass that did not run -- and does not detect adversarial firmware.","SAMPLED VERIFICATION HAS A BLIND SPOT AND THIS IS ITS MEASURED SIZE ON THIS RUN. The longest run of consecutive sectors no sample touched is 2815 sectors, 1441280 bytes, 0.005369 of the medium. An unwiped region of that size or smaller, positioned between two sample points, produces PATTERN_CONFIRMED_ON_SAMPLE with zero mismatched sectors and an unchanged sample digest: the verdict is a statement about the sectors read and about nothing else. `--verify exhaustive` reads every sector and is what turns it into a whole-medium statement. Regression test: core/wipe/src/verify.rs::a_region_left_unwiped_between_sample_points_survives_a_confirmed_sample."],"outcome":{"code":"OVERWRITE_VERIFIED_ON_SAMPLE","passes_verified":true,"whole_medium_claim":false,"verification_coverage_fraction":0.001953,"sanitized":true,"sanitized_scope":"sampled_sectors_only","evidence":"read-back verification of the pattern each pass wrote, over the SAMPLED sectors only, at the coverage published in `verification.coverage_fraction`. `sanitized` here means every sector read carried its pattern; it is not a whole-medium claim and `whole_medium_claim` is false. No device return code contributed to this field."}},"tele":[{"t":9.319,"fs":0,"n":12288,"bd":6291456,"bps":675118322.2,"en":7.9959,"hs":10240,"hx":"4449ea1f2dc5e50c7f0c575354c85de2dce61117953261f6f72f1f3dcf8de7d7f104b4a88a9b1ca245c1f02fa5408befd55971adc71333f3bfbc6e57460a93997c898f0135daa83b83da153cfc8c0e2b85399184929bedd9e9366d5accc3a5ee969cfaa1e220a4054fb9e5b9c491eb800577ade6d18b0d02b4501a95a1af5491bf7eded6ddc90746cfdcf1e92e42a941e065d4150712b258e7d0d4127367bc8f2ee4260edf4fc83a120fea8b1b9176e89495bfa7c33d29a4e7de4e8957481559ca6bcf32302f534339cdc28c4ce11ee01e700880f94101cea0550df2092de35a54fbaff85f28ffa1d12ef97850e75f4ba415eee3096f1946406144eddd310353"},{"t":17.985,"fs":12288,"n":10240,"bd":11534336,"bps":641335344.3,"en":7.9956,"hs":20480,"hx":"28e9b6eb83b4e15c06220ce1331c45cb5dcce8ca3e83e86297014d9218e9e2064c0df82312cb500a93656dc504912d70b160761b798dfddf4e93e03c2409565d274bfbcc4624b94099fa8e5a38738e4c6ceab4d4bb0d0543f1abb31299a71e06bab3a3e4dd39014c9c2ec81a8a1f7dc0a422b31f289a949040bec774f34563f3d06fd4757d645878d74d2e75f98d5b635c7df4b25dc69d276afa576713ab644a53f745b08afd034c1209f7e3b631fe03cd5a85392ca5b79f05e51f81c24213dcab34c125dafae95d239eaa8576c85b396de68a438fe9292948e80477ab022bde208ae288119d28bc4a87433cfccaa55d5c3a6212ff27258f4c6f8c2f371f314d"},{"t":28.153,"fs":22528,"n":12288,"bd":17825792,"bps":633182143.6,"en":7.9962,"hs":32768,"hx":"ff170967b5a9ed89f38db323d2f47512619cc13fcbc940c080cc5c9fcb73d8ac18bc3b911f157812c0ed4e020e8a13a1f3db4590fe61887777d441e9ca2a6f23c62e311b9a6f3c4ed3ce3d06800c6319db8ac3effad41ab5cc9240f4ee6aa418cfdd0d8d864c21a6a7df3a892aa4ccd1cc81b49c3804fc00c19024198d87929b5ea7fc23f14f6286b42fa3ebf4c24d89e0da54e748236cfab3421b75a68c4bb6fbbdc1be98787c0370656b4a6c8bb5032a4262f325ee3e70dfa93e3b31c570f5e1f08b69459d5d122375ba73a9952d0fc5bb4917a37646927e1d438a12b48c2eb0fef422071ad6942fe16fbae2170a0884d554b842627e724740c3e811f55e6f"},{"t":37.586,"fs":34816,"n":12288,"bd":24117248,"bps":641654367.3,"en":7.9963,"hs":45056,"hx":"d95a9f8426fcad8d6f121dcf2ca60451c52ecb0e7195d180bfeea7bed28eafb955e9543c7d4ed7031faaa21bd294a46ec0f410b039a9dde6328e1796bfe99dc96ae5f9357b52bd919d45f071e6f0355a566d9c82f5110a1e825c48b2cf098974adf212a5abe1db7d3cb1991acc7c3a57ae52e4de30856f77250a631b390af46d4fffc2e3036c636d220c5bdc512df8f75a439db4dbc11c5722ba3c047f2a00fad4d934ab11443f215d6249f0e77ee296cab057e6867b1a0d1bc8c7b7ef7ce157af86a92c3e663235a87a3a581b9548f98873996060cb5c8772e12795bfd98fce0055f16ba7bb6628bf7e022a3817bcf6926f0bab958f66739f2d46c95e0587c4"},{"t":46.251,"fs":47104,"n":10240,"bd":29360128,"bps":634806715.6,"en":7.9957,"hs":55296,"hx":"d59ffc8c79567d515acdd80e2808a3c33416b12fc4eefa45e7e04b90b75d4f0c24b70d591b9a39ed20403e20a495861501ac4d1bf57af2a7f540c2f10b58b82ca41ccc0b6574d8df9947bab0e22534341a1df86bb2955169730bc2a45636d1d901e5c5dd742e4fe2fac37b768952e3aa245b2c2bd47d6e92e00527221480000a61873fa744ee85f1c1429f5b7efaabfc25e2055228590bb772b1ab6904bf17d5f3da4dc6fde78bb5ba1a33847555d4be5b39d830c9dd3e7458214ec046f0e4feadf598e7f201dba3c64854e9884baae68c2dd4a018c62d7c70bc06b00e2cc9fced0984afbf46d91d616ba9f0c4a0efd01dea836add792cb2917aee03d39aebc7"},{"t":55.177,"fs":57344,"n":10240,"bd":34603008,"bps":627129754.1,"en":7.9949,"hs":65536,"hx":"e9797a8d88d5cb288347570d3c6bf85960a2378522afa82cdb583d9d7544111425798d3e0a76418db9fb42f4f08460afa14b3cccbd2ed0f7925b7ad19ca27a6aad73567351e88fb130a004482642eace4eb4c99c0641744eb56773696709388410d2255dacf9cb1db42ad76ed298a371b07559089937fc9640d8b293041f1f5e21cc82448c7555e3f92b7f9a3578252a068f380ecf57d425b89b4c25d2332e84fcd102763631cfc2f0cb2cdfe62cb1a8abb9fd878f30b617a9f4a079364ef16e3b7581b838ee7f7eb45f08d2bba0eb3e78605f57a5ee4735175c31bc7044e676686d4642813ce8f0946b34a9e75f1b928b89e9e5441bab141e9e16e03495a359"},{"t":64.535,"fs":67584,"n":12288,"bd":40894464,"bps":633675973.8,"en":7.9966,"hs":77824,"hx":"1ed3900a76dacaf9b7f19675278b1991420053d9e2dfbc7c447aab4bdf57767320854038489e414bb67857ef4e600fee4762a625bc1e0ea3021f5c0b093e84307b7f75c61475211fa103dac950524fb3375e8f437e047d66a7c8800758db74b19ccb35d270eddbd1e8a7dd6790c485809968767a758374d6ffd9a034479628cffaf64bf15ca798c34f7e17a4724865c89367f9dae8a54711485770c9e909a98a2cbafa4b0d6c2bbe2575712cbfc3e1ad91e3278d9050da384a2c2e38b606a690914f9c4dcbd80a98fa0d4072ac149692392fe19203fdf9af210615418d94c6c043d4a9e1d9c6fd09a01669de86a302b9bda6cfa6087fda9f306844a0f4f7426f"},{"t":73.298,"fs":79872,"n":10240,"bd":46137344,"bps":629446020.3,"en":7.995,"hs":88064,"hx":"f40ee8f1e9aec9eb1e40a57ca3b73016083bbb9006ab94e28b84121ddc19d013fb4e50b725d6fa696eb91c8386cdcf2646ad1a2a1530d2eb8021a02544ecfc79520756a185a1d8b116f36c584edf7606881b3513cad499a35c1eb8249a212a289bb0013558f96b2b6cd0dd36d726751e6ef74051ca257afb0b3eadd2dce965d2b813503ae96a8e775be1b2f2ee512b0efb21fb0fcc99c05fe29e1bd46a93c0c4c83f169c9d1bd4c39d83780e04da59972f7e8cc26b510ff26cd05714881bfd35518dacad87fc381ad0ad1c14731cc060b6ab35e361259d98e6e92b6619a0578efc254f6f28de2860df8ef0505c7d67cc051a66a11ce6f1db85f148c3f242b9d6"},{"t":82.075,"fs":90112,"n":10240,"bd":51380224,"bps":626017749.6,"en":7.9952,"hs":98304,"hx":"80ece41948c9fcc1a8c944d77ba57df8f797ff26a887f81e4551db8ef4bc5301f509f30d41345b5e57fcb22e0ef41de2f7ab362f72c096a079163024562ec52b0d5d234628d46cf305f4fffa1237ecb70dff76062c0af65cbf9726257d39c2cbe89fc989eb1ecaddf3522afa99883e0f3d80150ade4daf04da679c362bd672a50d6ec300e5049319446a051ce5deb2686aecbc67562f49f8c45c5fb5226a40d7f48d04c253f91ef33a89479a4c500d429e262b3ce3f67551d2b638464a99db920aecf9f744219e8d83d753deb53a27919b7a2ebf348095e784ce855508dfb9adc2fe523f14660bf896bbcb73e353c9f25a52131b79a87de1a95c4a36deb41373"},{"t":91.435,"fs":100352,"n":12288,"bd":57671680,"bps":630739651.1,"en":7.9967,"hs":110592,"hx":"1c64f81dc1c1cf37bcc0720302a444382144cfcd3fb07357b9b25ee9542a4b9e9b417182664dbf3ba66411ee194d723bdfbce16e45084d55298ecf594152a9d8fc02dc2e764ed3bfdaf363a64b8de91c17fa6d8818f11878ac0b77879867b9bec0b47da6416e3254ea6e687ec37b10600ac873cd4be94a6853cf7f6f88424829b2d522b82f42b87b4489b0755e34deb108799ae8558f6d153839e1612b55d9d3a4a53452f1bd7358a8d67c73bbba8f09454bc3b5898baa9deb58882145f7a7d8f625a1b78e69fba34c6cd9b4335574791e051bb756db9aaf2e8a141298b453b95b763b371fdf5cf02f2551295f72b60279d3c545c0c350bc4480e4b040e0b1d4"},{"t":100.178,"fs":112640,"n":10240,"bd":62914560,"bps":628030324.9,"en":7.9949,"hs":120832,"hx":"cbb8456523ea3066791e86f1a2fc6310ded452511edba9691c12577712dd591c20d5b1baf060ef36a0101578470272e756d5ae979503de7dfce4760577623177648ad1555aab7dc68d7dbea869d1ab00094d18bee86ece8f7a9713184b36e33761678b76ce4bbe28468f304429789b5fd2bf188965946451846529d6b0f498ed8b8673856d4f8fdd9d59b36139ca6ea3de54a9c768c2e61a4b9e60417e4a537d416015bb39045c8bce7b49f1b0b1325435531f838c1f8af0572c62dd849755a39ca4b1407127e64b504047cdda0573dcbd6a3da35534b52fece002a09721337fe000e25e62661af2373ea58885eafe78f6d2cf91493f89b20c4bc162172bcbec"},{"t":108.817,"fs":122880,"n":10240,"bd":68157440,"bps":626346313.8,"en":7.9957,"hs":131072,"hx":"838726aaea0e783012d0dd04faf9c462d2e370e872700098469ca4969c35bc1954efdf34e6ca8b27ce30dd3ee87b1aeac800ac02ff75b35e39ff0f466cd434c8b12a1f2e5960df8a00cb3eafc24211f18a336c1ec3820c803d7c0a6578305f71abdf3605996e3d3de70f99607fb08c62d43ddfb1ee4faab1f233630709fb5435540ca6f6f52657908bd584b1d24ac17f5fa5b153f07175d2124d08efc71199dc61502a140c5dfda5a931f7659b56242bb909ae2ba70462975687614a16d7ef7580ce5bf3ff80c1e4710098ba6072a4938d1740cbce10b62e790ee74fae30f94c6092e5d9a814ff19a4c94c548ad3e61d30471d49e57b242e374d9d1496533442"},{"t":118.226,"fs":133120,"n":12288,"bd":74448896,"bps":629715671.8,"en":7.9962,"hs":143360,"hx":"9f7a4257fb5041328a822e133def23e8992d0e82aa472011978e743b067c7b67a619716ee7efc9d71765388f5904ba6f0252c3340a224800089e631c47231f85dbc5d77ce66199df25ee5b6830cbb10a1d059783d48e22105cc3d6d513361a952838e8b14644afd7e3aa8695c7e72c9fc6f87bb73afd61fa419e0d83498eb74826e85d213ea0e33aadcbb340540a7dfb0e8d76c1cfd12a2ea27bf04da887e1fcaa5cd6b521aa6d8d922a581e3e1a28228d75959c05bcf93af78606ae56441881a5ca1f7bb074e12464cde7cc7d53ae9d994a0c64aacf22358224e3d8414b429a48e6b3db8506b1bcbac8e0a726ea796385874701c4e406b9a2fab88dd60e24f3"},{"t":126.922,"fs":145408,"n":10240,"bd":79691776,"bps":627878071.1,"en":7.9963,"hs":153600,"hx":"c08e377808260a8e92cb5a79ffc48a38f664d3bb25fa9497a321fca203def5fd94bf7c2a5a636b4e587862edd0c22a12c083643b376cb8769b0f26a2c48b927ab337a1ea15f93e248adb330075ad07315b82cbef91021b3dccc104bf41b71195e11dfc3d390cb65409b87e29739ea8f92eced819acaef44bac0bfdeb032b128df10202e36b2aac0a4f11828f0ff83f685776882edaebe221a9073bf36535a63160433e2d814fb6d4ee272a32a23d59ddc9bbbce8ff5b2450d5bee4c5a160afb74b8e6ace14d8ea427e17fa85fc77ccced5a0cf9454171bcef4d5ea1d50368a2f7b5e387c54f757492c0e26bacfa7801c28c172b8519c4588aeae2ea60cdb5369"},{"t":135.662,"fs":155648,"n":10240,"bd":84934656,"bps":626075705.0,"en":7.9953,"hs":163840,"hx":"f0a447985398fae68211ec85f28b006b1e9528af29a9c23c14a6ed2cda23e5458439bfd66ef7ba31842f9ab70448f4c787cc6a9ee88e9d6d1c12025fd4a86d19bb3226c50db6c326c4b56a98f30591ea0b8264181ff328173cc0649028bb013351c363aaea0b56c3125c4d07230fd59b4a073b6a02e947d89d1bb770c66807a938c67cf7f7720139e4c08034c677560b8b571b7b8122aeccc0fb2f9be4a0ba845d1e0396fd74541153a65304d25ed1b2306fc2726b53f9d2e3506ce3d8ef5b9539aa6eea9817efcad31d8661faa6cd8eea3f6c78474813dd6358783fcfb817300c814eed8dc3c00f9d3e53c0e8020f12ffa92d546d4d24ff9bb08c8a041a5b5f"},{"t":145.007,"fs":165888,"n":12288,"bd":91226112,"bps":629115589.0,"en":7.9959,"hs":176128,"hx":"ad82398985577a5ddbdbd7e0e7c31414dd76249ba02996d7f9064d7b5532b761fc41217095fd40978d0a5d87a5d93b20b6a82955043efb585b66fd97f78ccc94888d0d2ac14700e2cc4036045e003fd626575e1a229e2c41d6b629fead2b929f59f78140989f31b92997549e42a4ae271cbaf2f39b2d580f373973739f540983ea36dd23204fbe96dcc1e5f327629e06b1d53ed2c819e3d84bf65d6f7df516ca5317abf341503532fb0086465b47e08f855ed0e8edc817c9b724812d9e26808e9d03dec84646d2d3de50f528ca0946785e58cbdbead50cf02e88daad73c4835eb766e1d3baf76a9060c840ca8f4aafdd847bf1cd7ad2234b2d2ea855d23fcb20"},{"t":153.853,"fs":178176,"n":10240,"bd":96468992,"bps":627020207.3,"en":7.9953,"hs":186368,"hx":"bf4d13866328901838a5551483100fe2da7d1311624c268c7d6a2a6f1b13da35fcdc49bd52923ea2cea46aed727c30555103ea9254b05d5d3feef3b206c93f42ac9662ed2a9964c18d0fb357d1774eecb41c9d5208ad82d936d666db6967fc39a710ce74542ec2a746b6f7908689d6073e56cbc7d01309cdfbd5f097ad16cb19e5dbe544eb90e4318eeea71ed5fdd8c65de44ee1688cf85b02923a691acc9ab4c966d95950933a523991d54dae4338fa67a2f07eae24ab26c8d1b506013cfd1bfdab8208b3f4f932890427b3eb128aa73f12459d08e818b669e3576a9c4e14231d8b060cca8b967ef0c50173aa6728ea4cad1e67244c3f687f89593cbdb2082f"},{"t":162.493,"fs":188416,"n":10240,"bd":101711872,"bps":625945532.8,"en":7.9963,"hs":196608,"hx":"ae4efa2e703eddb46516777d513718b14935069e86755b2a306b20f0eb739843c3033817c1e1368ffc516d77d499988d7af5aaad3d9d7ad8fa53ded65d24e900153a5963b6fe92308209ac37d95862ac223582d7ba9459b215ea66b55568ff8e6694c5337f2af73105700e13c8408073427efda2794cb464cc4281e535750aca800f5c43cb404f17c687e6b9d392f11b07d5e26c9a82751250d37425c78890536acbe7e716d2ad55e7bbc36255ec7675426b4feb5b2235d3d1f0ae99bdcabea110f1ea8652c6f9090edb231a2585bfef826c28077cb73b475a45d2eda629fa3980c4f68f43a45fe8ac581b2425bdbcbba992361bc1491fd4b0603d0e4da03310"},{"t":171.829,"fs":198656,"n":12288,"bd":108003328,"bps":628549393.4,"en":7.9961,"hs":208896,"hx":"84298be7e7bd3b01230cc6e7b2d7fdcf2f8b8db73ead5603bee7c2852de9b49918e29bef0941277a5ddb5cb64f68dc4181b55c101b13b67ed924d9927fbe806ef049f485e37e8e8b48b723064a99cedeca1576cf05cffbcb951cfd58ced82e76e1412cf319056ebe77f24f6cd3bfe06717d446b980f89ffea42e3903f8f3cc2df000558a7929b9b8358ae458bc5dabec687d54025d372d761e5edb3cf76741a9d275ca487ab93e5568a6ff4d8db69a4120c4f07dcc4addb467be0092821fceef360d93bc1acc03e7a018cfc3e74423b3ed823174e2c053881bcf1c4643ad41e73917065bd92b3d45ce1cc18165b6f069b47318ab6b48838d415f141d1fa3ce68"},{"t":180.652,"fs":210944,"n":10240,"bd":113246208,"bps":626873330.4,"en":7.9959,"hs":219136,"hx":"28073c7ad15b9708bfe03cd51839fccf469a31abfc54c12dfaf57e4a979c61795aa1bd72011433783b007778bcbf0858be50353c8d7644a1300d65ee95940474b48afcd78106657ce6df2cf9cca3a39f4b5584acfb016ac9254b93d662b8b9ad95ba5dfbae7c9c074dc16112b258b2b716e324af08d09750652c12f91df736d841bef98e8e89a0d039fb4963b360c7c575e5ab89778458b4d9a9b9903ac34372320389abc0f175d3669aad79531713e7a696128777c685083da7823ca3faecfe90e35058f70f184bd5de7f7cfe827ca0dde1458326dc89fb0655dbfbd3d25d55c76daade5d074995a7c76629edc17168e0e010cf229d763c01fcfb4313960c69"},{"t":189.477,"fs":221184,"n":10240,"bd":118489088,"bps":625347445.5,"en":7.9952,"hs":229376,"hx":"20d14fd8114d02582db8f41fe5fb4412bd08a3c96110735bcb1476ab89080db0e16a605e7f1f85547e26cef698bd88011b0e7a115dbde80c22a57334de91be68c2115305eb82f82db82ec5c8cb790ef09cf09eb5ed9ebe7b03bd3c5c3b76da61a8b2b634bbd36ee2d90a7fbbc6b46244bcd387f9c49e4395bc329722359f9a7049e441f6bdd6ab6897f3e6071730d7b76fa2c210843a0423e12eee0e200d1a6eed00adf5c0c0d42f20ca45f2ae2658fba9225fd89393fb892c19888346507ec902d68a9b5d578fe60d0f6e93e366850b741a90b461cf37ce8f7ad9a3e3a71c7c12b867854b1775d2e729c8d5986185afac10454cf22270e102cd616e8146d0e9"},{"t":198.838,"fs":231424,"n":12288,"bd":124780544,"bps":627549700.0,"en":7.9961,"hs":241664,"hx":"36b30f26e1ade042aa8b2bc3a0772b4d390faf2e073aaaf00c255d3d343fa746e2385b2eb2e068fef93548f837c10b0e3ab9b79556d82e7d565e4056eab299014510469c3284cb4d40b906141efb65597cf26ee1de47f19cb89a74394c3eb9ad98583b8f3cf1d84193fcd366f190b04511be22559b7c05eb83b614e3d347d292f0d2a4bff2b3261cfc068ba70cfd5268082658d0fae46408c2c4be5b3e2172d008f80df3ddee80a24235110ea96b23b702bf9b1771198a2fda0b50625fa0366eb56228117fa6658b1ca101b6d122a2c376a8280ee635ee36b184cfe3240f28f7d4045b93b7cb64ae5b02c0557b2a2bd14d5c6615f82c0a8ddb73f64721aef19f"},{"t":207.545,"fs":243712,"n":10240,"bd":130023424,"bps":626482920.3,"en":7.9953,"hs":251904,"hx":"35c10246399c8b31e5b34acba94367dd3f050fa56722584367137d46eccca8f578306e5c208228306762b078401da16d32da3eef5d5a081aee0b019495e17d8e7a149c486d98637545f94a10c15defb3b9a9786795e58f408b1b49bab3fbf16fa9dc97efc27a678d2877bfcdd5c067dca0734df33f2dea3cd76276e18fac4b2581da5498b97eeb2e37774cc1b2cfe46897cf6b22875641e70050f31c99e39ef381cbd70743bff0ec5e981b403f7fad1b235d771346db81a2429af41bbc048940dd4893834d5eb0c42e2f8a02366f2946fc7d366ac32b34a4d1ea86724e1b1ca2fe7cfc428f7092f5fa3100da19bc95253438e1ca08aa7b0340c24d30ce3b1285"},{"t":216.311,"fs":253952,"n":10240,"bd":135266304,"bps":625331924.5,"en":7.9949,"hs":262144,"hx":"bfe199b5bf5fdf4760515f22b68815b3d331a18403260581b2ffb64e2f812320486b25d6f8e06ec8ed1074239e606c639af6982c536553ec4c1c17fdfc4883e89f0012390a9cfe4ba3344b2ae4fa0ced1a90f08c70a073952d244d96f0d9d0af15ac8d61bf8f038149f9d6b2f4cba7ca248194b8ef17f6737ea234e032cd297d5f6f87dfb5fb32928cc647232b132e7c0656e822a5aae9fdd0dc36f7f586ee2dce2adc746d752a8b8f4a06b39d2a2681d1ca381e2213c0aa344c5b8dd0ba94007370166fc18c37cea6059a6f643a84f475830ebf104e7b9ecf4c3295c5f1f6a85e47699c41e26da0701a7b312b117a0cd259ff454be8f425d11d8e36df1c6f36"},{"t":225.828,"fs":264192,"n":12288,"bd":141557760,"bps":626838602.7,"en":7.9961,"hs":274432,"hx":"99d1215401044bf309459ea0fab508c07f116b22b9e0baf126f96693f9673fb391b1d76a860fee1e7bce81ea2309aad2a14a3b22b89d25a9a4c47170288846bb26c2b00090f15ea3255561216d9e4d93f678efeced2d8970c8266180794c0ba7106c13602d12b5c3dae3d01023fdf2a62b35a08f4595d1d76e89249803e9590d6f2e7eb72873543a742a12e1b42840498843b8537ea0fa235159b31ebc5c23a9821849dd98e110b36463f13c83f55e442afbe6bf2c64d18604f375038157de7eeccd554ca74f770d5dd3af43281ce9c17351f5e4b6c385ed5727a3fd5fc48947368072d41142964267b5b2863669c0a1bbb798ce1cc7089f8fac7ba2d3f5cc4a"},{"t":234.739,"fs":276480,"n":10240,"bd":146800640,"bps":625377032.4,"en":7.9959,"hs":284672,"hx":"febd983edd77d8f7b9bc743d4cdfa434a2042ee35e31039824b4f0a80ae031ba2de6a076b6c8eca6197c9b2106d8e15166fe643edd882f5dfd97d6207e8f7018b1344048552aa92eb06ab4d4547e47823e1eb57a1959ce205936eb57cedc40c196387475ea4efe8f9346f2302faf735a19d0d14acf6033ad3001a378707652778a5904adb71b0ce1f6cb6b42fb0f28ec1a4fc22a70783d0652d398fd59483824dd1081f270d6e4d94674a05622b9cee0376a1abf9e59bd988c627f37a0546ebb729eb6929838578ac641533d71a8f66f6f65c82b8ed83033703e31f696762e6fb3a8a2bae7ff74c85f1348679fbe3a827908212416e59c5bba5264d99a197714"},{"t":243.35,"fs":286720,"n":10240,"bd":152043520,"bps":624792839.8,"en":7.995,"hs":294912,"hx":"499a2c153c611aed329facc77a445662d929c3fbe00a76bb4c892cdfb6cf04346b45b91cf80b4d68f1bbc10e41e3ef9a562978827f3d8337a87610f29ad3d48c8a8697000f4b14f94181eab74ed78965ac2538d51f07b513d1d94efa7725a7cf8df44943a823dc0f7e809ffbec9822cdc97c8a1d12be3f73d1440d308c9f694cd74216d8c6820f551e1ed5863c7902a1c39b98a452a910c708eb459144a99cae1bfa505a5a85cf9f508b1054a3d74b9bc1ab85a9eb9673342a718b7a4e0140c486744d20e9b2c50e4c3ff8db40a74b3283e927f2b27b6b586e51d1268797bd20b767b2617376115345a1f71dbbdd21e8d7373cf3ad2825787eaf1b1d5216e084"},{"t":252.683,"fs":296960,"n":12288,"bd":158334976,"bps":626615795.2,"en":7.9963,"hs":307200,"hx":"9f9cb25aee40b90f127401957b49535b8ed34bbf6332a0c8718b9ea2dc434eb135b8ca1bb438aff1b481ffa7bc4af162e66ea1d8401e013a47963b723c4cf72b20b60f20b8f536d0183b733199f71aea44088342c4eaf98403f0f6cd092b2efe366e7f88f5f5f22f48079a56de502273147c48518efeb70308ac4e01e9c0d9abbbee3b3982bc6ab655934dad2faf0bba623b008114bd38b39611c9554c79b615e15916ce499f03a4ba32444a52e56ed3e0c8577d87cd40c5845e90bfe0c89c3b2053adbafa95fe62c1a590f07bed42e18b51cb3211a999ec22456e977082c2c4f86c5bdf9742d9cb24c2a8b37302d481b2a36b0510ed674fcbe766b826bb56c9"},{"t":261.332,"fs":309248,"n":10240,"bd":163577856,"bps":625938167.6,"en":7.9954,"hs":317440,"hx":"37309aee0722f535ebbd7e5df7179c0db234c20fbb200c443ee790e53982d788cb0e12881e9fffdc546fde73da3f1a6c89392b8586788b768313e8cd5a542b3a8d312d14a6a57d03141bd2522f726dd3066e884cf702553247707d6eec30f0717a15c62dc3960cedd208dedf5a361f4cd4b71ebb5b88ab2045e66387feffcad3ab915481499dbb8eef5841bce04a32ec860fb20fa5cdd12ee4072153750c6cd31be2c7a08659fe3a3c45179aea74bf6f75c719885c9928b14188d97a9d45cabc7c4ff3545cf53563c89035b59ee3041dcf528b6989d8267b87b54f404f4ab9b5a58898f739c3b0a2f0d8f36a4560d3f2fc3628c192312febafb349286813e622"},{"t":270.124,"fs":319488,"n":10240,"bd":168820736,"bps":624975635.2,"en":7.9959,"hs":327680,"hx":"16f946f7196e2620316eed1c339e0854710d7ea2877abb4ae1e0abfbc85f49c0319ba16032a2c4cdcbbecb82c50a90b5ac5fc6d2895d2d75302e1a5b1652c69ed43a30639aff467af6612b95b1d154a7b9777bff4560d40f71c647d81fe88e0c97e8938af36669b6fc6f0635a33cbc81341faa8376c17aa9d4f7eed0930a4aa6d51d04b4aa4fead1bfd1a202bf01bb12983f463e7288096ab559d3e194714ab2734a6a3552316e54a271de08b29abdd3c74ed7c251ea517ec46d620ee990464c0196b8f88c0c22a6aeca5c20a7e920f453505fcbb227d1752a11bfe78fdd6eb3f0eb03804383c732c121c7657c3125416e4eebb2fb7a035f9c792454c50c960c"},{"t":279.464,"fs":329728,"n":12288,"bd":175112192,"bps":626600924.1,"en":7.9958,"hs":339968,"hx":"46fa4a523567da861b0743c1ebc7462bd8502bf898761082266251533623e014ef38e68e2ad7fb394e01320eaf2d57710113b7e0454bb5f318fbd2cd8364cf2d3b05f51ef70a41992c6761d4609a3d3577e41c6ca3f8914574d770babd19e4ea29752bebde26bf43b0fa59b761b247ee883bdceeff53798910545324a64a4fa8a597493a22d2ea5fa6d36d8d47d545c0325ce161d7617dc1bcd8f0b82e4989aa13434dec27dc446931c5528c51ac6877a3ba3ae3fcd36e26e4348830eca4e190138ba7259a347f8372a4845027a3511404ee45fdc29fe45c511c9b6d50c66091722ba4e898831510e2a9d959d799d43ca0d23baa2902638a1e9336a4f07d745f"},{"t":288.281,"fs":342016,"n":10240,"bd":180355072,"bps":625621838.8,"en":7.9954,"hs":350208,"hx":"a7f962dce259bb3e32e87a205cdfc244a88199c720b09d264ca12d2046d92ebf023cba59f3e31a47c0d7a690426a14e178d26bb8f7c9b26f8a98c79b63b4de5ddfb841131afdb346c8c88ed62b8f5b6b0ad212c7fb6f4f854260a7a2f354a35189f0d2c194f6632e6efadd0bf44bf8d9e839dc774d1212909ec074934fcaa6275cdcbfc2a7d35c46b72468586127f80db1ed38ab45ad212e430833809fc09e1ef1feaf7de2526852c81b921e5896be727b6a2efeaf3556b6ba928de843eba2c58650d436e88b40f85cf7acdd2daa1050cc8ba1e2fb89eadde07c287b9331bd8c2a1549f8eefda3ffe7d0f698f25f378a0dbee0a946a9eac4113536561c6edf33"},{"t":297.042,"fs":352256,"n":10240,"bd":185597952,"bps":624820133.3,"en":7.9952,"hs":360448,"hx":"fd47242fff753a788f39d00a3e711442b201e3e7001897a28395bcf005dee3c6d506ba41fcd0072b5056b42d55bd3465301d32363a75d5a69517a9b862c2b98540d754dfefe1ec7fa9a369fc47a2888377467460bfeb1e1c2a0a8029ff2fb79da6ef6191ebc1aa47309aab7a5e67a4453863ccd391b300e4e10c651de89b36cddd46fefdc338b49e02fe24d77906f3b7d17e6c3716e7ba94db9335443d23055cf5ac48a2f678468f52a8742e98f0f9502258c2cffea1be0d1cc1ee0e0412360d0a9c4960ba783c25b857782a77913de12bdff23c44f6693c09de5d91bfd83d850b2d7fe94331e7a5ef35b8c8384be620d8d662ff669126fb03a208d3264a2feb"},{"t":306.449,"fs":362496,"n":12288,"bd":191889408,"bps":626170009.3,"en":7.9966,"hs":372736,"hx":"c20d20dd6ed76c66d160b4e65b4a9ff023ecbfa0310515c9c4cacaaf83de666b57a0adaa90b2543a7d4e4be495c44b389fe4238a0fa36e724956e1bb564f4397e8d21479f60f80b6a3de2e02c3cf654e6f6afa696ad45d3a06f4fbf5652db26caed676bf0286bdefabed0656406896cafdcc67f454827bea93003c93d19bfa6f20f8273867b0f4283e6d5e2c13366b012f9a75899e09951d73d54f44c54797c82f4fac6b95b8210515815892ae301d7f1d5a99d6cb4d0daffb0d941065e2e6acd805a1db1d527857e80bb59475292684977191e2420b5bb15e6fec878bba1c9e66cdfca78bc95a55d1dacce18474b6e9175e302436a0c73e10398076b42fed67"},{"t":315.167,"fs":374784,"n":10240,"bd":197132288,"bps":625485180.9,"en":7.9954,"hs":382976,"hx":"c090f6289e92827099dfbbe597bf8b15a9afbe4c234995235bcd962827c49a962d8024511a2c5d85b4843e7a6b9bf8133eba4b319c932c3949dd8963c83ca9608e0a4fdb670673797c51be28c6d9241689483fe8ce6cf05a3881e923991115a14e6fcb8ebe5b3bdccf194cb1ec879636a2b3aea558be194adbc673f2ebfcd97f0235131c653f3e0e907277e7906949e3e9e022924c61f9c73b58c0add8c32f89ffb34ba951caad4aada1705e100e8d9a259c73b534d42ea9ba7aa59b8ca161ebcd072e6a6aded53c844fc2751a65922942e336bdaa5176da0cbe4e16e72a97d7b4437f22797cd4f0a713e17f19023f9e573ae3c4f48e7115b604f0e2318acc50"},{"t":323.842,"fs":385024,"n":10240,"bd":202375168,"bps":624919620.9,"en":7.9954,"hs":393216,"hx":"10a2e593dfe0dac166ce111c2337912c031a20a2509c9b702615ab91bd1a24d392e1bf1f4f0e738dd28d6ee75d7ab8be09a65f1f142cab18fc5113323de22d851358b5557229cb7b5075a70d9ea4d88dd12dc9b02d5dfb78991c12cf1e8bdcb6a2ae02939716cb02d245da3c0aea62c3a044b75527f9fa4b1b9cc2a2dfffa8294bd807f1ee6724f283cddea590edc86f688764d4c1d148cd6ce974b549bd3fa8d1abaacccab4576d0e51151d2b8199fcf9ad6d4b7e3194f1820dcffcce207afdc4f34fd76320990f4ea26072efe54295c6970304edfbc94c3e6385eba5943aceb100b04accb616ca0c023fbfe265ea0bca353b9fc1b5b4c84805ae7529713139"},{"t":333.203,"fs":395264,"n":12288,"bd":208666624,"bps":626243872.9,"en":7.9961,"hs":405504,"hx":"5fb47fd67b66322989ee1afbb454e906c5094f9507d3eb12e82540f5dd9eca46fba2ba4423f3efea2c67d20173be2937801d33417b20e427aa2f2af18407b4c30db85bd1cddc0121e4337080af42669133557b0db63c3bda7c1a5a768ffd2a4ff83c40b3e7317b089e829030b02c5a9b86abaffc37701bdf372990291f91f3f2dae2179ad6d6136b48f31a05bc4c381d18123259f925908847a18155555e752cbe7ec152d8d99477bc57d209f639ecfbaefefa573a51bc70973a015866caaf68bb4c14a645015f884e1770504807bdf270ff0a05c91d3e33d50f15f8d5452c2010a284108f7f5e7667922c0d388337099cc0a5e7f6ea193005d814693383d7c4"},{"t":341.921,"fs":407552,"n":10240,"bd":213909504,"bps":625609983.6,"en":7.995,"hs":415744,"hx":"39275db9588389417c211865ff57c4854cf76bde8e7cbadabe66d3c47845e0a5810e1a50b391357edf2a54c52b256a2a3d0108bd2e140e7f89e11459fd85e3f0952f6f35709fd461235214746e53e8c526476af10c31c7ea3a11a1b2f9874065f87e003fb843c71b3146cf2fed2a07603ab714387e972b45dbd358c440ce8cac16085329764b5029a7f33274bda0f0ef82ce93fe69188e595c8d9ec4a73758b540ee167ccc6a0f785c957bf66523b0be20ac6fabd00b0aa3eb855bacc97c7c6e1aab836a6620c56e76109d2edccd0e5c87f6d81d0e3255fe828761cee747576a97afacc4713583f35737ab20d1bd8b30e70ee65aaa17a0d530d7440748ea043b"},{"t":350.763,"fs":417792,"n":10240,"bd":219152384,"bps":624788002.0,"en":7.9961,"hs":425984,"hx":"06423c37915a9ae3f5238a92b5f13dedf8dcae56486ab24baafbb73e03f37ba12f9d5cefbc5200aa39d812ca507c2b6d47c91baaf58203fac280ec68c967076383cf3b17514786861f5b4481c641ba5f64d8bfc64010dbe596b7cf2d0878901676e3d72b98e733b51afad75f15b9e7046fc0c87a9f9a11e7b939537ce09a0707083bc1464cff3cd79207c8981c0b847a6854c0fdd39a9bb76ca25cc4c36c1b9c14ae34892c8d01172d0e08ae680fe72cf7613295ed0c1b32cc2cef030312eaff479813b30b0da3cbf191d2d7d8ee95566b5471308b09ed1f1abf10ab85bc886cfe3ff2defb701e632f0bed6bab89747abacce4bf59da68b401fc17935eed0aaf"},{"t":360.132,"fs":428032,"n":12288,"bd":225443840,"bps":626003354.3,"en":7.9962,"hs":438272,"hx":"76bb61fe36c4cb598935b33ef467daecc0cd9aa24178f42403dcac02e9e722a0578f725738cdfc05b7a6f53238b18376934a742d19764791e7e19e3b200621d95eccda0f3609e188c6808177a46eac80087640492072c985cc10b43f12a3a0412a505091247d0699b9695f5f49a08dff60b6eb4656c4767af94762ca2c128c17666f1be37c422743ed684eb0a4b6dbd136cc436674eeb6cfc8195ddc5b3d9067a144125c12ca2981ad1342ccc734bade24973fe8f3d16177092b29807f5b136ee760ece2559282f0916d119d619253f7f8c73563ef6cf8643dff49d3299c0040445bb949d018c58c6e43269263b5cbb33b61922104da5d0bc39cf562d0be09a4"},{"t":368.827,"fs":440320,"n":10240,"bd":230686720,"bps":625460924.4,"en":7.9955,"hs":448512,"hx":"045ff9beb69f02b6a5ba4259b0b9d24d7f6e1d38ddf55bcf15f3ab23513e8107d0b60b512d541b1501800c936377c1c29a54c2c7cf3c52ef29e05653e002a1d8eb267e9b227137c573b8b20030674acd56188e642e70fb58951348e3063104e5420926126bb9ec68814edcd54b99c55ab213775ceb667113c2547a0deb21a70f09c95f3216b0b558c25373228d7167f94b756f070e77c92ad6f8792e9c81bdc5dfaf7ff54ea17685b63bf5597f1a8ef78105cc858453081d9b380c8370190a77cc3ac039758f2a34ef2578a5f85b9938ae5fd420b7dc3c7b08c5eaa9d40bfd7d7464a444e04d1e6315b28fa569737acfedc513f3b97ea38eeae2f7a227c91758"},{"t":377.512,"fs":450560,"n":10240,"bd":235929600,"bps":624959344.0,"en":7.9949,"hs":458752,"hx":"a89fc523066cd82ac27cb93982b7d4c817bbc820c29f579f3875a5861b0ab2a34cfc65b00e6e9a63a0687f91f566cf7aecfc053ef83deed6454eec9e331df721befecbe47357e1c170e33a22f3399545924d76ab5650fde8d06a45a701e565da30f993043a791ba5be0ec0d99c2e678ae4413376d1a312943187f5c35853b87c9b3de6933bdae560a1ebb9f8e072867be31aaee464e0f6325f5594494176e0f8090f9e3ee3e493abb52a8e7099506eca4fa258c4957e822d74907f37ed696187356a6639ae9d0da4de9712dda72f21ade1f7544beb58ad80aef7a2135ef75eca9faa104bdc260c78c35b51a09cdc4e53344a6a52c11dbbb3e4577f94e3d53b5b"},{"t":386.939,"fs":460800,"n":12288,"bd":242221056,"bps":625993208.8,"en":7.9963,"hs":471040,"hx":"34b9f2ffcb4121c3f9e6b949efb7f93305e3fc39d7428196a273ef2681ab497990850ead1dc888a0ce29769f96e71df485c37fe336be5cf5247348d447cb173e01d272b80535bcc82732d5c9aab853f7140fe40f8fc5dc8d8e9bc25a7216ccb10d99ee493463b1a45afeba8ea0239b002d0a1fcbc65c574bd0e5596e0e63e7e9f7a1172fd8da44f3913ae2f1e8ea3e52bcb8104d3f51b936bb99b9fc490c5b24925af8b412564d9a058a2ba5eb8da799a034c433b303aa6ee3d119c7f3f394f28aa110b9d4304b3e7d5bc5ad9ab2530c3efc21222d195d75abf1bf8b59e4c0cb1b3a31d7ca2df599724bcbcf9d881a938c9e6a18c0ac9f987aceeb4ed11f26db"},{"t":395.734,"fs":473088,"n":10240,"bd":247463936,"bps":625329237.4,"en":7.9947,"hs":481280,"hx":"e11cc9d137b9887f85c9f24ac5404da332f6dc47c70ceeccf4fba2f771e4fc5606f0b736ac878982f25af82869b094a1ed96f2c85e8ea53d19262c3a991c49c30dfef39b2b05c5a22a75b95b20addb6a1605a1e89dc8513ee1a79991b2063c6409917aac47388418fa009b455814c5723f1f025efa91659fc70aaecd24c779a2fbc022718020e59ca4b9064391780325d71953baaa19459191fc9cd80bece2ef7dbb99253e006b135bd4891d9c711397229e03b1d6a53ec057fb2c73e77195b9e445238989f81389f6c891b10e49e92c4469091b9c6382897c3a7646782c6ecd66498a952b752860637aec976f0e0c43f18dfdb1399f258a2dac62f326ebdeaa"},{"t":404.511,"fs":483328,"n":10240,"bd":252706816,"bps":624721354.5,"en":7.9957,"hs":491520,"hx":"5183fb3d5fad294672d1f289f666d761e4d764a77f7fdc96595173c8e99b0eda598d47b3b9d2b3c509fceb46d1e78da52497323948784275e3be8bb0e286a0be5ff0e2b2c8ef688578d63db4a667edaca1d2a4f3c0db6bc85364c166447c763ddaf155c6d28c8fe0176d927274a5be65473ac54aeaf12d01073cc2cab6099d5c0d4e3f5471e4f8681df4af3bf7194e0ff77051efc5b31c249b2f16f346f6a8b7c79e4bb840caae8ebb92faba9051fc27b0716776c06cf31eca0e29921ec97d1354540d8c244ed87b7659ce346d7105324e1cf7cfb8598c63e400e8d29838d168b235667fd396662ffbc65a096ee1c462e955b2873cc29145d241fa3ea12b700b"},{"t":413.975,"fs":493568,"n":12288,"bd":258998272,"bps":625636778.7,"en":7.9967,"hs":503808,"hx":"674cae19b57cdbbc0ed6298d31a9e3dce2a34eef7e7604994832c78a14988983fe9e0af8ea199b94af315e8555f3ca58ce7101870cc046d929ebbd030b1256517fb15763e927ca0fca3190adf1d46a0b472cbefa22170f56b0d48509d2298a52ecdc9df796d5f4c843d2c382e6c01fb369a4d1a662d3c7fd13410da3a545fdf4af13416485a961e5eb0998b2cc942ad4364113e475d5a314a0ba92cea774416932015d36b367edb49293363ce8c528aa1498e6e7a6c8ba02e48eeaae051d0626e7f499cba67a3cec3beeb34c0d89f75fd1d7a498064ebb97443810d0f5429ed0cc10b4848a8245bd404675aed07823fbf95d499d0fad97bed780a679ec469b02"},{"t":422.967,"fs":505856,"n":10240,"bd":264241152,"bps":624731573.9,"en":7.9951,"hs":514048,"hx":"bceae8cc9870611112a9175f9d36975f911248a90738778ecd3e5900a9d128f975384157ed034915f3037eaa34371fe08d8f449b9e169541685d4a94446be98d88d4b846d475953d4b97320be2284fccb3f7c5784af49be011ee92882a5785b5162349998273c030599a60ec67b30e9a3cd7e0ac23aaff719effbfb7c6203201f46bf384d0689e28723d3fd8393675a321c197879d5e2a55f2410c456f0ab07586900ff64aecd2c68d9b3f7c200697f6b935adc8b2dbd09bd1b07132d417842df7d85f209187df7faff61334eb178ab7fe9026ba8e81b1d017dcb866723894ed06701a967ea16d0e0e67fd394f46c756acf0f3ea21be272b2adb11356c44e3c0"},{"t":429.166,"fs":516096,"n":8192,"bd":268435456,"bps":625480978.3,"en":7.9943,"hs":522240,"hx":"9d736ce8d8280043ccfd5d097b50614a1082c0f8cf2825bce88151855f278679e5c31cc87007541f21c18766e260c78f3f53ed76fe3784acfacf4cd5ee72b075c2cdd5e43df373e4eec288c39058b185f14271d665321d6d859106817ef0e6bdd8470e162209635b0fe00618bdeff80ea80990574d713620d1d5abb17296f12b53737ccb953fedff8660608dbf4d6ef571a62e02390ba9decfa57679e1f3dd5d819caeb0de69f4777f15fcb8498921a24febf5877fa7644be6a878d7de2a6a7e36c4bb396f9a74322192e5dae3069da933cee362a0b8e6be2b43e4e589bda9ae70e782f1f3052827b6fb6cd155a3634e03898cff71a1f52ff79eeacb5b2606d6"}],"hdr":{"ev":"header","schema":"sentinelwipe.wipe.telemetry/1","device":"image file unknown unknown [image]","sector_size":512,"total_sectors":524288,"method":"single_pass_seeded_random_shake128","simulated":false,"passes":1,"pattern_seed_hex":"a77ebf107e7c5ba66c01d96507bddb221b75b377ce8e297c69b07a985e2ff981","started_unix_ms":1788436095003,"period_ms":8},"cs":{"total":40,"expected_recoverable":33,"unrecoverable_by_design":7},"gate":0.75}</script>
+<script>"use strict";
+const P = JSON.parse(document.getElementById('payload').textContent);
+const $ = s => document.querySelector(s);
+const COLS=128, ROWS=64, BLOCKS=COLS*ROWS;
+const TOTAL_SECTORS = P.hdr.total_sectors, SECT_PER_BLOCK = TOTAL_SECTORS/BLOCKS;
+const C = {void:[7,9,10], dim:[74,90,97], live:[53,224,138], destroy:[224,72,60], line:[26,34,38]};
+
+/* ---------- compact SHA-256 (works offline, file:// included) ---------- */
+const K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+function sha256(str){
+  const b=new TextEncoder().encode(str), l=b.length, wl=((l+8>>6)+1)*16, w=new Int32Array(wl);
+  for(let i=0;i<l;i++) w[i>>2]|=b[i]<<(24-8*(i%4));
+  w[l>>2]|=0x80<<(24-8*(l%4)); w[wl-1]=l*8;
+  let H=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  const R=(n,x)=>(x>>>n)|(x<<(32-n));
+  for(let j=0;j<wl;j+=16){
+    const m=new Int32Array(64);
+    for(let i=0;i<16;i++) m[i]=w[j+i];
+    for(let i=16;i<64;i++){const a=m[i-15],c=m[i-2];
+      m[i]=(((R(7,a)^R(18,a)^(a>>>3))+m[i-16])|0)+(((R(17,c)^R(19,c)^(c>>>10))+m[i-7])|0)|0;}
+    let [a,bb,c,d,e,f,g,h]=H;
+    for(let i=0;i<64;i++){
+      const t1=(h+(R(6,e)^R(11,e)^R(25,e))+((e&f)^(~e&g))+K[i]+m[i])|0;
+      const t2=((R(2,a)^R(13,a)^R(22,a))+((a&bb)^(a&c)^(bb&c)))|0;
+      h=g;g=f;f=e;e=(d+t1)|0;d=c;c=bb;bb=a;a=(t1+t2)|0;}
+    H=[H[0]+a|0,H[1]+bb|0,H[2]+c|0,H[3]+d|0,H[4]+e|0,H[5]+f|0,H[6]+g|0,H[7]+h|0];
+  }
+  return H.map(x=>((x>>>0).toString(16).padStart(8,'0'))).join('');
+}
+
+/* ---------- sector map ---------- */
+const cv=$('#map'); cv.width=COLS; cv.height=ROWS;
+const cx=cv.getContext('2d',{alpha:false}); cx.imageSmoothingEnabled=false;
+const img=cx.createImageData(COLS,ROWS);
+const state=new Uint8Array(BLOCKS);        // 0 untouched 1 recoverable 2 writing 3 wiped
+const baseline=new Uint8Array(BLOCKS);
+function markExtents(list){
+  for(const e of list){
+    const s0=Math.floor(e[0]/512), s1=Math.floor((e[0]+e[1]-1)/512);
+    for(let s=s0;s<=s1;s+=SECT_PER_BLOCK){
+      const b=Math.floor(s/SECT_PER_BLOCK); if(b>=0&&b<BLOCKS) baseline[b]=1;
+    }
+    const bEnd=Math.floor(s1/SECT_PER_BLOCK); if(bEnd<BLOCKS) baseline[bEnd]=1;
+  }
+}
+for(const r of P.pre.rows) if(r.a) markExtents(r.e);
+const RECOVERABLE_BLOCKS = baseline.reduce((n,v)=>n+v,0);
+
+function paint(){
+  const d=img.data;
+  for(let i=0;i<BLOCKS;i++){
+    let c;
+    switch(state[i]){
+      case 1: c=C.live; break;
+      case 2: c=C.destroy; break;
+      case 3: c=C.line; break;
+      default: c=C.dim;  // untouched: full dim, brighter than wiped
+    }
+    const o=i*4, on=state[i]===1?1:(state[i]===2?1:(state[i]===3?0.26:0.62));
+    d[o]=c[0]*on+C.void[0]*(1-on); d[o+1]=c[1]*on+C.void[1]*(1-on);
+    d[o+2]=c[2]*on+C.void[2]*(1-on); d[o+3]=255;
+  }
+  cx.putImageData(img,0,0);
+}
+function resetMap(showBaseline){
+  for(let i=0;i<BLOCKS;i++) state[i]= showBaseline? baseline[i] : 0;
+  paint();
+}
+$('#mapmeta').textContent = BLOCKS.toLocaleString()+' blocks · '+SECT_PER_BLOCK+' sectors each';
+
+/* ---------- entropy plot ---------- */
+const ecv=$('#ent'); const EW=320, EH=96; ecv.width=EW*2; ecv.height=EH*2;
+const ex=ecv.getContext('2d'); ex.scale(2,2);
+function drawEntropy(n){
+  ex.fillStyle='#050708'; ex.fillRect(0,0,EW,EH);
+  ex.strokeStyle='#1A2226'; ex.lineWidth=1;
+  ex.beginPath(); ex.moveTo(28,4); ex.lineTo(28,EH-14); ex.lineTo(EW-6,EH-14); ex.stroke();
+  ex.fillStyle='#4A5A61'; ex.font='9px ui-monospace,monospace';
+  ex.fillText('8.0',4,10); ex.fillText('7.0',4,EH-16); ex.fillText('sector position',30,EH-4);
+  const lo=6.9, hi=8.02, X=s=>28+(EW-36)*s, Y=v=>(EH-14)-((v-lo)/(hi-lo))*(EH-20);
+  if(n<=0) return;
+  ex.strokeStyle='#35E08A'; ex.lineWidth=1.5; ex.beginPath();
+  for(let i=0;i<n;i++){
+    const f=P.tele[i], s=f.bd/P.tele[P.tele.length-1].bd;
+    const x=X(s), y=Y(Math.min(f.en,hi)); i?ex.lineTo(x,y):ex.moveTo(x,y);
+  }
+  ex.stroke();
+  const last=P.tele[n-1];
+  ex.fillStyle='#35E08A'; ex.font='10px ui-monospace,monospace';
+  ex.fillText(last.en.toFixed(4), Math.min(X(last.bd/P.tele[P.tele.length-1].bd)+4, EW-40), Y(Math.min(last.en,hi))-4);
+}
+drawEntropy(0);
+
+/* ---------- hex ---------- */
+function drawHex(hexStr, sector){
+  const per = window.innerWidth<560?8:16;
+  const bytes=[]; for(let i=0;i<hexStr.length;i+=2) bytes.push(parseInt(hexStr.substr(i,2),16));
+  let out='';
+  for(let r=0;r<bytes.length;r+=per){
+    const row=bytes.slice(r,r+per);
+    const off=(sector*512+r).toString(16).padStart(8,'0');
+    const hx=row.map(b=>b.toString(16).padStart(2,'0')).join(' ');
+    const as=row.map(b=>(b>=32&&b<127)?String.fromCharCode(b):'.').join('');
+    out+='<span class="off">'+off+'</span>  '+hx.padEnd(per*3-1,' ')+'  <span class="asc">'+
+         as.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</span>\n';
+  }
+  $('#hex').innerHTML=out;
+}
+
+/* ---------- carve table ---------- */
+const WCOL=['#35E08A','#48C8E0','#A8BEC6','#4A5A61'];
+function rowHTML(r){
+  const segs=r.w.map((v,i)=>({v,c:WCOL[i]}));
+  let x=0, bars='';
+  for(const s of segs){ const w=s.v*100; bars+='<i style="left:'+x+'%;width:'+w+'%;background:'+s.c+'"></i>'; x+=w; }
+  const cls = r.a? '' : ' rej';
+  const sc = r.a ? '<span class="live">'+r.t.toFixed(4)+'</span>' : '<span class="dim">'+r.t.toFixed(4)+'</span>';
+  return '<div class="trow'+cls+'">'+
+    '<span class="k">'+r.k+'</span>'+
+    '<span class="o">'+r.o.toLocaleString()+' <span style="color:var(--dim)">/ '+r.l.toLocaleString()+' B'+(r.f==='reassembled'?' · 2 frag':'')+'</span></span>'+
+    '<span class="bar">'+bars+'<span class="g" style="left:'+(P.gate*100)+'%"></span></span>'+
+    '<span class="sc">'+sc+'<br><span style="color:var(--dim);font-size:9px">'+r.s+'</span></span>'+
+  '</div>';
+}
+let rowTimer=null;
+function fillTable(rows, note){
+  clearInterval(rowTimer);
+  const host=$('#rows'); host.innerHTML='';
+  $('#emptynote').style.display = note? 'block':'none';
+  if(note) $('#emptynote').innerHTML=note;
+  let i=0;
+  rowTimer=setInterval(()=>{
+    if(i>=rows.length){clearInterval(rowTimer);return;}
+    host.insertAdjacentHTML('beforeend', rowHTML(rows[i++]));
+  }, 26);
+}
+
+/* ---------- top strip ---------- */
+function strip(items){
+  $('#strip').innerHTML = items.map(([l,v,c])=>
+    '<div><div class="lbl">'+l+'</div><div class="v '+(c||'')+'">'+v+'</div></div>').join('');
+}
+const recallPre = 28, planted = P.cs.total;
+strip([['Medium','256 MiB'],['Planted',planted],['Admitted','—'],['Entropy','7.061690']]);
+
+/* ---------- certificate ---------- */
+const W=P.wipe, ent=W.entropy_bits_per_byte, ver=(W.verification.passes||[])[0]||{}, aud=W.audit.overwrite||{};
+const core = {
+  run_id: (W.run&&W.run.run_id)||P.hdr.schema,
+  target: 'image file, 268,435,456 B',
+  method: P.hdr.method,
+  medium_witness_before: (W.sanitize&&W.sanitize.medium_witness_before)||'n/a (no firmware primitive attempted)',
+  medium_witness_after:  (W.sanitize&&W.sanitize.medium_witness_after)||'n/a',
+  audit_verdict: aud.code||'—',
+  verification_verdict: ver.verdict||'—',
+  outcome: W.outcome.code,
+  baseline_recovered: recallPre, residual_recovered: 0, planted: planted
+};
+function certFields(signed){
+  const f=[
+    ['Standard','NIST SP 800-88 Rev. 1 · Clear'],
+    ['Method', core.method],
+    ['Medium','268,435,456 B · 524,288 sectors · 512 B'],
+    ['Entropy', ent.before.toFixed(6)+' → '+ent.after.toFixed(6)+' bits/byte'],
+    ['Verification', (ver.verdict||'')+'<br><span style="color:var(--warn)">coverage '+
+       ((ver.coverage_fraction||0)*100).toFixed(4)+'% · '+(ver.sectors_verified||0).toLocaleString()+
+       ' of '+(ver.sectors_unverified+ver.sectors_verified||0).toLocaleString()+' sectors</span>'],
+    ['Timing audit','<span class="live">'+(aud.code||'')+'</span> · measured '+
+       ((aud.measured_duration_ns||0)/1e6).toFixed(3)+' ms vs floor '+((aud.expected_min_duration_ns||0)/1e6).toFixed(3)+' ms'],
+    ['Baseline carve','<span class="live">'+recallPre+' of '+planted+'</span> recovered byte-exact'],
+    ['Residual carve','<span class="live">0 of '+planted+'</span> recovered · '+P.post.c.records+
+       ' candidates scanned, '+P.post.c.admitted+' admitted'],
+    ['Scope', (W.outcome.whole_medium_claim? 'whole medium' : '<span class="warn">'+(W.outcome.sanitized_scope||'sampled sectors only')+'</span>')],
+    ['Outcome', core.outcome]
+  ];
+  $('#cfields').innerHTML=f.map(([k,v])=>'<div class="crow"><span class="k">'+k+'</span><span class="v">'+v+'</span></div>').join('');
+  $('#limlist').innerHTML=[
+    'Read-back verification covered '+((ver.coverage_fraction||0)*100).toFixed(4)+
+      '% of the medium. Sampling is not proof of the whole medium; outcome is '+W.outcome.code+'.',
+    'Largest run of consecutive sectors the sampling plan never touches: '+
+      (W.verification.largest_unsampled_run_sectors||0).toLocaleString()+' sectors ('+
+      (((W.verification.largest_unsampled_run_sectors||0)*512/268435456)*100).toFixed(4)+
+      '% of the medium). A region left unwiped inside that run would pass a sampled verdict. --verify exhaustive closes it.',
+    'No firmware sanitize primitive was issued: this is a host overwrite of an image file, not a device purge.',
+    'Recovery is measured against a planted corpus of known SHA-256. In the field there is no manifest to join against.',
+    '12 of 40 planted files were not recovered: 5 plaintext carry no signature, 5 need fragment reassembly, 2 were fragmented deliberately to defeat this engine.',
+    'Ed25519 signature and Merkle chain anchoring land in Phase 4. The digest below is SHA-256 over deterministic_core.'
+  ].map(t=>'<li>'+t+'</li>').join('');
+}
+certFields(false);
+
+let signedDigest=null, tampered=false;
+function coreString(t){
+  const c=Object.assign({},core);
+  if(t) c.audit_verdict = c.audit_verdict.replace('UNVERIFIED','UNVERIFIEC'); // one byte flipped
+  return JSON.stringify(c);
+}
+function sign(){
+  tampered=false; signedDigest=sha256(coreString(false));
+  const b=$('#sealbox'); b.className='on'; $('#sealh').textContent='Signed · deterministic_core';
+  const r=$('#root'); r.textContent=signedDigest; r.classList.remove('sealed'); void r.offsetWidth; r.classList.add('sealed');
+  $('#phase').textContent='SEALED';
+}
+function tamper(){
+  if(!signedDigest){ sign(); }
+  tampered=true;
+  const now=sha256(coreString(true));
+  const b=$('#sealbox'); b.className='bad';
+  $('#sealh').textContent='VERIFICATION FAILED · deterministic_core altered';
+  $('#root').innerHTML='expected '+signedDigest+'<br>recomputed '+now+
+    '<br><span style="color:var(--destroy)">field: audit_verdict — 1 byte differs</span>';
+  $('#phase').textContent='TAMPER DETECTED';
+}
+
+/* ---------- sequence ---------- */
+let raf=null, slow=20, phase='idle';
+const RATES=[1,5,20]; let ri=2;
+$('#bRate').textContent=slow+'× slow';
+function setPhase(p,c){ phase=p; $('#phase').textContent=p; $('#phase').className=c||''; }
+
+function runWipe(done){
+  setPhase('WIPING · single-pass seeded random','destroy');
+  const T=P.tele, t0=performance.now(), span=T[T.length-1].t;
+  let i=0;
+  (function frame(){
+    const el=(performance.now()-t0)/slow;
+    while(i<T.length && T[i].t<=el){
+      const f=T[i];
+      const b0=Math.floor(f.fs/SECT_PER_BLOCK), b1=Math.floor((f.fs+f.n-1)/SECT_PER_BLOCK);
+      for(let b=0;b<BLOCKS;b++) if(state[b]===2) state[b]=3;
+      for(let b=b0;b<=b1&&b<BLOCKS;b++) state[b]=2;
+      drawHex(f.hx, f.hs);
+      drawEntropy(i+1);
+      strip([['Medium','256 MiB'],['Planted',planted],['Written',(f.bd/1048576).toFixed(1)+' MiB'],
+             ['Entropy',f.en.toFixed(6),'live'],['Throughput',(f.bps/1048576).toFixed(0)+' MiB/s'],
+             ['Head sector',f.hs.toLocaleString()],['Pass','1 of 1'],['Elapsed',f.t.toFixed(0)+' ms']]);
+      i++;
+    }
+    paint();
+    if(i<T.length){ raf=requestAnimationFrame(frame); }
+    else { for(let b=0;b<BLOCKS;b++) state[b]=3; paint();
+           setPhase('WIPE COMPLETE','live'); done&&done(); }
+  })();
+}
+function runSequence(){
+  cancelAnimationFrame(raf); clearInterval(rowTimer);
+  resetMap(false); $('#sealbox').className=''; $('#sealh').textContent='Unsigned'; $('#root').textContent='—';
+  signedDigest=null;
+  setPhase('BASELINE CARVE','live');
+  resetMap(true);
+  strip([['Medium','256 MiB'],['Planted',planted],['Admitted',P.pre.c.admitted,'live'],
+         ['Recovered',recallPre+' of '+planted,'live'],['Blocks live',RECOVERABLE_BLOCKS.toLocaleString()],
+         ['Entropy','7.061690'],['Scanned',P.pre.c.records],['Rejected',P.pre.c.rejected]]);
+  fillTable(P.pre.rows,null);
+  setTimeout(()=>{
+    runWipe(()=>{
+      setPhase('RESIDUAL CARVE · identical parameters','live');
+      strip([['Medium','256 MiB'],['Planted',planted],['Admitted',0,'live'],
+             ['Recovered','0 of '+planted,'live'],['Scanned',P.post.c.records],
+             ['Rejected',P.post.c.rejected],['Entropy',ent.after.toFixed(6),'live'],['Pass','done']]);
+      fillTable(P.post.rows,
+        '<span class="live">0 admitted.</span> The randomised medium produced '+P.post.c.records+
+        ' signature hits. Structure validation rejected every one. <span style="color:var(--dim)">'+
+        'Signature matching alone would have reported '+P.post.c.records+' files.</span>');
+      setTimeout(sign, 1600);
+    });
+  }, P.pre.rows.length*26+400);
+}
+$('#bPlay').onclick=runSequence;
+$('#bReset').onclick=()=>{cancelAnimationFrame(raf);clearInterval(rowTimer);resetMap(false);
+  $('#rows').innerHTML='';$('#emptynote').style.display='none';drawEntropy(0);
+  $('#hex').textContent='awaiting telemetry';setPhase('IDLE');
+  $('#sealbox').className='';$('#sealh').textContent='Unsigned';$('#root').textContent='—';signedDigest=null;
+  strip([['Medium','256 MiB'],['Planted',planted],['Admitted','—'],['Entropy','7.061690']]);};
+$('#bRate').onclick=()=>{ri=(ri+1)%RATES.length;slow=RATES[ri];
+  $('#bRate').textContent=slow===1?'1× real':(slow+'× slow');};
+let stepI=0;
+$('#bStep').onclick=()=>{
+  if(stepI>=P.tele.length) return;
+  const f=P.tele[stepI];
+  const b0=Math.floor(f.fs/SECT_PER_BLOCK), b1=Math.floor((f.fs+f.n-1)/SECT_PER_BLOCK);
+  for(let b=0;b<BLOCKS;b++) if(state[b]===2) state[b]=3;
+  for(let b=b0;b<=b1&&b<BLOCKS;b++) state[b]=2;
+  drawHex(f.hx,f.hs); drawEntropy(stepI+1); paint();
+  setPhase('STEP '+(stepI+1)+' of '+P.tele.length,'destroy'); stepI++;
+};
+$('#bSign').onclick=sign; $('#bTamper').onclick=tamper;
+
+/* ---------- tabs ---------- */
+const tabs=[['#tC','#paneC'],['#tB','#paneB'],['#tD','#paneD']];
+function sel(k){ tabs.forEach(([b,p],i)=>{ $(b).setAttribute('aria-selected', i===k?'true':'false');
+  $(p).dataset.on = i===k?'1':'0'; }); }
+tabs.forEach(([b],i)=>$(b).onclick=()=>sel(i));
+sel(0);
+resetMap(false);
+addEventListener('resize',()=>{ const f=P.tele[Math.max(0,stepI-1)]; if(f) drawHex(f.hx,f.hs); });
+</script>

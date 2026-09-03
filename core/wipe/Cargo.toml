@@ -4,4 +4,32 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+# The library is the driver; the binary is the operator's handle on it. The
+# binary is named `wipe`, not `sentinelwipe-wipe`, for the same reason `carve`
+# is named `carve`: `tests/test_wipe_residue.py` names
+# `core/target/release/wipe` as the path it measures residue through, and that
+# contract is honoured rather than renamed.
+[lib]
+name = "sentinelwipe_wipe"
+path = "src/lib.rs"
+
+[[bin]]
+name = "wipe"
+path = "src/main.rs"
+
+# NECESSARY ADDITION, ANNOUNCED, AND NOT A NEW DEPENDENCY IN THE SENSE
+# CLAUDE.md MEANS.
+#
+# `sentinelwipe-device` is a member of this same workspace, written in this
+# same phase. Nothing is fetched, no lockfile entry is created, and the crate
+# graph gains no third-party code: `cargo tree` for this crate is still two
+# nodes, both ours.
+#
+# It is necessary because the phase brief requires the wipe layer to run
+# "through the Device trait ONLY". Until this line existed, `passes.rs`
+# satisfied its own mirror trait `SectorIo` and the Windows-parity claim on the
+# architecture slide was true inside `core/device` and nowhere above it. The
+# adapter that closes that seam is `DeviceIo` in `src/lib.rs`; it is the only
+# place in this crate that names the device layer.
 [dependencies]
+sentinelwipe-device = { path = "../device" }

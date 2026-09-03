@@ -21,3 +21,6 @@ version = "0.0.0"
 [[package]]
 name = "sentinelwipe-wipe"
 version = "0.0.0"
+dependencies = [
+ "sentinelwipe-device",
+]
