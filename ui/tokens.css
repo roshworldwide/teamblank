@@ -1,0 +1,92 @@
+/* AURUM Edition 27.0 · Meridian — the tokens SENTINELWIPE uses.
+   Transcribed from the standard, not from the build prompt: the prompt's token
+   block mislabelled the gold ramp (AU-300 is PRIME, not AU-400), allowed gold
+   18% of a viewport where AURUM allows 1%, carried four durations that are not
+   on AURUM's motion scale, added an 8px radius that is not on its radius scale,
+   and dropped the solar signal entirely. Part 12 finish: Aurum Gold.
+   G-01: every colour, size, radius and duration in ui/ resolves to a token here. */
+:root{
+  /* ---- Ramp A · OBSIDIAN — structure, backgrounds, surfaces --------- */
+  --ob-000:#050506;  /* void        */  --ob-050:#09090B;  /* canvas      */
+  --ob-100:#0C0C0F;  /* surface-1   */  --ob-150:#101014;  /* surface-2   */
+  --ob-200:#16161A;  /* hover       */  --ob-300:#1C1D22;  /* pressed     */
+  --ob-400:#26272E;  /* line        */  --ob-500:#33353D;  /* disabled    */
+
+  /* ---- Ramp B · TITANIUM — text and metalwork ---------------------- */
+  --ti-100:#F4F4F6;  /* text-1      */  --ti-200:#D6D7DA;  /* value       */
+  --ti-300:#C2C4C8;  /* body+       */  --ti-400:#A7AAB0;  /* text-2      */
+  --ti-500:#8A8D93;  /* natural     */  --ti-600:#7E8188;  /* text-3      */
+  --ti-700:#55575D;  /* faint       */  --ti-800:#3A3C42;  /* ghost       */
+
+  /* ---- Ramp D · AURUM GOLD — the 1% -------------------------------- */
+  --au-050:#FBF3E4;  --au-100:#F5E7CC;  --au-200:#EDD3A2;
+  --au-300:#E8C88F;  /* ★ PRIME — the accent. One element per view (D-08) */
+  --au-400:#D9B279;  /* hover  */      --au-500:#C89E63;  /* press  */
+  --au-600:#A87E45;  --au-700:#8A6533;  --au-800:#6B4C24;  --au-900:#463116;
+  --au-on:#1A1206;   /* text ON gold. Never white on gold. 11.6:1 */
+
+  /* ---- Signals — engineering states, never decoration --------------- */
+  --patina:#6FAE8F;  --patina-field:#14261E;   /* verified, admitted, pass  */
+  --solar:#D98E41;   --solar-field:#2B1E10;    /* partial, degraded, sampled*/
+  --oxide:#C96F5E;   --oxide-field:#2A1512;    /* refused, failed, destroy  */
+  --glacier:#7FA6C9; --glacier-field:#131C25;  /* informational, model      */
+
+  /* ---- Lines and light --------------------------------------------- */
+  --hair:rgba(255,255,255,.08);      /* au.line.hair   */
+  --hair-strong:rgba(255,255,255,.14);
+  --inner-top:rgba(255,255,255,.10); /* the machined edge, 90° sun */
+  --focus:rgba(232,200,143,.45);
+  --selection:rgba(232,200,143,.28);
+  --scrim:rgba(5,5,6,.60);
+
+  /* ---- Space · 4-pt lattice, ten stops ------------------------------ */
+  --sp-1:4px;  --sp-2:8px;  --sp-3:12px; --sp-4:16px; --sp-5:24px;
+  --sp-6:32px; --sp-7:48px; --sp-8:64px; --sp-9:96px; --sp-10:128px;
+
+  /* ---- Radius · concentricity law: inner = outer − inset ------------ */
+  --r-2:6px; --r-3:10px; --r-4:14px; --r-5:20px; --r-6:28px; --r-cap:999px;
+
+  /* ---- Motion · five tempos. A duration off this scale is forbidden - */
+  --t-instant:80ms; --t-quick:160ms; --t-standard:240ms;
+  --t-entrance:400ms; --t-ceremony:700ms;
+  --ease:cubic-bezier(.22,1,.36,1);   /* au.motion.ease.fallback */
+
+  /* ---- Elevation · shadows double per level ------------------------- */
+  --e1:0 1px 2px rgba(0,0,0,.30);
+  --e2:0 2px 4px rgba(0,0,0,.35), 0 4px 12px rgba(0,0,0,.25);
+  --e3:0 4px 8px rgba(0,0,0,.40), 0 8px 24px rgba(0,0,0,.30);
+  --e4:0 8px 16px rgba(0,0,0,.45), 0 16px 48px rgba(0,0,0,.35);
+  --e5:0 12px 24px rgba(0,0,0,.50), 0 24px 64px rgba(0,0,0,.40), 0 0 48px rgba(232,200,143,.07);
+
+  /* ---- Type · SF Pro, system-resident. Never vendored: SF is Apple-
+         licensed and this repository is public. ------------------------ */
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue",Inter,system-ui,sans-serif;
+  --mono:"SF Mono",ui-monospace,Menlo,"JetBrains Mono",monospace;
+}
+
+/* Nine sizes. No tenth. size/line-height · weight · tracking */
+.t-display-xl{font:700 64px/68px var(--sans);letter-spacing:-.024em}
+.t-display-l {font:700 48px/52px var(--sans);letter-spacing:-.022em}
+.t-display-m {font:700 34px/40px var(--sans);letter-spacing:-.018em}
+.t-title     {font:600 24px/30px var(--sans);letter-spacing:-.014em}
+.t-headline  {font:600 18px/24px var(--sans);letter-spacing:-.008em}
+.t-body      {font:400 15px/22px var(--sans);letter-spacing:-.002em}
+.t-callout   {font:500 13px/18px var(--sans)}
+.t-caption   {font:400 12px/16px var(--sans);letter-spacing:.006em}
+.t-overline  {font:600 11px/14px var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--au-300)}
+
+/* Every numeral in this product is monospace, tabular, and carries its unit. */
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums lining-nums}
+.unit{color:var(--ti-600);font-size:.72em;margin-left:.34em}
+
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--ob-050);color:var(--ti-400);font:400 15px/22px var(--sans);
+     -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+::selection{background:var(--selection);color:var(--au-050)}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+/* N-3 peripheral calm + G-07: reduced motion is a first-class path. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
+                       transition-duration:.01ms!important;scroll-behavior:auto!important}
+}
