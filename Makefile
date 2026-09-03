@@ -3,7 +3,7 @@
 # reports success for work that has not been done.
 
 .DEFAULT_GOAL := help
-.PHONY: help fixtures clean-fixtures build test ui ui-serve ui-check demo verify
+.PHONY: help fixtures clean-fixtures build test ui ui-serve ui-check app demo verify
 
 # The fixture is generated from a seed and never committed. OUT is gitignored
 # and is the ONLY path the Phase-0 write guard allows the builder to write to.
@@ -83,6 +83,18 @@ ui-serve:
 # CLAUDE.md's six steps. Steps 1-4 run the real engine here. Step 5 is Phase 4:
 # core/ledger is a one-line stub, so there is no Ed25519 signature and no Merkle
 # root, and the instrument says so on its face rather than drawing one.
+# The desktop shell: the two pages in a native window over the platform webview.
+# No Chromium bundle, no network, runs on an air-gapped machine with nothing
+# installed. Needs tauri-cli once: cargo install tauri-cli --locked
+app:
+	@command -v cargo-tauri >/dev/null || { \
+	  echo "sentinelwipe: tauri-cli not installed. Once: cargo install tauri-cli --locked" >&2; exit 3; }
+	uv run python desktop/stage.py
+	cd desktop && cargo tauri build --bundles app
+	@echo ""
+	@ls -d desktop/target/release/bundle/macos/*.app 2>/dev/null | head -1 | \
+	  xargs -I{} sh -c 'echo "sentinelwipe: {} ($$(du -sh "{}" | cut -f1))"'
+
 demo: build
 	@echo "── 1 · a 256 MB image, 40 planted files of known SHA-256. Nothing is mounted."
 	@test -f "$(IMAGE)" || $(MAKE) --no-print-directory fixtures

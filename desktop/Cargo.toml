@@ -1,0 +1,23 @@
+# The desktop shell is a STANDALONE crate, deliberately outside the core
+# workspace: the webview dependency tree is heavy and has no business in the
+# engine's lockfile or its build times. The engine never depends on the shell;
+# the shell never links the engine — it displays what the engine wrote.
+[package]
+name = "sentinelwipe-desktop"
+version = "0.1.0"
+edition = "2021"
+description = "SENTINELWIPE desktop shell — the approach film and the instrument, offline"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+
+# keep out of any parent workspace
+[workspace]
