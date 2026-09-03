@@ -31,6 +31,29 @@ if str(_REPO) not in sys.path:
 
 from fixtures import guard as G  # noqa: E402
 
+# fixtures/guard_vectors.json is the cross-language conformance table: every row
+# is a POSIX path, a POSIX mode and the code both the Python and the Rust guard
+# must return for it. It was measured against the POSIX backend and it is only
+# meaningful there -- the rows name /dev/disk0, /private/tmp and symlink layouts
+# that either do not exist on Windows or mean something else. Re-pointing the
+# table at Windows paths would not be a port; it would be a second table
+# asserting a second set of behaviours, and it would quietly stop being evidence
+# that the two LANGUAGES agree, which is the only thing this file exists to show.
+#
+# So the table stays POSIX-only and this file says so out loud. The Windows
+# backends are checked against each other's behaviour by
+# tests/test_guard_windows.py and core/device/src/guard/windows.rs, and the
+# guarantees that differ are tabulated in fixtures/guard/__init__.py and
+# docs/architecture.md D7.
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "guard_vectors.json is the POSIX cross-language conformance table; its rows "
+        "are POSIX paths and POSIX modes. Windows parity is not asserted by this "
+        "table and is not claimed anywhere. See docs/architecture.md D7."
+    ),
+)
+
 VECTORS = _REPO / "fixtures" / "guard_vectors.json"
 
 

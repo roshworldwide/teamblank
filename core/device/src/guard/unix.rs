@@ -112,8 +112,15 @@
 //! * **Detail strings.** Only `code`, `allowed` and `kind` are conformance
 //!   surface. The human-readable `detail` is written to be equivalent in
 //!   substance, not byte-identical.
-
-#![cfg(unix)]
+//!
+//! # This file is the Unix backend
+//!
+//! `guard/mod.rs` selects it on `cfg(unix)`. It is byte-for-byte the
+//! implementation the vector table in `fixtures/guard_vectors.json` was
+//! measured against, and nothing in this file was changed to accommodate
+//! Windows. The Windows backend is a separate file with a separate and
+//! explicitly weaker containment story: see `guard/windows.rs` and
+//! docs/architecture.md D7.
 
 use std::ffi::CString;
 use std::fs::{File, Metadata};

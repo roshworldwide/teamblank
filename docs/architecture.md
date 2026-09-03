@@ -523,3 +523,88 @@ This is why the fixture exists and why recovery is joined to ground truth by SHA
 row count. In the field there is no manifest to join against, which is exactly why the per-object
 score is published with its four terms visible instead of collapsed into a count of recoveries.
 `handover_briefing.mov` is the case that proves a row count would have lied.
+
+## D7 · Windows as a development platform — one API, two guards, one of them weaker
+
+**Implemented 2026-09-03. Verified on Windows 11 26200, rustc 1.97.1, CPython 3.10.
+484 cargo tests and the full pytest suite pass there.**
+
+The workspace did not compile on Windows at all. `core/device/src/guard.rs` carried
+`#![cfg(unix)]` while `lib.rs` named `guard::Policy` unconditionally, so `device` failed
+with 13 errors and `wipe` failed behind it. Two of six teammates are on Windows; for them
+rust-analyzer was red across the whole workspace and no test could run.
+
+### What was done
+
+The guard is now a directory with one backend per platform and a selector, in both
+languages. The POSIX files are byte-for-byte what they were — `core/device/src/guard.rs`
+moved to `guard/unix.rs` and `fixtures/guard.py` to `fixtures/guard/posix.py` with no
+edit but the removal of the `cfg` attribute — so `fixtures/guard_vectors.json`, the
+cross-language conformance table, still measures exactly the code it was measured
+against.
+
+### The two backends do not guarantee the same thing
+
+| | POSIX | Windows |
+|---|---|---|
+| containment | `(st_dev, st_ino)` identity walk | **same** (Python) / canonicalised components (Rust) |
+| link refusal | `O_NOFOLLOW` on every component | reparse-point check per component |
+| descent | `openat` from the root, re-checked on the fd | resolve, open, re-check on the handle |
+| **TOCTOU** | **hardened** | **not hardened** |
+| device targets | gated, allowlisted, arming required | **always refused** |
+| `DENY_MULTIPLE_HARDLINKS` | enforced | **unreachable** — `st_nlink` is always 1 there |
+
+The TOCTOU row is the real difference and it is not softened anywhere. `os.supports_dir_fd`
+is empty on Windows and there is no `O_NOFOLLOW`; the Rust identity primitives that would
+substitute — `volume_serial_number`, `file_index` — are behind the unstable
+`windows_by_handle` feature, which a zero-dependency crate cannot use. So the Windows
+backend cannot prove the path it checked is the path it opened. It re-checks on the open
+handle, which narrows the window and does not close it.
+
+**Every allow the Windows backend issues carries that sentence in its own `detail`**, so an
+operator reading an audit line never has to know which platform produced it to know what it
+is worth. Rule 1 says the tool never claims more than it verified; a guard that quietly
+implied the POSIX guarantee on Windows would be exactly that claim.
+
+Nothing about the Windows backend widens the allowed set. It refuses device and verbatim
+namespaces outright, refuses reserved DOS device names — `out\NUL.img` is a device, in every
+directory and at any extension — and refuses to build a policy that arms devices at all.
+
+### One rule that had to be inverted, and why
+
+The POSIX guard refuses a root that **is** a system directory or **contains** one. The first
+Windows draft also refused any root **under** one, and that refused the repository: on
+Windows every checkout lives under `C:\Users\<name>`, because there is no `/home`. A guard
+that makes itself unusable protects nothing. So `FORBIDDEN_UNDER` is `FORBIDDEN_TOP` minus
+`USERS`, and `C:\Users` as a root, and the operator's own profile directory as a root, are
+both still refused. This is the one place the two platforms' rules genuinely differ in shape
+rather than in strength, and it is named here rather than left in a constant.
+
+### Reproducibility, now demonstrated on two operating systems
+
+`fixtures/build_image.py` runs on Windows and produces image sha256
+`d85612b255ff8e72e1ab8d7a34c227b67c3cb3acda75e2a92e5042758ac2df41` and manifest sha256
+`1808494ecc3cd5e21d0d9790af5478cda6aa7011b531e20ea1655e3edbc2cd69` — identical to the
+committed record captured on macOS, under a CRLF working tree. Rule 6 previously rested on
+three runs on one laptop; the cross-platform half of it is no longer an inference.
+
+### Two portability defects this uncovered, both real
+
+- **`carve` could leak a host path into a report.** `relative_label` tested
+  `Path::is_absolute`, which on Windows requires a drive prefix, so a POSIX path such as
+  `/private/var/tmp/fixture.img` reported *relative* and was copied into `run.image_path`
+  whole. The predicate is now "has a root component or a prefix", which catches both
+  spellings on both platforms.
+- **`ImageFile` misnamed the cause for a directory.** It opened first and checked
+  `is_file()` after, but Windows will not open a directory at all, so the caller was told
+  `DEVICE_IO` "access denied" — a permission failure that never happened. It now classifies
+  before opening, and both platforms name the same cause.
+
+### What is not claimed
+
+No Windows block device has ever been touched, because none can be. The Windows guard has
+no race-freedom property and no test pretends to cover one. `DENY_MULTIPLE_HARDLINKS` is
+published and unreachable there, so a hard link from outside an allowlisted root into it is
+**not** detected on Windows. Coverage is `tests/test_guard_windows.py` and the unit tests in
+`core/device/src/guard/windows.rs`; the POSIX suites skip on Windows and say what they are
+not covering rather than reporting green.

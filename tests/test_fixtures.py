@@ -656,8 +656,21 @@ _BANNED = re.compile(
     r"|zipfile\.|ZipFile|ZIP_DEFLATED|bz2\.|lzma\.|import\s+random\b|random\.(?!$)"
     r"|time\.time\(|datetime\.|uuid\.|os\.urandom")
 
-_FIXTURE_MODULES = ("guard.py", "deflate.py", "corpus.py", "fat32.py", "plan.py",
+# Every module the fixture build imports, checked for banned nondeterminism.
+#
+# The guard is a package with one module per platform, and BOTH backends are
+# listed: a rule enforced only on the one this laptop happens to run is not
+# enforced. The dispatcher is listed too, because `os.name` branching is exactly
+# where a platform-conditional source of nondeterminism would hide.
+_FIXTURE_MODULES = ("guard/__init__.py", "guard/posix.py", "guard/windows.py",
+                    "deflate.py", "corpus.py", "fat32.py", "plan.py",
                     "build_image.py")
+
+#: The guard is the one place that legitimately reads host state -- it is the
+#: write allowlist, and it cannot decide containment without `os.stat` and
+#: `os.environ`. The exemption is keyed on the package prefix so it covers both
+#: backends and nothing else. See `test_the_guard_exemption_is_narrow`.
+_OS_EXEMPT_PREFIX = "guard/"
 
 
 def _code_lines(path: Path):
@@ -798,7 +811,7 @@ def test_no_banned_module_survives_an_import_alias():
         path = _REPO / "fixtures" / name
         for lineno, full in resolve_banned_uses(
                 path.read_text(encoding="utf-8"), name,
-                os_exempt=(name == "guard.py")):
+                os_exempt=name.startswith(_OS_EXEMPT_PREFIX)):
             hits.append("fixtures/%s:%d: %s" % (name, lineno, full))
     assert not hits, "banned use in the fixture path:\n  " + "\n  ".join(hits)
 

@@ -193,6 +193,35 @@ cp out/fixture.img /tmp/copy.img
 `make fixtures` regenerates the fixture from a seed rather than shipping a 256 MB binary,
 and refuses to overwrite the committed digests unless `--no-check-expected` is passed.
 
+### On Windows
+
+The engine builds and the whole suite runs on Windows; the demo itself is run on
+macOS or Linux. There is no `make` and no `uv` on a stock Windows box and neither is
+required — every target above is one command:
+
+```powershell
+python -m pip install pytest                      # once
+python fixtures/build_image.py --seed sentinelwipe/fixture/v1 --size 256MiB --out out
+cd core; cargo build --release; cargo test
+cd ..; python -m pytest
+```
+
+Measured there: **484 cargo tests and 154 pytest passed, 0 failed** (132 pytest skipped
+— the POSIX guard suites, which say what they are not covering rather than reporting
+green). The fixture builds byte-identical to the macOS record — image sha256
+`d85612b2…8ac2df41`, manifest `1808494e…dbc2cd69` — which makes the cross-platform half
+of the reproducibility rule a measurement rather than an inference.
+
+Two things are deliberately unavailable there. **Block devices**: there is no Windows
+block-device layer, so `\.\PhysicalDriveN` and every DOS device name are refused at the
+guard and a policy that tries to arm devices is refused at construction. **A
+TOCTOU-hardened write guard**: the POSIX guard descends from an allowlisted root with
+`openat(O_NOFOLLOW)` and proves the path it checked is the path it opened; Windows
+exposes no `dir_fd` through `std` or CPython, so its backend resolves, checks, opens and
+re-checks on the handle. That narrows the race and does not close it, and every allow it
+issues says so in its own decision detail. `DENY_MULTIPLE_HARDLINKS` is published and
+unreachable there. Full comparison: [`docs/architecture.md`](docs/architecture.md) D7.
+
 ### The frontend
 
 Two self-contained pages, in this repository, built to the **AURUM** standard (Black

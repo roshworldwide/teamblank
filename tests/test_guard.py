@@ -34,6 +34,27 @@ if str(_REPO) not in sys.path:
 
 from fixtures import guard as G  # noqa: E402
 
+# Every clause below exercises the POSIX backend's attack surface: symlink
+# leaves, symlinked path components, hardlinks from outside a root, /dev/disk0
+# aliases, and the openat(O_NOFOLLOW) descent that defeats them. None of that is
+# reachable on Windows -- there is no O_NOFOLLOW, os.supports_dir_fd is empty,
+# st_nlink is always 1, and creating a symlink needs elevation -- so running
+# these here would report red for a platform difference rather than a defect.
+#
+# The Windows backend is NOT left untested by this skip: tests/test_guard_windows.py
+# covers it, and the difference in what the two backends guarantee is written down
+# in fixtures/guard/__init__.py and docs/architecture.md D7. The skip is loud and
+# names what it is not covering, because a silent skip in a guard suite prints
+# "ok" for work nobody did.
+pytestmark = pytest.mark.skipif(
+    os.name == "nt",
+    reason=(
+        "POSIX guard backend: this file tests O_NOFOLLOW descent, symlink and "
+        "hardlink refusal and /dev device aliases, none of which exist on Windows. "
+        "The Windows backend is covered by tests/test_guard_windows.py."
+    ),
+)
+
 
 IMG = 4 * 1024 * 1024          # 4 MiB
 MIB = 1 << 20

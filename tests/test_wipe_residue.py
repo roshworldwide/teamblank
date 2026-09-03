@@ -63,8 +63,15 @@ OUT = REPO / "out"
 IMAGE = OUT / "fixture.img"
 MANIFEST = OUT / "fixture.manifest.json"
 COMMITTED = REPO / "fixtures" / "manifest.json"
-WIPE_BIN = REPO / "core" / "target" / "release" / "wipe"
-CARVE_BIN = REPO / "core" / "target" / "release" / "carve"
+#: Cargo appends `.exe` on Windows. Without this the binaries are never found
+#: there, every clause in this file skips for a reason that is not true, and
+#: `test_no_command_this_file_issues_ever_names_the_repository` then fails
+#: because nothing ran -- a red that says "vacuous" when the real answer is
+#: "looked for the wrong filename".
+_EXE = ".exe" if os.name == "nt" else ""
+
+WIPE_BIN = REPO / "core" / "target" / "release" / ("wipe" + _EXE)
+CARVE_BIN = REPO / "core" / "target" / "release" / ("carve" + _EXE)
 
 RUN_ID = "sentinelwipe/test/residue/v1"
 
@@ -701,7 +708,22 @@ def test_no_command_this_file_issues_ever_names_the_repository():
     repository root.  A future edit that points the wipe at ``out/fixture.img``
     fails here whether or not the guard would have caught it.
     """
-    assert _COMMANDS, "no command was recorded; this check would be vacuous"
+    # Nothing ran is a legitimate state -- the binaries may not be built, in
+    # which case every clause above skipped and there is nothing to inspect.
+    # Say so rather than failing: a red here would name vacuity when the real
+    # answer is "there was nothing to check yet", and that misdirects whoever
+    # reads it. With the binaries present, an empty list IS vacuity and fails.
+    if not _COMMANDS:
+        if not WIPE_BIN.exists() and not CARVE_BIN.exists():
+            pytest.skip(
+                "NOT VERIFIED: no command ran because neither %s nor %s is built. "
+                "Run: cd core && cargo build --release"
+                % (WIPE_BIN.name, CARVE_BIN.name)
+            )
+        pytest.fail(
+            "no command was recorded even though the binaries exist; this check "
+            "would be vacuous"
+        )
     repo = str(REPO)
     for argv in _COMMANDS:
         binary, args = argv[0], argv[1:]
