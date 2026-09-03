@@ -91,28 +91,37 @@ read the code.
 This is equipment, not a landing page. The reference is an oscilloscope and a
 forensic workstation, not a SaaS dashboard.
 
-Palette, and nothing outside it:
-  --void      #07090A   canvas
-  --panel     #0D1113   surfaces
-  --line      #1A2226   dividers, grid
-  --dim       #4A5A61   inert text, disabled sectors
-  --read      #A8BEC6   body text
-  --live      #35E08A   phosphor — active telemetry, verified states, ONLY
-  --warn      #E0A030   amber — degraded, unverifiable, partial
-  --destroy   #E0483C   red — destructive operations and failed verification
-  --seal      #48C8E0   cyan — signed, chain-anchored, immutable
+**The frontend follows the AURUM design system (Edition 27.0 · Meridian).** AURUM is
+the visual authority for everything under `ui/`: the Titanium Codex palette, the type
+scale, the 4-point lattice, the Concentricity Law, the motion scale and spring
+registry, and the ten G-gates. Where AURUM and this section disagree, AURUM wins.
+Where AURUM and a build prompt disagree, AURUM wins. Where AURUM and a schema
+disagree, the schema wins — AURUM governs how a number looks, never whether it is true.
 
-Rules:
+Finish: **Aurum Gold**, one finish per product. Note that AURUM Part 12 recommends
+Natural Ti for pro instruments and Glacier Ti for telemetry domains "where warmth
+would mislead"; gold is a deliberate choice against that grain, and it is paid for by
+spending gold only on the human's decision (Part 33) and keeping every measured figure
+in titanium and SF Mono.
+
+The rules below are the ones this project adds on top of AURUM, and they still bind:
+
 - Monospace for every number. Tabular figures. Numbers never reflow.
-- --live is the only saturated colour in a resting frame. It marks what is
-  happening right now and nothing else.
-- --destroy appears only during and after destructive operations. Never decorative.
-- No gradients except the entropy heat ramp. No shadows except one 1px inset on
-  panels. No rounded corners above 4px — this is not a consumer app.
-- Density is the aesthetic. Empty space reads as an unfinished student project;
-  packed, aligned telemetry reads as an instrument.
+- Numbers are never abbreviated and never animated. `431,059,458 ns`, not "431 ms",
+  and never a counting-up animation. A figure carried to a precision the data cannot
+  support is detected as bluffing, and the doubt generalises to every other number.
+- **Every verdict shows its own arithmetic** — the inputs that produced it, on the same
+  screen, at the same time. This is the single rule that separates this UI from a
+  dashboard.
+- No fake progress, no fake work. No spinner where a count exists. A choreographed
+  reveal of an *explanation* is permitted; a delay in front of a *result* is not.
+- Density is the aesthetic. Empty space reads as an unfinished student project.
 - Animate only transform and opacity. The sector map is canvas; never DOM nodes.
-- Nothing is ever centred. Left-aligned, grid-locked, engineering drawing.
+- Nothing is ever centred on an instrument surface. Left-aligned, grid-locked.
+
+The nine-colour palette this section used to specify is superseded by AURUM Part 02.
+Its semantics survive in AURUM's four signals: `--live` → patina `#6FAE8F`, `--warn` →
+solar `#D98E41`, `--destroy` → oxide `#C96F5E`, `--seal` → glacier `#7FA6C9`.
 
 ## Voice
 
