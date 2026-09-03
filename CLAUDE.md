@@ -98,11 +98,20 @@ registry, and the ten G-gates. Where AURUM and this section disagree, AURUM wins
 Where AURUM and a build prompt disagree, AURUM wins. Where AURUM and a schema
 disagree, the schema wins — AURUM governs how a number looks, never whether it is true.
 
-Finish: **Aurum Gold**, one finish per product. Note that AURUM Part 12 recommends
-Natural Ti for pro instruments and Glacier Ti for telemetry domains "where warmth
-would mislead"; gold is a deliberate choice against that grain, and it is paid for by
-spending gold only on the human's decision (Part 33) and keeping every measured figure
-in titanium and SF Mono.
+Finish: **Black Titanium** — AURUM's default dark finish, and the one whose own
+description names our domain: *"Cinema, media, telemetry, night. The canonical AURUM
+expression: the void with one warm light in it."* One finish per product, never mixed.
+Axis: **Frontier** — "authority earned by consequence; nothing is decorative because the
+readout is load-bearing." Its four directives are this product: near-black canvas,
+monospaced tabular numerics, legible under stress, and one display element per screen at
+least 4x the body size.
+
+Colour budget: **32 values total** — 13 Titanium, 10 Aurum, 5 Vapor, 4 Signal — and a
+screen may use at most nine. Product code references a semantic **role**, never a ramp
+value: roles reference ramps, ramps reference nothing, and a role that references another
+role is an alias. Gold (`content-accent`) appears **once per viewport**; if two things are
+gold, neither is. Every signal use carries a redundant channel — a glyph, a position or a
+word — because eight per cent of men cannot resolve nominal from abort by hue.
 
 The rules below are the ones this project adds on top of AURUM, and they still bind:
 

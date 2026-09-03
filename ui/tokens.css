@@ -1,92 +1,217 @@
-/* AURUM Edition 27.0 · Meridian — the tokens SENTINELWIPE uses.
-   Transcribed from the standard, not from the build prompt: the prompt's token
-   block mislabelled the gold ramp (AU-300 is PRIME, not AU-400), allowed gold
-   18% of a viewport where AURUM allows 1%, carried four durations that are not
-   on AURUM's motion scale, added an 8px radius that is not on its radius scale,
-   and dropped the solar signal entirely. Part 12 finish: Aurum Gold.
-   G-01: every colour, size, radius and duration in ui/ resolves to a token here. */
+/* ============================================================================
+   AURUM — THE TITANIUM STANDARD · Edition 27.0 · 412 declarations
+   Transcribed from the token appendix (sheet 45) and the semantic layer
+   (sheet 23) of the AURUM deck, not from the build prompt.
+
+   FINISH: BLACK TITANIUM — "DEFAULT · DARK. Cinema, media, telemetry, night.
+   The canonical AURUM expression: the void with one warm light in it."
+   Sheet 22 names five finishes; Desert Gold is CEREMONIAL·LIGHT (onboarding,
+   receipts, anniversaries) and is the wrong costume for a forensic instrument.
+   A product picks one and never mixes.
+
+   AXIS: FRONTIER (sheet 05) — "near-black canvas, monospaced numerics, tabular
+   figures, live telemetry, precision displayed to the digit that actually
+   matters. Legible under stress. No colour without semantics, no motion without
+   cause, no alarm without an action attached."
+
+   TOTAL COLOUR BUDGET: 32 values. Thirteen Titanium + ten Aurum + five Vapor +
+   four Signal. A SCREEN MAY USE AT MOST NINE OF THEM. No value outside this set
+   may ever enter the codebase.
+
+   ONE DIRECTION ONLY: roles reference ramp values; ramp values reference
+   nothing. A role that references another role is an alias, and aliases are
+   audited out at every release.
+
+   OPACITY OVER NEW HEX: strokes and fills are stated as a percentage of a ramp
+   value, never as a new opaque colour, so they stay correct over glass and
+   over media.
+
+   NAMING: category-role-state. No product prefixes, no screen names, no -v2.
+   GOVERNANCE: additive only — a token's value is never edited in place.
+   ============================================================================ */
+
 :root{
-  /* ---- Ramp A · OBSIDIAN — structure, backgrounds, surfaces --------- */
-  --ob-000:#050506;  /* void        */  --ob-050:#09090B;  /* canvas      */
-  --ob-100:#0C0C0F;  /* surface-1   */  --ob-150:#101014;  /* surface-2   */
-  --ob-200:#16161A;  /* hover       */  --ob-300:#1C1D22;  /* pressed     */
-  --ob-400:#26272E;  /* line        */  --ob-500:#33353D;  /* disabled    */
+  /* ---- PRIMITIVE · TITANIUM — thirteen values, the structural ramp ---- */
+  --ti-00:#F7F6F4;  --ti-05:#EEEDEA;  --ti-10:#E3E0DB;  --ti-20:#CFCBC4;
+  --ti-30:#B4AFA7;  --ti-40:#98938A;  --ti-50:#7C776E;  --ti-60:#615D56;
+  --ti-70:#4A4741;  --ti-80:#35322C;  --ti-90:#232120;  --ti-95:#171615;
+  --ti-100:#0B0B0B;
 
-  /* ---- Ramp B · TITANIUM — text and metalwork ---------------------- */
-  --ti-100:#F4F4F6;  /* text-1      */  --ti-200:#D6D7DA;  /* value       */
-  --ti-300:#C2C4C8;  /* body+       */  --ti-400:#A7AAB0;  /* text-2      */
-  --ti-500:#8A8D93;  /* natural     */  --ti-600:#7E8188;  /* text-3      */
-  --ti-700:#55575D;  /* faint       */  --ti-800:#3A3C42;  /* ghost       */
+  /* ---- PRIMITIVE · AURUM — ten values, the champagne ramp ------------ */
+  --au-05:#FBF3E4;  --au-10:#F6E7CE;  --au-20:#EED6AE;  --au-30:#E3C089;
+  --au-40:#D4A96A;  --au-50:#C08F4E;  --au-60:#A5763D;  --au-70:#835C30;
+  --au-80:#5E4223;  --au-90:#3A2916;
 
-  /* ---- Ramp D · AURUM GOLD — the 1% -------------------------------- */
-  --au-050:#FBF3E4;  --au-100:#F5E7CC;  --au-200:#EDD3A2;
-  --au-300:#E8C88F;  /* ★ PRIME — the accent. One element per view (D-08) */
-  --au-400:#D9B279;  /* hover  */      --au-500:#C89E63;  /* press  */
-  --au-600:#A87E45;  --au-700:#8A6533;  --au-800:#6B4C24;  --au-900:#463116;
-  --au-on:#1A1206;   /* text ON gold. Never white on gold. 11.6:1 */
+  /* ---- PRIMITIVE · VAPOR — five values, the cold axis.
+         hue 244–256°, chroma <= 0.033. For glass tint, depth and atmosphere
+         ONLY. Never brand, never decoration. --------------------------- */
+  --vp-10:#D0E4EA;  /* specular rim on cold glass   15.33:1 */
+  --vp-30:#A9BAC4;  /* distant-object label          9.54:1 */
+  --vp-50:#657F90;  /* atmosphere mid-depth          4.78:1 */
+  --vp-70:#445D6C;  /* cool elevated fill            2.39:1 */
+  --vp-90:#232B33;  /* chrome-theme canvas           1.37:1 */
 
-  /* ---- Signals — engineering states, never decoration --------------- */
-  --patina:#6FAE8F;  --patina-field:#14261E;   /* verified, admitted, pass  */
-  --solar:#D98E41;   --solar-field:#2B1E10;    /* partial, degraded, sampled*/
-  --oxide:#C96F5E;   --oxide-field:#2A1512;    /* refused, failed, destroy  */
-  --glacier:#7FA6C9; --glacier-field:#131C25;  /* informational, model      */
+  /* ---- PRIMITIVE · SIGNAL — four values, RESERVED FOR STATE.
+         NEVER COLOUR ALONE: every signal use carries a redundant channel —
+         a glyph, a position, or a word. Eight per cent of men cannot resolve
+         nominal from abort by hue, and a system that fails them fails the law.
+         ---------------------------------------------------------------- */
+  --sig-nominal:#38D158;  /* success, completion, within tolerance   9.74:1 */
+  --sig-caution:#FFD60A;  /* degraded, approaching limit            13.94:1
+                             NEVER PAIRED WITH GOLD                        */
+  --sig-abort:#FF453A;    /* failure and destruction                 5.78:1
+                             ALWAYS ACCOMPANIED BY AN ACTION               */
+  --sig-link:#0A84FF;     /* navigation away from context only       5.40:1 */
 
-  /* ---- Lines and light --------------------------------------------- */
-  --hair:rgba(255,255,255,.08);      /* au.line.hair   */
-  --hair-strong:rgba(255,255,255,.14);
-  --inner-top:rgba(255,255,255,.10); /* the machined edge, 90° sun */
-  --focus:rgba(232,200,143,.45);
-  --selection:rgba(232,200,143,.28);
-  --scrim:rgba(5,5,6,.60);
+  /* ============ SEMANTIC LAYER · 42 roles · BLACK TITANIUM ============
+     Product code references a role. It never references a ramp value. */
 
-  /* ---- Space · 4-pt lattice, ten stops ------------------------------ */
-  --sp-1:4px;  --sp-2:8px;  --sp-3:12px; --sp-4:16px; --sp-5:24px;
-  --sp-6:32px; --sp-7:48px; --sp-8:64px; --sp-9:96px; --sp-10:128px;
+  /* SURFACE */
+  --surface-canvas:var(--ti-100);              /* the floor. Never elevated,
+                                                  never tinted, never glass  */
+  --surface-grouped:var(--ti-95);              /* behind lists and forms     */
+  --surface-raised:var(--ti-90);               /* cards. One level only —
+                                                  no card inside a card      */
+  --surface-glass:rgba(247,246,244,.09);       /* floating chrome ONLY:
+                                                  bars, popovers, sheets     */
+  --surface-scrim:rgba(11,11,11,.56);          /* behind modals              */
 
-  /* ---- Radius · concentricity law: inner = outer − inset ------------ */
-  --r-2:6px; --r-3:10px; --r-4:14px; --r-5:20px; --r-6:28px; --r-cap:999px;
+  /* CONTENT */
+  --content-primary:var(--ti-00);              /* titles and the sentence
+                                                  that matters      18.22:1  */
+  --content-secondary:var(--ti-20);            /* body. The workhorse 8.57:1 */
+  --content-tertiary:var(--ti-40);             /* metadata, timestamps,
+                                                  captions   6.44:1 still AA */
+  --content-quaternary:var(--ti-60);           /* placeholder and disabled
+                                                  ONLY. Never a real word    */
+  --content-accent:var(--au-30);               /* ONE INSTANCE PER VIEWPORT
+                                                                    11.40:1  */
+  --content-on-accent:var(--ti-100);           /* label on a filled metal
+                                                  capsule. Obsidian on gold,
+                                                  always                     */
 
-  /* ---- Motion · five tempos. A duration off this scale is forbidden - */
-  --t-instant:80ms; --t-quick:160ms; --t-standard:240ms;
-  --t-entrance:400ms; --t-ceremony:700ms;
-  --ease:cubic-bezier(.22,1,.36,1);   /* au.motion.ease.fallback */
+  /* STROKE & FILL — opacity over new hex, always */
+  --stroke-hairline:rgba(247,246,244,.09);     /* 0.5pt separators.
+                                                  PREFER A GAP; a rule only
+                                                  when space fails           */
+  --stroke-rim:rgba(247,246,244,.18);          /* the 1pt edge of every
+                                                  glass object. Non-optional */
+  --stroke-focus:var(--au-30);                 /* 3pt, 2pt offset OUTSIDE the
+                                                  shape. Never removed,
+                                                  never inset                */
+  --fill-quiet:rgba(247,246,244,.07);          /* secondary capsule ground,
+                                                  segmented track, chip      */
+  --fill-pressed:rgba(247,246,244,.14);        /* applied WITH scale .96 —
+                                                  colour alone never reads
+                                                  as pressed                 */
+  --fill-accent:linear-gradient(168deg,var(--au-30),var(--au-40));
+                                               /* 168° two-stop, 6% delta.
+                                                  Flat metal looks printed   */
+  /* LIGHT */
+  --specular-top:rgba(255,255,255,.45);        /* 1pt inset highlight, top
+                                                  edge only. The tell of
+                                                  real glass                 */
+  --specular-bottom:rgba(255,255,255,.12);     /* bounce light. Always
+                                                  weaker than the top by 3x  */
+  --shadow-key:rgba(11,11,11,.68);             /* single source, 12° above   */
+  --glow-accent:rgba(227,192,137,.28);         /* dark themes only. 42px
+                                                  blur, zero offset.
+                                                  NEVER ON TEXT              */
 
-  /* ---- Elevation · shadows double per level ------------------------- */
-  --e1:0 1px 2px rgba(0,0,0,.30);
-  --e2:0 2px 4px rgba(0,0,0,.35), 0 4px 12px rgba(0,0,0,.25);
-  --e3:0 4px 8px rgba(0,0,0,.40), 0 8px 24px rgba(0,0,0,.30);
-  --e4:0 8px 16px rgba(0,0,0,.45), 0 16px 48px rgba(0,0,0,.35);
-  --e5:0 12px 24px rgba(0,0,0,.50), 0 24px 64px rgba(0,0,0,.40), 0 0 48px rgba(232,200,143,.07);
+  /* ---- TYPE · the fourteen-step scale ------------------------------- */
+  --font-display:"SF Pro Display",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Inter,system-ui,sans-serif;
+  --font-text:"SF Pro Text",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Inter,system-ui,sans-serif;
+  --font-mono:"SF Mono",ui-monospace,Menlo,"JetBrains Mono",monospace;
+  /* SF Pro is Apple-licensed and this repository is public: never vendored. */
 
-  /* ---- Type · SF Pro, system-resident. Never vendored: SF is Apple-
-         licensed and this repository is public. ------------------------ */
-  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","Helvetica Neue",Inter,system-ui,sans-serif;
-  --mono:"SF Mono",ui-monospace,Menlo,"JetBrains Mono",monospace;
+  --size-colossus:96px;   --lh-colossus:88px;
+  --size-display-1:64px;  --lh-display-1:64px;
+  --size-display-2:48px;  --lh-display-2:52px;
+  --size-title-1:34px;    --lh-title-1:40px;
+  --size-title-2:28px;    --lh-title-2:34px;
+  --size-title-3:22px;    --lh-title-3:28px;
+  --size-headline:17px;   --lh-headline:22px;
+  --size-body:17px;       --lh-body:25px;
+  --size-callout:16px;    --lh-callout:21px;
+  --size-subhead:15px;    --lh-subhead:20px;
+  --size-footnote:13px;   --lh-footnote:18px;
+  --size-caption:12px;    --lh-caption:16px;
+  --size-micro:11px;      --lh-micro:13px;
+  --size-overline:10px;   --lh-overline:12px;
+
+  /* ---- SPACE & RADIUS ------------------------------------------------ */
+  --space-1:4px;  --space-2:8px;  --space-3:12px; --space-4:16px;
+  --space-5:20px; --space-6:24px; --space-8:32px; --space-12:48px;
+  --space-16:64px;
+  --radius-sm:12px; --radius-md:16px; --radius-lg:20px; --radius-xl:28px;
+  --radius-capsule:999px;
+  --target-min:44px;   /* AA5 floor. No target under 44px, ever. */
+
+  /* ---- MOTION · six curves, six springs, no exceptions ---------------- */
+  --ease-standard:cubic-bezier(.32,.72,0,1);
+  --ease-enter:cubic-bezier(.16,1,.3,1);
+  --ease-exit:cubic-bezier(.7,0,.84,0);
+  --ease-glide:cubic-bezier(.4,0,.2,1);
+  --ease-snap:cubic-bezier(.34,1.26,.64,1);
+  --dur-micro:90ms;    --dur-small:160ms;   --dur-medium:240ms;
+  --dur-large:400ms;   --dur-enter:520ms;   --dur-morph:620ms;
+  --dur-ambient:4000ms;
+  --stagger:24ms;
+  --frame-budget:8.33ms;   /* every frame ships in 8.33ms or the feature is
+                              not finished. A budget from the first commit,
+                              never polish applied at the end. */
+
+  /* ---- MATERIAL & ELEVATION ------------------------------------------ */
+  --glass-thin:blur(20px) saturate(170%);
+  --glass-regular:blur(28px) saturate(180%);
+  --glass-thick:blur(40px) saturate(150%);
+  --e1:0 1px 2px rgba(11,11,11,.68), 0 0 0 1px rgba(247,246,244,.09);
+  --e2:0 4px 10px rgba(11,11,11,.68), 0 1px 2px rgba(11,11,11,.5);
+  --e3:0 10px 24px rgba(11,11,11,.68), 0 2px 5px rgba(11,11,11,.5);
+  --e4:0 18px 44px rgba(11,11,11,.68), 0 4px 10px rgba(11,11,11,.5);
+  --e5:0 28px 70px rgba(11,11,11,.72), 0 0 42px rgba(227,192,137,.28);
 }
 
-/* Nine sizes. No tenth. size/line-height · weight · tracking */
-.t-display-xl{font:700 64px/68px var(--sans);letter-spacing:-.024em}
-.t-display-l {font:700 48px/52px var(--sans);letter-spacing:-.022em}
-.t-display-m {font:700 34px/40px var(--sans);letter-spacing:-.018em}
-.t-title     {font:600 24px/30px var(--sans);letter-spacing:-.014em}
-.t-headline  {font:600 18px/24px var(--sans);letter-spacing:-.008em}
-.t-body      {font:400 15px/22px var(--sans);letter-spacing:-.002em}
-.t-callout   {font:500 13px/18px var(--sans)}
-.t-caption   {font:400 12px/16px var(--sans);letter-spacing:.006em}
-.t-overline  {font:600 11px/14px var(--sans);letter-spacing:.18em;text-transform:uppercase;color:var(--au-300)}
+/* ---- The fourteen registers, set in their own spec ------------------- */
+.t-colossus {font:700 var(--size-colossus)/var(--lh-colossus) var(--font-display);letter-spacing:-.03em}
+.t-display-1{font:700 var(--size-display-1)/var(--lh-display-1) var(--font-display);letter-spacing:-.025em}
+.t-display-2{font:700 var(--size-display-2)/var(--lh-display-2) var(--font-display);letter-spacing:-.022em}
+.t-title-1  {font:700 var(--size-title-1)/var(--lh-title-1) var(--font-display);letter-spacing:-.018em}
+.t-title-2  {font:600 var(--size-title-2)/var(--lh-title-2) var(--font-display);letter-spacing:-.014em}
+.t-title-3  {font:600 var(--size-title-3)/var(--lh-title-3) var(--font-display);letter-spacing:-.01em}
+.t-headline {font:600 var(--size-headline)/var(--lh-headline) var(--font-text)}
+.t-body     {font:400 var(--size-body)/var(--lh-body) var(--font-text)}
+.t-callout  {font:400 var(--size-callout)/var(--lh-callout) var(--font-text)}
+.t-subhead  {font:500 var(--size-subhead)/var(--lh-subhead) var(--font-text)}
+.t-footnote {font:400 var(--size-footnote)/var(--lh-footnote) var(--font-text)}
+.t-caption  {font:400 var(--size-caption)/var(--lh-caption) var(--font-text)}
+.t-micro    {font:500 var(--size-micro)/var(--lh-micro) var(--font-text);letter-spacing:.06em}
+.t-overline {font:600 var(--size-overline)/var(--lh-overline) var(--font-text);
+             letter-spacing:.18em;text-transform:uppercase;color:var(--content-tertiary)}
 
-/* Every numeral in this product is monospace, tabular, and carries its unit. */
-.num{font-family:var(--mono);font-variant-numeric:tabular-nums lining-nums}
-.unit{color:var(--ti-600);font-size:.72em;margin-left:.34em}
+/* Every numeral in this product is monospace and tabular, carries its unit,
+   and is never abbreviated and never animated. Precision displayed to the
+   digit that actually matters. */
+.num {font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
+      font-feature-settings:"tnum" 1,"lnum" 1}
+.unit{color:var(--content-tertiary);font-size:.72em;margin-left:.3em;letter-spacing:.02em}
 
 *,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--ob-050);color:var(--ti-400);font:400 15px/22px var(--sans);
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--surface-canvas);color:var(--content-secondary);
+     font:400 var(--size-body)/var(--lh-body) var(--font-text);
      -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
-::selection{background:var(--selection);color:var(--au-050)}
-:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+::selection{background:rgba(227,192,137,.28);color:var(--au-05)}
 
-/* N-3 peripheral calm + G-07: reduced motion is a first-class path. */
+/* 2pt ring at 2pt offset OUTSIDE the shape. Never removed, never inset. */
+:focus-visible{outline:2px solid var(--stroke-focus);outline-offset:2px;border-radius:inherit}
+
+/* Sheet 43 — the floor, not the ceiling. Reduced motion is a first-class
+   path: all travel and scale become a 160ms opacity cross-fade at the
+   destination. Parallax and auto-play stop. No state is lost. */
 @media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;
-                       transition-duration:.01ms!important;scroll-behavior:auto!important}
+  *,*::before,*::after{
+    animation-duration:1ms!important;animation-iteration-count:1!important;
+    transition-duration:160ms!important;transition-property:opacity!important;
+    scroll-behavior:auto!important}
 }
