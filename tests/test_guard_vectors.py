@@ -4,8 +4,8 @@ READY TO COMMIT AS tests/test_guard_vectors.py. It is written here rather than
 under tests/ because tests/ was not this task's to write; see the Phase 3 report.
 
 fixtures/guard_vectors.json is the committed contract between the two write-guard
-implementations. `core/device/src/guard.rs` runs every row in its own
-`conformance` module; this file runs the same rows against `fixtures/guard.py`.
+implementations. `core/device/src/guard/unix.rs` runs every row in its own
+`conformance` module; this file runs the same rows against `fixtures/guard` (the POSIX backend).
 Neither implementation may drift from the table without a test going red.
 
 The expectations in the table were MEASURED from fixtures/guard.py. That is not
@@ -211,7 +211,7 @@ def test_every_code_the_python_guard_can_produce_is_accounted_for(table):
     raced = {k: v for k, v in table["codes_exercised_by_race_test"].items()
              if not k.startswith("_")}
     guard_py_tests = (_REPO / "tests" / "test_guard.py").read_text(encoding="utf-8")
-    guard_rs = (_REPO / "core" / "device" / "src" / "guard.rs").read_text(encoding="utf-8")
+    guard_rs = (_REPO / "core" / "device" / "src" / "guard" / "unix.rs").read_text(encoding="utf-8")
     for code, entry in raced.items():
         for field in ("rust_test", "python_test", "measured_rust", "measured_python"):
             assert entry.get(field, "").strip(), "%s.%s is empty" % (code, field)
@@ -222,7 +222,7 @@ def test_every_code_the_python_guard_can_produce_is_accounted_for(table):
             "%s.python_test names %s, which is not in tests/test_guard.py" % (code, pleaf)
         rleaf = entry["rust_test"].rsplit("::", 1)[-1]
         assert ("fn %s(" % rleaf) in guard_rs, \
-            "%s.rust_test names %s, which is not in core/device/src/guard.rs" % (code, rleaf)
+            "%s.rust_test names %s, which is not in core/device/src/guard/unix.rs" % (code, rleaf)
     assert {G.DENY_RACE, G.DENY_SYMLINK_AT_OPEN} <= set(raced), \
         "the two open-time race clauses must be accounted for by a race test"
 
@@ -329,7 +329,7 @@ def test_every_row_agrees_with_guard_py(table, lab, capsys):
 def test_the_policy_digest_payload_is_what_the_table_records(table, lab):
     """The Rust guard cannot compute SHA-256 without a new dependency, so the
     table records the canonical PAYLOAD both implementations must produce. This
-    asserts guard.py's end of that; core/device/src/guard.rs asserts the other."""
+    asserts guard.py's end of that; core/device/src/guard/unix.rs asserts the other."""
     import hashlib
     checked = 0
     for name, spec in table["policies"].items():

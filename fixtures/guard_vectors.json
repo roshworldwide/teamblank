@@ -9,14 +9,14 @@
  "codes_exercised_by_race_test": {
   "_why": "A static table of (target, policy, expected code) rows proves the two implementations AGREE. It cannot express 'and now another process renames this directory', so the two codes that guard the window between the decision and the open cannot be reached by a row. They are reached instead by a racing test in EACH language: a thread flips one path node while a loop calls open_authorized. Each test asserts three things -- the code appears in the census (the clause is executed, not merely present), a pinned victim outside every allowed root is byte-identical afterwards with its inode unchanged (a refusal that costs data is not a refusal), and no iteration exits by errno (open_authorized is total over refusals; a guard stopped by the kernel is not a guard).",
   "DENY_RACE_DETECTED_AT_OPEN": {
-   "rust_test": "core/device/src/guard.rs::guard::race::racing_the_allowed_root_never_truncates_a_file_outside_it",
+   "rust_test": "core/device/src/guard/unix.rs::guard::unix::race::racing_the_allowed_root_never_truncates_a_file_outside_it",
    "python_test": "tests/test_guard.py::test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim",
    "measured_rust": "200,000 attempts in mode w against a thread flipping the allowed root between the real directory and a symlink pointing outside it: ALLOW=79948 DENY_NOT_ALLOWLISTED=71356 DENY_PARENT_DIRECTORY_MISSING=35614 DENY_RACE_DETECTED_AT_OPEN=13082, 0 exits by errno, victim 4096 bytes byte-identical, inode unchanged.",
    "measured_python": "2,000 attempts in mode w against the same flip: ALLOW=187 DENY_NOT_ALLOWLISTED=604 DENY_PARENT_DIRECTORY_MISSING=442 DENY_RACE_DETECTED_AT_OPEN=767, 0 exits by errno, victim byte-identical, inode unchanged.",
    "what_it_regresses": "The O_TRUNC that used to ride in the openat establishing the target's identity, and the allowed root's own open, which was the one open on the path that omitted O_NOFOLLOW. Measured before the fix: a 4096-byte file outside every allowed root truncated to 0 while the guard returned this very code for the same call."
   },
   "DENY_SYMLINK_COMPONENT_AT_OPEN": {
-   "rust_test": "core/device/src/guard.rs::guard::race::racing_a_mid_path_component_reaches_the_symlink_clause",
+   "rust_test": "core/device/src/guard/unix.rs::guard::unix::race::racing_a_mid_path_component_reaches_the_symlink_clause",
    "python_test": "tests/test_guard.py::test_ATTACK_a_racing_thread_swapping_a_mid_path_component_hits_the_symlink_clause",
    "measured_rust": "550 attempts against a thread swapping a component BELOW the root for a symlink pointing outside: ALLOW=16 DENY_NOT_ALLOWLISTED=217 DENY_PARENT_DIRECTORY_MISSING=103 DENY_RACE_DETECTED_AT_OPEN=213 DENY_SYMLINK_COMPONENT_AT_OPEN=1, 0 exits by errno, victim byte-identical.",
    "measured_python": "500 attempts against the same swap: ALLOW=2 DENY_NOT_ALLOWLISTED=43 DENY_PARENT_DIRECTORY_MISSING=234 DENY_RACE_DETECTED_AT_OPEN=190 DENY_SYMLINK_COMPONENT_AT_OPEN=31, 0 exits by errno, victim byte-identical.",
@@ -27,7 +27,7 @@
  "codes_defined": 28,
  "purpose": [
   "The shared conformance table for the SENTINELWIPE write guard.",
-  "The guard is implemented twice -- fixtures/guard.py drives the Python",
+  "The guard is implemented twice -- fixtures/guard (POSIX backend) drives the Python",
   "fixture build, core/device/src/guard.rs drives the Rust wipe engine that",
   "the Tauri frontend calls directly -- and a Python-only allowlist would be",
   "bypassed entirely on the demo path. CLAUDE.md rule 4 makes that",
@@ -36,7 +36,7 @@
   "opening a hole.",
   "",
   "EXPECTATIONS ARE MEASURED, NOT AUTHORED. Every expect_code was produced",
-  "by running fixtures/guard.py, which is the source of truth for policy.",
+  "by running fixtures/guard/posix.py, which is the source of truth for policy.",
   "",
   "ROW ORDER IS PART OF THE TABLE. Some rows create files; run them in order.",
   "",

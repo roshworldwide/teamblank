@@ -38,26 +38,26 @@ from __future__ import annotations
 
 import os
 
-if os.name == "nt":
-    from fixtures.guard.windows import *  # noqa: F401,F403
-    from fixtures.guard.windows import (  # noqa: F401
-        _whole_disk,
-        BACKEND,
-        Decision,
-        GuardError,
-        Policy,
-        PolicyError,
-    )
-else:
-    from fixtures.guard.posix import *  # noqa: F401,F403
-    from fixtures.guard.posix import (  # noqa: F401
-        _whole_disk,
-        Decision,
-        GuardError,
-        Policy,
-        PolicyError,
-    )
+# The package IS the chosen backend -- an alias in sys.modules, not a copy.
+# Two façade designs failed before this one, each invisibly:
+#   a curated star-import dropped the 28 decision-code constants (77 tests red),
+#   and a vars() hoist made COPIES, so monkeypatching fixtures.guard.authorize
+#   patched the façade while open_authorized kept calling the backend's own
+#   global -- the race-attack tests could no longer install their probe and
+#   "DID NOT RAISE" was the symptom. Before the split, fixtures.guard WAS the
+#   module; aliasing is the only façade that preserves those semantics exactly.
+import sys
 
-    #: Which implementation answered. Present on both backends so a caller, a
-    #: test or a certificate can record it rather than infer it from the host.
-    BACKEND = "posix"
+if os.name == "nt":
+    from fixtures.guard import windows as _backend
+    if not hasattr(_backend, "BACKEND"):
+        _backend.BACKEND = "windows"
+else:
+    from fixtures.guard import posix as _backend
+    if not hasattr(_backend, "BACKEND"):
+        #: Which implementation answered. On the module so a caller, a test or a
+        #: certificate can record it rather than infer it from the host.
+        _backend.BACKEND = "posix"
+
+_backend.__path__ = __path__          # keep `import fixtures.guard.windows` working
+sys.modules[__name__] = _backend      # fixtures.guard is now the backend itself
