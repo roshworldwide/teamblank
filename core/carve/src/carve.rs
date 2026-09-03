@@ -7,21 +7,68 @@
 //! of [`Recovered`] records that map one-to-one onto the record shape frozen in
 //! `docs/output_schema.md` §5.
 //!
-//! # CONTIGUOUS OBJECTS ONLY
+//! # Two-fragment reassembly, behind `--reassemble`
 //!
-//! `bifragment.rs` exists and is partial. It is **deliberately deferred and is
-//! not called from here** — not as a primary path and not as a fallback. Every
-//! extent list this module produces has exactly one entry, so
-//! `counts.by_assembly.reassembled` is 0 in every report it writes, and that
-//! zero is the honest signal that reassembly was not attempted rather than
-//! attempted and failed.
+//! `bifragment.rs` is wired in here and is **off by default**
+//! ([`CarveOpts::reassemble`] is `false`). With the flag off, every extent list
+//! this module produces has exactly one entry, `counts.by_assembly.reassembled`
+//! is 0, and that zero is the honest signal that reassembly was not attempted
+//! rather than attempted and failed. With the flag on, a candidate the structure
+//! validator could not end contiguously gets one bounded two-fragment search,
+//! and a search that succeeds produces **one** record carrying both extents and
+//! `assembly: "reassembled"`.
 //!
-//! The consequence is stated rather than hidden: a planted file split across a
-//! gap is simply not recovered. On the frozen fixture that bounds this engine at
-//! `ground_truth.reachability.contiguous` of the 40 planted files, and a run's
-//! measured result is labelled *demonstrated recall (contiguous engine)*. The
-//! reachability ceiling and the demonstrated recall are two different numbers
-//! and this code never computes one from the other.
+//! The default is off for one reason and it is not timidity: reassembly costs
+//! roughly a thousand times more per unrecovered candidate than sequential
+//! carving does, and the numbers this project has already published — the
+//! demonstrated recall, the residue separation, the 1.7 s whole-image carve —
+//! were measured with it off. Turning it on is therefore a stated act with its
+//! own measurement, not a silent change of engine. `--reassemble` and
+//! `--no-reassemble` both exist so the state is always spellable on the command
+//! line, because the pre-wipe and post-wipe carve must run with byte-identical
+//! parameters and a default nobody wrote down cannot be shown to have been held
+//! constant.
+//!
+//! ## The precondition
+//!
+//! Reassembly is attempted **only where sequential carving already failed** —
+//! `Validation::valid` is false on the contiguous read. A length-declaring
+//! format (MP4 fixes the object's length inside `mdat` in the first fragment)
+//! would otherwise be "reassembled" out of the first tail the lattice offers.
+//! `bifragment::search` re-checks this itself with its own sequential probe and
+//! answers `Stop::Contiguous`; the check here is the same rule applied one layer
+//! earlier so the cost is not paid at all.
+//!
+//! ## The dedup rule for a reassembled object — ONE record, never two
+//!
+//! A reassembled object and the leading-fragment record for the same header are
+//! the **same discovery**, so they can never both be emitted: the reassembly
+//! *replaces* the record for that candidate inside [`score`] rather than being
+//! appended beside it. This is structural, not a filter — one candidate produces
+//! one record, before ranking, before overlap suppression, before anything can
+//! count them. A run therefore cannot show a leading fragment and its own
+//! completion as two rows, and `counts.records` does not move when a candidate
+//! is reassembled; only its `assembly`, `length`, `extents` and `sha256` do.
+//!
+//! Overlap suppression then claims **each extent separately**, never the hull
+//! from the first extent to the last. Claiming the hull would claim the gap, and
+//! the gap is where another file lives: the fixture interleaves two fragmented
+//! plants so that one file's second fragment sits physically inside the other's
+//! gap. A hull claim would suppress it as a duplicate of bytes it does not own.
+//!
+//! ## Cost, and where it is reported
+//!
+//! `docs/output_schema.md` is frozen and has no field for a validation count, so
+//! the count is **not** in the JSON. It is measured per run — attempts, solved,
+//! and every validation `bifragment::search` spent including the ones a failed
+//! search spent — carried on [`CarveReport::reassembly`], and printed on stderr
+//! by `main.rs`. `provenance.notes` says so in the report itself, so a reader of
+//! the JSON alone is told where the number went rather than left to assume there
+//! is none. Adding a field would be a schema change with the ceremony §10
+//! describes, and a cost figure is not worth that.
+//!
+//! The reachability ceiling and the demonstrated recall remain two different
+//! numbers and this code still never computes one from the other.
 //!
 //! # The one gate
 //!
@@ -37,8 +84,14 @@
 //!
 //! # Where the span comes from
 //!
-//! Three sources, in this order, and the record says which one was used:
+//! Four sources, in this order, and the record says which one was used:
 //!
+//! 0. **`bifragment::search`** — only when `--reassemble` is on and the
+//!    contiguous read did not validate. Two extents, joined across a gap, both
+//!    ends established by the validator on the assembled bytes.
+//!    `assembly: "reassembled"`. Every term is then scored on those assembled
+//!    bytes, and `sha256` is their digest, so the record is scored on exactly
+//!    the bytes it claims.
 //! 1. **`Validation::end`** — the format walker parsed the object and reached
 //!    its last byte. `assembly: "contiguous"`. This is the only span the carver
 //!    treats as a recovery, and it is a claim the validator made, not a guess.
@@ -61,6 +114,9 @@
 //! spurious `PK\x03\x04` inside a compressed payload can send the ZIP walker
 //! across the rest of the image, once per false header.
 
+use crate::bifragment::{
+    search, Plan, Stop, DEFAULT_MAX_OBJECT_BYTES, MAX_FIRST_FRAGMENT_CLUSTERS, MAX_OBJECT_BYTES,
+};
 use crate::confidence::{
     confidence, kind_defines_footer, shannon_entropy, size_bounds, Confidence, MIN_CONFIDENCE,
     MIN_ENTROPY_SAMPLE, SIG_HEADER_AND_FOOTER, SIG_HEADER_MISMATCH, SIG_HEADER_ONLY,
@@ -114,7 +170,57 @@ pub struct CarveOpts {
     /// against a challenge to it. `--residue-window <bytes>` overrides it for
     /// every kind at once so the sensitivity can be measured rather than argued.
     pub residue_window: Option<u64>,
+
+    /// Attempt bounded two-fragment reassembly on a candidate that did not
+    /// validate contiguously.
+    ///
+    /// **Default `false`.** `--reassemble` turns it on and `--no-reassemble`
+    /// states the default explicitly, so the pre-wipe and post-wipe invocations
+    /// can be shown to be byte-identical rather than assumed to be.
+    ///
+    /// Off, this engine is the contiguous engine whose numbers are already
+    /// published, and `counts.by_assembly.reassembled` is 0 because reassembly
+    /// was not attempted. On, a candidate the validator could not end pays a
+    /// bounded lattice search — see [`CarveOpts::cluster_bytes`] for what
+    /// bounds it and [`CarveReport::reassembly`] for what it cost.
+    pub reassemble: bool,
+
+    /// The medium's allocation unit, in bytes. Both the split point and the
+    /// resume point of a two-fragment search are constrained to this grid,
+    /// because a fragment that begins mid-cluster cannot be produced by a
+    /// cluster allocator.
+    ///
+    /// Default 2048. `--cluster-bytes <N>` sets it. **This is a property of the
+    /// medium, not of the engine, and the engine does not read it from the
+    /// fixture manifest** — ground truth is read after the carve and never
+    /// reaches the engine, so the default is a documented default and not a
+    /// measurement of the image in front of it. The frozen fixture is FAT32
+    /// with a 2048-byte cluster and its manifest publishes that number
+    /// independently; on any other medium the operator passes the real one.
+    ///
+    /// A wrong value costs recoveries and cannot manufacture one: every splice
+    /// still has to satisfy `structure::validate` and still has to be pinned in
+    /// both dimensions before it is returned.
+    pub cluster_bytes: u64,
+
+    /// Ceiling on the gap between the two fragments, in clusters, applied
+    /// **inclusively**: a gap of exactly this many clusters is searched.
+    ///
+    /// Default 128. `--max-gap-clusters <N>` sets it. Cost is linear in this
+    /// number — the lattice is `MAX_FIRST_FRAGMENT_CLUSTERS x max_gap_clusters`
+    /// cells — so it is the knob that trades reachable gap against search time.
+    /// `bifragment.rs` documents the inclusivity and the fixture's own manifest
+    /// carries `max_gap_is_inclusive: true`, which is the same rule stated by
+    /// the party that built the image.
+    pub max_gap_clusters: u64,
 }
+
+/// The default allocation unit, in bytes. Named so the number is not repeated
+/// between [`CarveOpts::default`], the help text and the tests.
+pub const DEFAULT_CLUSTER_BYTES: u64 = 2048;
+
+/// The default gap ceiling, in clusters, applied inclusively.
+pub const DEFAULT_MAX_GAP_CLUSTERS: u64 = 128;
 
 impl Default for CarveOpts {
     fn default() -> CarveOpts {
@@ -123,6 +229,9 @@ impl Default for CarveOpts {
             dedup: true,
             report_rejected: true,
             residue_window: None,
+            reassemble: false,
+            cluster_bytes: DEFAULT_CLUSTER_BYTES,
+            max_gap_clusters: DEFAULT_MAX_GAP_CLUSTERS,
         }
     }
 }
@@ -145,9 +254,11 @@ pub struct Extent {
 pub enum Assembly {
     /// One extent, ended by the structure validator.
     Contiguous,
-    /// More than one extent, joined across a gap. **Never produced here** — the
-    /// variant exists so the schema and the type agree, and so that a report
-    /// showing `reassembled: 0` is showing a count and not a missing field.
+    /// Two extents, joined across a gap by `bifragment::search`, with the end
+    /// established by the validator on the assembled bytes. Produced only when
+    /// [`CarveOpts::reassemble`] is on; with it off the variant still exists so
+    /// that a report showing `reassembled: 0` is showing a count and not a
+    /// missing field.
     Reassembled,
     /// The structure validator established no end; the span is the signature
     /// layer's.
@@ -210,10 +321,75 @@ impl Recovered {
         format!("{}@{}", self.kind.as_str(), self.offset)
     }
 
-    /// One past the last byte of this record's span.
+    /// One past the last byte a **contiguous** record occupies.
+    ///
+    /// For a reassembled record this is `offset + total bytes`, which is not a
+    /// physical end and must not be used as one: the object's bytes are not
+    /// contiguous and the range in between belongs to something else. Overlap
+    /// suppression uses [`Recovered::claims`], never this.
     pub fn end(&self) -> u64 {
         self.offset + self.length
     }
+
+    /// The physical byte ranges this record claims, as half-open `[lo, hi)`
+    /// pairs, one per extent. **This is what overlap suppression claims** — the
+    /// extents themselves, never the hull from the first to the last, because
+    /// the hull would claim a gap that belongs to another file.
+    pub fn claims(&self) -> Vec<(u64, u64)> {
+        self.extents
+            .iter()
+            .map(|e| (e.offset, e.offset + e.length))
+            .collect()
+    }
+}
+
+/// What one solved reassembly cost, by record id. The schema has no field for a
+/// validation count, so this is carried here and printed on stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SolvedCost {
+    pub id: String,
+    pub validations: u64,
+}
+
+/// What the two-fragment searches did and what they cost.
+///
+/// All zeroes when `--reassemble` is off, and a run that reports zero attempts
+/// is reporting that reassembly was not tried — not that it was tried and found
+/// nothing. `main.rs` prints this on stderr; `docs/output_schema.md` is frozen
+/// and has nowhere for a cost figure, and a cost figure is not worth a schema
+/// change.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReassemblyStats {
+    /// Candidates handed to `bifragment::search`: every candidate whose
+    /// contiguous read did not validate.
+    pub attempted: usize,
+    /// Searches that returned a determined two-extent splice.
+    pub solved: usize,
+    /// Searches that stood down because the object validates contiguously after
+    /// all. The precondition is checked here too, so this should stay 0; a
+    /// non-zero value means the two checks disagree and is worth reading.
+    pub refused_contiguous: usize,
+    /// The whole bounded lattice was searched and nothing validated.
+    pub exhausted: usize,
+    /// Splices validated but none was pinned in both dimensions. A refusal,
+    /// never a guess — see `bifragment.rs` on determinacy.
+    pub ambiguous: usize,
+    /// The inputs did not describe a searchable lattice (a header too close to
+    /// the end of the image, a gap bound smaller than one cluster).
+    pub degenerate: usize,
+    /// The search hit a validation budget. Unreachable in production, where the
+    /// budget is `u64::MAX`; counted so the case is not silent if it changes.
+    pub budget: usize,
+    /// Every `structure::validate` call the searches spent, successes and
+    /// failures alike. This is the cost figure.
+    pub validations: u64,
+    /// Splices `structure::validate` accepted, across all searches. Accepted is
+    /// not solved: an accepted splice that is not determined is discarded.
+    /// `accepted_splices` far above `solved` is the ambiguity the fixture is
+    /// built to produce.
+    pub accepted_splices: u64,
+    /// Per solved object, in scan order.
+    pub solved_cost: Vec<SolvedCost>,
 }
 
 /// What one carve produced, including the numbers that describe the work rather
@@ -231,6 +407,9 @@ pub struct CarveReport {
     pub withheld_rejected: usize,
     /// The records, sorted by `offset` ascending, then kind name.
     pub records: Vec<Recovered>,
+    /// What the two-fragment searches did and what they cost. All zeroes when
+    /// `--reassemble` is off.
+    pub reassembly: ReassemblyStats,
     /// The options this run used, carried so the report can publish them.
     pub opts: CarveOpts,
 }
@@ -291,36 +470,142 @@ fn fallback_window(kind: Kind, opts: &CarveOpts) -> u64 {
         .unwrap_or_else(|| size_bounds(kind).full_lo)
 }
 
-/// Score one candidate. Pipeline order, once, with no branch on kind outside
-/// the shipped tables.
-fn score(image: &[u8], cand: &Candidate, opts: &CarveOpts) -> Recovered {
-    let at = cand.header_at as usize;
-    let sig = signature_for(cand.kind).expect("every scanned kind has a signature table row");
-
-    // The validator's view is bounded by the table's own published search cap.
-    let view_end = (cand.header_at.saturating_add(sig.max_len)).min(image.len() as u64) as usize;
-    let view = &image[at..view_end];
-
-    let v = validate(cand.kind, view);
-
-    let (length, assembly) = match v.end {
-        Some(end) if end > 0 => (end.min(view.len() as u64), Assembly::Contiguous),
-        _ => {
-            let span = match (sig.footer, cand.footer_at) {
-                (Some(f), Some(footer_at)) => footer_at + f.len() as u64 - cand.header_at,
-                _ => fallback_window(cand.kind, opts),
-            };
-            (
-                span.min(image.len() as u64 - cand.header_at).max(1),
-                Assembly::SignatureSpan,
-            )
+/// The two-fragment span ceiling, mirroring `bifragment`'s own private
+/// `span_ceiling` so the [`Plan`] built here is the plan
+/// `bifragment::bifragment` would have built for the same candidate.
+///
+/// Every number in it is read from a published const — `SIGNATURES::max_len`,
+/// [`MAX_OBJECT_BYTES`], [`DEFAULT_MAX_OBJECT_BYTES`] — so nothing is restated,
+/// only the expression is. `bifragment::search` is used directly rather than the
+/// `bifragment::bifragment` wrapper because the wrapper returns `Option` and a
+/// failed search's validation count — which is the *expensive* half of the cost
+/// and the half worth reporting — is discarded by it.
+/// [`tests::the_plan_built_here_is_the_plan_the_public_entry_point_builds`]
+/// pins the mirror against the public entry point, so a change to either side
+/// that moves the ceiling turns the test red rather than drifting.
+fn reassembly_span_ceiling(kind: Kind, avail: u64) -> u64 {
+    let mut max_len = DEFAULT_MAX_OBJECT_BYTES;
+    for sig in SIGNATURES {
+        if sig.kind == kind {
+            if sig.max_len > 0 {
+                max_len = sig.max_len;
+            }
+            break;
         }
+    }
+    max_len.min(MAX_OBJECT_BYTES).min(avail)
+}
+
+/// The bounded lattice for one candidate, or `None` when the inputs do not
+/// describe one.
+fn reassembly_plan(image_len: u64, kind: Kind, header_at: u64, opts: &CarveOpts) -> Option<Plan> {
+    let cluster = opts.cluster_bytes;
+    if cluster == 0 || header_at >= image_len {
+        return None;
+    }
+    let max_gap_bytes = opts.max_gap_clusters.checked_mul(cluster)?;
+    let span = reassembly_span_ceiling(kind, image_len - header_at);
+    Plan::new(
+        image_len,
+        span,
+        header_at,
+        max_gap_bytes,
+        cluster,
+        MAX_FIRST_FRAGMENT_CLUSTERS.saturating_mul(cluster),
+    )
+}
+
+/// One bounded two-fragment search, scored on the bytes it assembles.
+///
+/// Returns `None` — never a guess — whenever the search did not return a
+/// determined splice. Every outcome, including every failure, is counted into
+/// `tally`, because the cost of the refusals is most of the cost of the feature
+/// and a report that shows only what was found cannot be audited.
+fn try_reassemble(
+    image: &[u8],
+    cand: &Candidate,
+    opts: &CarveOpts,
+    tally: &mut ReassemblyStats,
+) -> Option<Recovered> {
+    tally.attempted += 1;
+    let kind = cand.kind;
+    let Some(plan) = reassembly_plan(image.len() as u64, kind, cand.header_at, opts) else {
+        tally.degenerate += 1;
+        return None;
     };
 
-    let data = &image[at..at + length as usize];
-    let header_matched = header_matches(cand.kind, view);
-    let footer_found = footer_in_sequence(view, cand.kind, length);
-    let c = confidence(cand.kind, header_matched, footer_found, &v, data);
+    let out = search(image, &plan, |buf| validate(kind, buf));
+    tally.validations += out.validations;
+    tally.accepted_splices += out.accepted;
+    match out.stop {
+        Stop::Solved => tally.solved += 1,
+        Stop::Contiguous => tally.refused_contiguous += 1,
+        Stop::Exhausted => tally.exhausted += 1,
+        Stop::Ambiguous => tally.ambiguous += 1,
+        Stop::Budget => tally.budget += 1,
+        Stop::Degenerate => tally.degenerate += 1,
+    }
+
+    let r = out.found?;
+    if r.extents.len() < 2 {
+        // A one-extent "reassembly" is a contiguous object wearing the wrong
+        // label. Refuse it rather than emit it.
+        return None;
+    }
+
+    // Assemble the bytes the extents name, in logical order. Every term below is
+    // scored on exactly these bytes, and `sha256` is their digest.
+    let mut data: Vec<u8> = Vec::new();
+    let mut extents: Vec<Extent> = Vec::with_capacity(r.extents.len());
+    for &(offset, length) in &r.extents {
+        let lo = offset as usize;
+        let hi = lo.checked_add(length as usize)?;
+        if hi > image.len() || length == 0 {
+            return None;
+        }
+        data.extend_from_slice(&image[lo..hi]);
+        extents.push(Extent { offset, length });
+    }
+    let total = data.len() as u64;
+    let v = validate(kind, &data);
+    let header_matched = header_matches(kind, &data);
+    let footer_found = footer_in_sequence(&data, kind, total);
+
+    let rec = record(
+        kind,
+        extents[0].offset,
+        extents,
+        Assembly::Reassembled,
+        &data,
+        header_matched,
+        footer_found,
+        v,
+        opts,
+    );
+    tally.solved_cost.push(SolvedCost {
+        id: rec.id(),
+        validations: r.validations,
+    });
+    Some(rec)
+}
+
+/// Build one record from bytes that have already been assembled and validated.
+/// Shared by the contiguous and the reassembled paths so the gate, the reason
+/// string and the four terms are written once.
+#[allow(clippy::too_many_arguments)]
+fn record(
+    kind: Kind,
+    offset: u64,
+    extents: Vec<Extent>,
+    assembly: Assembly,
+    data: &[u8],
+    header_matched: bool,
+    footer_found: bool,
+    v: Validation,
+    opts: &CarveOpts,
+) -> Recovered {
+    let length: u64 = extents.iter().map(|e| e.length).sum();
+    let c = confidence(kind, header_matched, footer_found, &v, data);
     let admitted = c.total >= opts.min_confidence;
 
     let (reason_code, reason) = if admitted {
@@ -341,18 +626,15 @@ fn score(image: &[u8], cand: &Candidate, opts: &CarveOpts) -> Recovered {
     };
 
     Recovered {
-        kind: cand.kind,
-        offset: cand.header_at,
+        kind,
+        offset,
         length,
-        extents: vec![Extent {
-            offset: cand.header_at,
-            length,
-        }],
+        extents,
         assembly,
         sha256: sha256_hex(data),
         signature: SignatureObs {
             header_matched,
-            footer_defined: kind_defines_footer(cand.kind),
+            footer_defined: kind_defines_footer(kind),
             footer_found,
             ladder_rung: rung_name(c.signature_integrity),
         },
@@ -366,11 +648,82 @@ fn score(image: &[u8], cand: &Candidate, opts: &CarveOpts) -> Recovered {
     }
 }
 
+/// Score one candidate. Pipeline order, once, with no branch on kind outside
+/// the shipped tables.
+///
+/// When `--reassemble` is on and the contiguous read did not validate, the
+/// two-fragment search runs first and, if it returns a determined splice, its
+/// record is what this candidate produces. It **replaces** the leading-fragment
+/// record rather than being emitted beside it: they are the same discovery, and
+/// one candidate yields one record.
+fn score(
+    image: &[u8],
+    cand: &Candidate,
+    opts: &CarveOpts,
+    tally: &mut ReassemblyStats,
+) -> Recovered {
+    let at = cand.header_at as usize;
+    let sig = signature_for(cand.kind).expect("every scanned kind has a signature table row");
+
+    // The validator's view is bounded by the table's own published search cap.
+    let view_end = (cand.header_at.saturating_add(sig.max_len)).min(image.len() as u64) as usize;
+    let view = &image[at..view_end];
+
+    let v = validate(cand.kind, view);
+
+    // The precondition: bifragment carving applies only where sequential
+    // carving has already failed. `bifragment::search` re-checks it with its
+    // own probe; checking it here means an object that is whole in place never
+    // pays for a lattice at all.
+    if opts.reassemble && !v.valid {
+        if let Some(rec) = try_reassemble(image, cand, opts, tally) {
+            return rec;
+        }
+    }
+
+    let (length, assembly) = match v.end {
+        Some(end) if end > 0 => (end.min(view.len() as u64), Assembly::Contiguous),
+        _ => {
+            let span = match (sig.footer, cand.footer_at) {
+                (Some(f), Some(footer_at)) => footer_at + f.len() as u64 - cand.header_at,
+                _ => fallback_window(cand.kind, opts),
+            };
+            (
+                span.min(image.len() as u64 - cand.header_at).max(1),
+                Assembly::SignatureSpan,
+            )
+        }
+    };
+
+    let data = &image[at..at + length as usize];
+    // Both observations are made against the validator's whole view rather than
+    // the recovered span, so a span shorter than the header cannot report a
+    // header that is plainly there.
+    let header_matched = header_matches(cand.kind, view);
+    let footer_found = footer_in_sequence(view, cand.kind, length);
+
+    record(
+        cand.kind,
+        cand.header_at,
+        vec![Extent {
+            offset: cand.header_at,
+            length,
+        }],
+        assembly,
+        data,
+        header_matched,
+        footer_found,
+        v,
+        opts,
+    )
+}
+
 // ===========================================================================
 // The driver
 // ===========================================================================
 
-/// Carve `image`. Contiguous objects only.
+/// Carve `image`. Contiguous objects, plus two-fragment reassemblies when
+/// [`CarveOpts::reassemble`] is on.
 ///
 /// # The deduplication rule — *claimed bytes*
 ///
@@ -384,9 +737,10 @@ fn score(image: &[u8], cand: &Candidate, opts: &CarveOpts) -> Recovered {
 /// 2. Admitted candidates are ranked by `confidence.total` descending, then
 ///    `length` descending, then `offset` ascending, then kind name — a total
 ///    order, so the outcome does not depend on scan order or on sort stability.
-/// 3. Walking that ranking: a candidate whose span is disjoint from every span
-///    already claimed becomes a **recovery** and claims its span. One that
-///    intersects a claimed span is **suppressed**.
+/// 3. Walking that ranking: a candidate **all of whose extents** are disjoint
+///    from every span already claimed becomes a **recovery** and claims each of
+///    its extents. One with any extent intersecting a claimed span is
+///    **suppressed**.
 /// 4. Then the rejected candidates: one whose *header offset* falls inside a
 ///    claimed span is **suppressed**, because those bytes already belong to a
 ///    recovered object and the header is that object's payload, not an
@@ -410,13 +764,33 @@ fn score(image: &[u8], cand: &Candidate, opts: &CarveOpts) -> Recovered {
 /// is kept. Its span is a signature-layer guess, so treating its guess as a
 /// reason to delete evidence would be letting the weaker claim win.
 ///
+/// **Reassembled records claim their extents, not their hull.** The hull of a
+/// two-extent record runs from the first byte of the first fragment to the last
+/// byte of the second and includes the gap, and the gap is not the object's:
+/// the fixture interleaves two fragmented plants so that one file's second
+/// fragment lies physically inside the other's gap. Claiming the hull would
+/// suppress that file as a duplicate of bytes the reassembly does not own, which
+/// is exactly the failure a naive "take the next validating span" rule produces.
+/// [`tests::an_interleaved_object_inside_a_reassembled_gap_survives_dedup`]
+/// holds that line on bytes built for the purpose.
+///
+/// A reassembled record never appears *beside* the leading-fragment record for
+/// the same header, and that is not this rule's doing: [`score`] returns one
+/// record per candidate and the reassembly replaces the contiguous one before
+/// ranking ever sees either. Nothing here has to choose between them, and
+/// `counts.records` does not move when a candidate is reassembled.
+///
 /// `--no-dedup` skips steps 2 through 5 entirely and every scored candidate is
 /// reported, which is how the rule above is audited rather than trusted.
 pub fn carve(image: &[u8], opts: &CarveOpts) -> CarveReport {
     let cands = scan(image);
     let scanned = cands.len();
 
-    let mut scored: Vec<Recovered> = cands.iter().map(|c| score(image, c, opts)).collect();
+    let mut reassembly = ReassemblyStats::default();
+    let mut scored: Vec<Recovered> = cands
+        .iter()
+        .map(|c| score(image, c, opts, &mut reassembly))
+        .collect();
 
     let mut suppressed = 0usize;
     if opts.dedup {
@@ -445,10 +819,21 @@ pub fn carve(image: &[u8], opts: &CarveOpts) -> CarveReport {
         for &i in &order {
             let r = &scored[i];
             if r.admitted {
-                if intersects(&claimed, r.offset, r.end()) {
+                // Each extent is tested and claimed on its own. The hull of a
+                // two-extent record includes a gap that belongs to another file.
+                let claims = r.claims();
+                if claims.iter().any(|&(lo, hi)| intersects(&claimed, lo, hi)) {
                     suppressed += 1;
                 } else {
-                    insert_span(&mut claimed, r.offset, r.end());
+                    for (lo, hi) in claims {
+                        // The disjointness `insert_span` requires is re-checked
+                        // per extent: the test above cleared them against the
+                        // list as it stood, and this one clears each against the
+                        // extents of the same record inserted a moment ago.
+                        if !intersects(&claimed, lo, hi) {
+                            insert_span(&mut claimed, lo, hi);
+                        }
+                    }
                     keep[i] = true;
                 }
             } else if contains(&claimed, r.offset) {
@@ -485,6 +870,7 @@ pub fn carve(image: &[u8], opts: &CarveOpts) -> CarveReport {
         suppressed,
         withheld_rejected,
         records: scored,
+        reassembly,
         opts: opts.clone(),
     }
 }
@@ -787,6 +1173,17 @@ mod tests {
     }
 
     #[test]
+    fn reassembly_is_off_by_default_and_its_geometry_comes_from_named_consts() {
+        let d = CarveOpts::default();
+        assert!(
+            !d.reassemble,
+            "the default engine is the contiguous engine whose numbers are published"
+        );
+        assert_eq!(d.cluster_bytes, DEFAULT_CLUSTER_BYTES);
+        assert_eq!(d.max_gap_clusters, DEFAULT_MAX_GAP_CLUSTERS);
+    }
+
+    #[test]
     fn the_default_fallback_window_is_the_full_size_credit_floor() {
         let opts = CarveOpts::default();
         for k in [
@@ -1048,7 +1445,7 @@ mod tests {
     }
 
     #[test]
-    fn no_record_is_ever_reassembled_because_bifragment_is_not_called() {
+    fn no_record_is_reassembled_and_nothing_is_searched_while_the_flag_is_off() {
         let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
         let mut img = tiny_gzip(&payload);
         img.extend_from_slice(&[0xFF, 0xD8, 0xFF]);
@@ -1060,6 +1457,346 @@ mod tests {
             assert_eq!(rec.extents[0].offset, rec.offset);
             assert_eq!(rec.extents[0].length, rec.length);
         }
+        // Zero attempts, not zero results: the difference is the whole point of
+        // reporting the count.
+        assert_eq!(r.reassembly, ReassemblyStats::default());
+        assert_eq!(r.reassembly.attempted, 0);
+        assert_eq!(r.reassembly.validations, 0);
+    }
+
+    // ---- two-fragment reassembly ------------------------------------------
+    //
+    // These build a fragmented object rather than reading the fixture: the
+    // fixture is frozen and its plants are measured in bifragment.rs, and a
+    // driver test that depends on a 256 MB file cannot say which layer failed.
+
+    /// Cluster size used by the reassembly tests. Small on purpose: the lattice
+    /// is `splits x gaps` and these images are kilobytes.
+    const C: usize = 512;
+
+    fn reassembly_opts() -> CarveOpts {
+        CarveOpts {
+            reassemble: true,
+            cluster_bytes: C as u64,
+            max_gap_clusters: 8,
+            ..CarveOpts::default()
+        }
+    }
+
+    /// Filler that is neither zeros nor a signature: whatever the gap holds must
+    /// not be mistakable for padding or for an object.
+    fn filler(n: usize, salt: u8) -> Vec<u8> {
+        (0..n)
+            .map(|i| ((i as u32 * 37 + salt as u32 * 101) % 251) as u8 | 1)
+            .collect()
+    }
+
+    /// Plant `obj` in two extents: `head_clusters` of it at a cluster boundary,
+    /// then `gap_clusters` of `gap` bytes, then the rest. Returns the image and
+    /// the header offset.
+    fn fragmented(
+        obj: &[u8],
+        head_clusters: usize,
+        gap: &[u8],
+        trailing: usize,
+    ) -> (Vec<u8>, u64) {
+        let hl = head_clusters * C;
+        assert!(hl < obj.len(), "the head must not contain the whole object");
+        assert_eq!(gap.len() % C, 0, "the gap must be whole clusters");
+        let mut img = vec![0u8; C];
+        let header_at = img.len() as u64;
+        img.extend_from_slice(&obj[..hl]);
+        img.extend_from_slice(gap);
+        img.extend_from_slice(&obj[hl..]);
+        img.extend_from_slice(&vec![0u8; trailing]);
+        (img, header_at)
+    }
+
+    #[test]
+    fn a_fragmented_object_is_reassembled_into_one_record_carrying_both_extents() {
+        let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj = tiny_gzip(&payload);
+        let want = sha256_hex(&obj);
+        let gap_clusters = 3usize;
+        let (img, header_at) = fragmented(&obj, 2, &filler(gap_clusters * C, 5), C);
+
+        // Sequential carving cannot do this, and the test says so first.
+        let seq = carve(&img, &CarveOpts::default());
+        assert!(
+            !seq.records.iter().any(|r| r.sha256 == want),
+            "the contiguous engine recovered a fragmented object; the fixture for this test is wrong"
+        );
+
+        let r = carve(&img, &reassembly_opts());
+        let hits: Vec<&Recovered> = r
+            .records
+            .iter()
+            .filter(|x| x.assembly == Assembly::Reassembled)
+            .collect();
+        assert_eq!(hits.len(), 1, "expected exactly one reassembly");
+        let hit = hits[0];
+
+        assert_eq!(hit.sha256, want, "the reassembled bytes are not the object");
+        assert_eq!(hit.length, obj.len() as u64);
+        assert_eq!(hit.offset, header_at);
+        assert_eq!(hit.extents.len(), 2);
+        assert_eq!(
+            hit.extents[0],
+            Extent {
+                offset: header_at,
+                length: (2 * C) as u64
+            }
+        );
+        assert_eq!(
+            hit.extents[1],
+            Extent {
+                offset: header_at + (2 * C + gap_clusters * C) as u64,
+                length: obj.len() as u64 - (2 * C) as u64
+            }
+        );
+        assert_eq!(
+            hit.extents.iter().map(|e| e.length).sum::<u64>(),
+            hit.length,
+            "schema 5: length is the sum of the extents"
+        );
+        assert_eq!(hit.extents[0].offset, hit.offset, "schema 5: offset is extents[0].offset");
+        assert!(hit.admitted, "a byte-exact object scored {:.4}", hit.confidence.total);
+        assert!(hit.structure.valid);
+
+        assert_eq!(r.reassembly.solved, 1);
+        assert_eq!(r.reassembly.solved_cost.len(), 1);
+        assert_eq!(r.reassembly.solved_cost[0].id, hit.id());
+        assert!(
+            r.reassembly.solved_cost[0].validations > 0,
+            "a recovery that cost no validations was not searched for"
+        );
+        assert!(r.reassembly.validations >= r.reassembly.solved_cost[0].validations);
+        assert!(r.reassembly.attempted >= 1);
+    }
+
+    #[test]
+    fn the_reassembly_replaces_the_leading_fragment_record_and_is_not_a_second_row() {
+        let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj = tiny_gzip(&payload);
+        let (img, header_at) = fragmented(&obj, 2, &filler(3 * C, 9), C);
+
+        let off = carve(&img, &CarveOpts::default());
+        let on = carve(&img, &reassembly_opts());
+
+        // One candidate, one record, whichever way the flag is set.
+        let at_header = |r: &CarveReport| r.records.iter().filter(|x| x.offset == header_at).count();
+        assert_eq!(at_header(&off), 1);
+        assert_eq!(at_header(&on), 1);
+        assert_eq!(
+            on.scanned, off.scanned,
+            "reassembly is not a scan change"
+        );
+
+        let before = off.records.iter().find(|x| x.offset == header_at).unwrap();
+        let after = on.records.iter().find(|x| x.offset == header_at).unwrap();
+        assert_ne!(before.assembly, Assembly::Reassembled);
+        assert_eq!(after.assembly, Assembly::Reassembled);
+        assert_ne!(
+            before.sha256, after.sha256,
+            "the leading fragment and the whole object cannot have the same digest"
+        );
+        assert_eq!(
+            after.sha256,
+            sha256_hex(&obj),
+            "the record that replaced the leading fragment is not the object"
+        );
+        assert_eq!(after.length, obj.len() as u64);
+    }
+
+    #[test]
+    fn an_interleaved_object_inside_a_reassembled_gap_survives_dedup() {
+        // The case a naive rule fails: the gap of one fragmented file is where
+        // another whole file lives. Claiming the hull would delete it.
+        let payload_a: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj_a = tiny_gzip(&payload_a);
+        let payload_b: Vec<u8> = (0u32..900).map(|i| (i * 13 % 249) as u8).collect();
+        let obj_b = tiny_gzip(&payload_b);
+        let want_a = sha256_hex(&obj_a);
+        let want_b = sha256_hex(&obj_b);
+
+        // A four-cluster gap whose second cluster holds the whole of object B.
+        let mut gap = filler(4 * C, 3);
+        gap[C..C + obj_b.len()].copy_from_slice(&obj_b);
+        let (img, header_at) = fragmented(&obj_a, 2, &gap, C);
+        let b_at = header_at + (2 * C + C) as u64;
+
+        let r = carve(&img, &reassembly_opts());
+        let a = r
+            .records
+            .iter()
+            .find(|x| x.sha256 == want_a)
+            .expect("the fragmented object was not reassembled");
+        let b = r
+            .records
+            .iter()
+            .find(|x| x.sha256 == want_b)
+            .expect("the object living inside the gap was suppressed by a hull claim");
+
+        assert_eq!(a.assembly, Assembly::Reassembled);
+        assert_eq!(b.assembly, Assembly::Contiguous);
+        assert_eq!(b.offset, b_at);
+        assert!(a.admitted && b.admitted);
+
+        // B lies strictly inside A's hull and outside both of A's extents. That
+        // is the whole trap, asserted rather than described.
+        assert!(a.offset < b.offset && b.end() < a.extents[1].offset + a.extents[1].length);
+        for (lo, hi) in a.claims() {
+            assert!(
+                b.offset >= hi || b.end() <= lo,
+                "object B at {} overlaps a claimed extent [{lo}, {hi})",
+                b.offset
+            );
+        }
+    }
+
+    #[test]
+    fn the_plan_built_here_is_the_plan_the_public_entry_point_builds() {
+        // `try_reassemble` mirrors bifragment's private span ceiling in order to
+        // call `search` and read the cost of a FAILURE. If the mirror ever
+        // drifts, the two paths stop agreeing on the answer or on its price.
+        let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj = tiny_gzip(&payload);
+        let (img, header_at) = fragmented(&obj, 2, &filler(3 * C, 11), C);
+        let opts = reassembly_opts();
+
+        let public = crate::bifragment::bifragment(
+            &img,
+            Kind::Gzip,
+            header_at,
+            opts.max_gap_clusters * opts.cluster_bytes,
+            opts.cluster_bytes,
+        )
+        .expect("the public entry point did not solve what the driver solves");
+
+        let r = carve(&img, &opts);
+        let hit = r
+            .records
+            .iter()
+            .find(|x| x.assembly == Assembly::Reassembled)
+            .expect("the driver did not solve what the public entry point solves");
+
+        let mine: Vec<(u64, u64)> = hit.extents.iter().map(|e| (e.offset, e.length)).collect();
+        assert_eq!(mine, public.extents, "the two paths disagree on the extents");
+        assert_eq!(
+            r.reassembly.solved_cost[0].validations, public.validations,
+            "the two paths disagree on what the search cost, so the plans differ"
+        );
+    }
+
+    #[test]
+    fn a_contiguous_object_is_never_searched_and_never_relabelled() {
+        let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj = tiny_gzip(&payload);
+        let want = sha256_hex(&obj);
+        let mut img = vec![0u8; C];
+        img.extend_from_slice(&obj);
+        img.extend_from_slice(&vec![0u8; C]);
+
+        let r = carve(&img, &reassembly_opts());
+        let hit = r.records.iter().find(|x| x.sha256 == want).unwrap();
+        assert_eq!(hit.assembly, Assembly::Contiguous);
+        assert_eq!(hit.extents.len(), 1);
+        assert_eq!(r.reassembly.solved, 0);
+        assert_eq!(
+            r.reassembly.refused_contiguous, 0,
+            "the precondition is applied before the search, so bifragment never has to refuse"
+        );
+    }
+
+    #[test]
+    fn a_residue_header_pays_the_whole_lattice_and_is_still_rejected() {
+        // A bare GZIP header over noise: nothing to assemble, and reassembly
+        // must not lift it. The cost of that refusal is the cost of the feature.
+        let mut img = vec![0u8; C];
+        img.extend_from_slice(&[0x1F, 0x8B, 0x08, 0x00]);
+        img.extend_from_slice(&filler(6 * C, 17));
+
+        let r = carve(&img, &reassembly_opts());
+        assert_eq!(r.admitted(), 0, "residue was admitted after a lattice search");
+        assert_eq!(r.reassembly.solved, 0);
+        assert_eq!(r.reassembly.accepted_splices, 0);
+        assert!(r.reassembly.attempted >= 1);
+        assert!(
+            r.reassembly.validations > 1,
+            "the lattice was not walked: {} validations",
+            r.reassembly.validations
+        );
+        assert_eq!(r.reassembly.exhausted + r.reassembly.degenerate, r.reassembly.attempted);
+    }
+
+    #[test]
+    fn a_wrong_cluster_size_costs_the_recovery_and_cannot_manufacture_one() {
+        // The cluster size is a property of the medium and the engine does not
+        // read it off the manifest, so a wrong one has to be survivable. It
+        // costs the recovery; it must never produce a different answer.
+        let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj = tiny_gzip(&payload);
+        let want = sha256_hex(&obj);
+        let (img, _) = fragmented(&obj, 2, &filler(3 * C, 23), C);
+
+        let wrong = CarveOpts {
+            cluster_bytes: (2 * C) as u64,
+            ..reassembly_opts()
+        };
+        let r = carve(&img, &wrong);
+        for rec in &r.records {
+            if rec.assembly == Assembly::Reassembled {
+                assert_eq!(
+                    rec.sha256, want,
+                    "a wrong cluster size produced a reassembly that is not the object"
+                );
+            }
+        }
+        assert_eq!(
+            r.reassembly.solved, 0,
+            "measured: this grid cannot express the true split, so nothing is solved"
+        );
+    }
+
+    #[test]
+    fn every_reassembled_record_is_internally_consistent() {
+        let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj = tiny_gzip(&payload);
+        let (img, _) = fragmented(&obj, 2, &filler(3 * C, 29), C);
+        let r = carve(&img, &reassembly_opts());
+        for rec in &r.records {
+            assert_eq!(rec.offset, rec.extents[0].offset);
+            assert_eq!(
+                rec.length,
+                rec.extents.iter().map(|e| e.length).sum::<u64>()
+            );
+            let mut bytes: Vec<u8> = Vec::new();
+            for e in &rec.extents {
+                let lo = e.offset as usize;
+                assert!(lo + e.length as usize <= img.len(), "{} runs off the image", rec.id());
+                bytes.extend_from_slice(&img[lo..lo + e.length as usize]);
+            }
+            assert_eq!(
+                rec.sha256,
+                sha256_hex(&bytes),
+                "{}: sha256 is not the digest of the bytes its extents name",
+                rec.id()
+            );
+            // Forward search only: extents ascend and never overlap.
+            for w in rec.extents.windows(2) {
+                assert!(w[0].offset + w[0].length <= w[1].offset);
+            }
+        }
+    }
+
+    #[test]
+    fn a_reassembling_run_is_deterministic() {
+        let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
+        let obj = tiny_gzip(&payload);
+        let (img, _) = fragmented(&obj, 2, &filler(3 * C, 31), C);
+        let a = carve(&img, &reassembly_opts());
+        let b = carve(&img, &reassembly_opts());
+        assert_eq!(a, b, "two identical runs disagreed, cost included");
     }
 
     #[test]
@@ -1071,11 +1808,14 @@ mod tests {
         let r = carve(&img, &CarveOpts::default());
         for rec in &r.records {
             assert!(rec.length >= 1);
-            assert!(
-                rec.end() <= img.len() as u64,
-                "{} runs past the end of the image",
-                rec.id()
-            );
+            for (lo, hi) in rec.claims() {
+                assert!(
+                    hi <= img.len() as u64 && lo < hi,
+                    "{} names [{lo}, {hi}) and the image is {} bytes",
+                    rec.id(),
+                    img.len()
+                );
+            }
         }
     }
 }

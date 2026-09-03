@@ -586,15 +586,119 @@ fn the_reversed_jpeg_is_unrecoverable_by_a_forward_search_and_the_carver_says_so
     assert!(tried > 1000, "only {} forward splits were tried", tried);
 
     // (d) and the object itself is intact -- reassembled in its true order it
-    //     validates. The barrier is the search direction, not the carver.
+    //     validates. So the bytes are all there and no forward split within the
+    //     gap bound reconstructs them.
+    //
+    //     What (a)-(d) do NOT show is that the reversal is what stopped us. The
+    //     earlier comment here said "the barrier is the search direction, not
+    //     the carver", and that overstated the measurement: it would only follow
+    //     if this engine could reassemble a two-fragment JPEG laid out forward.
+    //     It cannot -- (e) measures that -- so reversal is SUFFICIENT to make
+    //     this file unrecoverable and is not shown to be NECESSARY. On stage the
+    //     honest line is "reversed, and of a kind we cannot pin anyway"; the
+    //     demonstrable two-fragment-search limit is media_inventory.docx, where
+    //     the same kind recovers at 2 fragments and refuses at 3.
     let buf = assembled(img, &p, 4096);
     let v = jpeg::validate(&buf);
     assert!(v.valid, "the reversed JPEG in true order: {}", v.detail);
     assert_eq!(v.end, Some(p.size));
+
+    // (e) the same bytes, re-planted FORWARD in benign filler -- the layout this
+    //     engine is built for -- are still not reassembled, at any split or gap.
+    //     PNG and GZIP objects of the same shape, through the same harness, are.
+    //     So the harness is not the reason, and the JPEG barrier is determinacy:
+    //     the format carries no checksum over entropy-coded data, so a splice one
+    //     cluster off validates too and `is_determined` refuses. That is the same
+    //     root cause bifragment.rs already documents for MP4's 6660 splices.
+    let forward = forward_reassembly_sweep(&buf[..p.size as usize], Kind::Jpeg, cluster);
+    let png_control = {
+        let png = planted(man).into_iter().find(|q| q.kind == Kind::Png && q.fragmented);
+        png.map(|q| {
+            let b = assembled(img, &q, 0);
+            forward_reassembly_sweep(&b[..q.size as usize], Kind::Png, cluster)
+        })
+    };
+    let gzip_control = {
+        let gz = planted(man).into_iter().find(|q| q.kind == Kind::Gzip && q.fragmented);
+        gz.map(|q| {
+            let b = assembled(img, &q, 0);
+            forward_reassembly_sweep(&b[..q.size as usize], Kind::Gzip, cluster)
+        })
+    };
     eprintln!(
-        "evidence_bag_seal.jpg: {} forward splits tried, all rejected; true-order score {:.4}",
+        "evidence_bag_seal.jpg: {} forward splits tried against the image, all rejected; \
+         true-order score {:.4}",
         tried, v.score
     );
+    eprintln!(
+        "evidence_bag_seal.jpg: re-planted FORWARD in benign filler, {} of {} split x gap \
+         layouts reassembled. Controls of the same shape: PNG {:?}, GZIP {:?}. Direction is \
+         sufficient to explain the non-recovery; it is not shown to be necessary.",
+        forward.0, forward.1, png_control, gzip_control
+    );
+    assert_eq!(
+        forward.0, 0,
+        "a forward-laid-out two-fragment JPEG WAS reassembled ({} of {}). That is good news and \
+         it makes (d)'s wording wrong in the other direction: re-measure and say so.",
+        forward.0, forward.1
+    );
+    let (png_ok, png_n) = png_control.expect("the fixture plants a fragmented PNG");
+    let (gz_ok, gz_n) = gzip_control.expect("the fixture plants a fragmented GZIP");
+    assert!(
+        png_ok == png_n && gz_ok == gz_n,
+        "the controls did not recover ({png_ok} of {png_n} PNG, {gz_ok} of {gz_n} GZIP), so the \
+         sweep is measuring the harness rather than the kind"
+    );
+}
+
+/// Lay `obj` out as two forward fragments in benign filler at every
+/// `split x gap` in the sweep, and count how many the shipped two-fragment
+/// search reassembles byte-exactly.
+///
+/// The filler is a deterministic pattern that contains no `FF` and no signature
+/// of any kind, so nothing but the planted object can validate. Splits start at
+/// two clusters because a first fragment at the lattice floor is refused by
+/// `is_determined` on its own published rule, which would confound the count.
+///
+/// Returns `(reassembled, layouts tried)`.
+fn forward_reassembly_sweep(obj: &[u8], kind: Kind, cluster: usize) -> (usize, usize) {
+    const SPLITS: [usize; 6] = [2, 4, 8, 12, 18, 24];
+    const GAPS: [usize; 4] = [1, 2, 4, 8];
+    let max_gap_clusters = *GAPS.iter().max().unwrap() as u64;
+    let mut ok = 0usize;
+    let mut tried = 0usize;
+    for &sc in SPLITS.iter() {
+        let split = sc * cluster;
+        if split >= obj.len() {
+            continue;
+        }
+        for &gc in GAPS.iter() {
+            let gap = gc * cluster;
+            let total = split + gap + (obj.len() - split) + 4 * cluster;
+            let mut canvas: Vec<u8> = (0..total).map(|i| (i % 97) as u8 + 1).collect();
+            canvas[..split].copy_from_slice(&obj[..split]);
+            canvas[split + gap..split + gap + (obj.len() - split)]
+                .copy_from_slice(&obj[split..]);
+            tried += 1;
+            let got = sentinelwipe_carve::bifragment::bifragment(
+                &canvas,
+                kind,
+                0,
+                max_gap_clusters * cluster as u64,
+                cluster as u64,
+            );
+            if let Some(r) = got {
+                let mut bytes: Vec<u8> = Vec::new();
+                for (o, l) in &r.extents {
+                    bytes.extend_from_slice(&canvas[*o as usize..(*o + *l) as usize]);
+                }
+                if bytes == obj {
+                    ok += 1;
+                }
+            }
+        }
+    }
+    (ok, tried)
 }
 
 // ===========================================================================
