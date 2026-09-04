@@ -1,11 +1,10 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>SENTINELWIPE · THE APPROACH</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SENTINELWIPE</title>
 <style>
-/* ==== ui/tokens.css — INLINED VERBATIM ================================= */
 /* ============================================================================
    AURUM — THE TITANIUM STANDARD · Edition 27.0 · 412 declarations
    Transcribed from the token appendix (sheet 45) and the semantic layer
@@ -224,749 +223,716 @@ body{margin:0;background:var(--surface-canvas);color:var(--content-secondary);
     scroll-behavior:auto!important}
 }
 
-/* ==== SURFACE A · THE APPROACH — built only on the roles above ======== */
+/* ============================================================================
+   SURFACE 0 - THE ENTRY - "THE VOID"
+   One idea per screen, at scale, over the medium itself. The token layer above
+   is ui/tokens.css verbatim; what changes here is how little of it is used at
+   once and how much air is left around it.
 
-html{background:var(--surface-canvas);scroll-behavior:auto}
-body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:hidden}
+   Six values on screen at a time, at most:
+     ti-100 canvas   ti-95 recessed   ti-00 the one bright thing
+     ti-40 captions  au-30 the single accent   one signal, only when earned
+   ============================================================================ */
 
-.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
-      font-feature-settings:"tnum" 1,"lnum" 1}
+html,body{height:100%}
+body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
+#app{position:fixed;inset:0;display:flex;flex-direction:column}
 
-/* ---- film skeleton: sticky pin, native scroll, never jacked -------------- */
-#film{position:relative}
-.act{position:relative;height:220vh}
-.act[data-act="1"]{height:250vh}
-.act[data-act="8"]{height:200vh}
-.gap{height:24vh}                    /* acts are separated by space, never a rule */
-.stage{position:sticky;top:0;height:100vh;overflow:hidden;
-       display:flex;flex-direction:column;justify-content:center;
-       padding:var(--space-16) clamp(var(--space-6),6vw,120px)}
-.wrap{width:100%;max-width:1180px}
+/* ---- ATMOSPHERE. Three fixed layers, none of them interactive, none of them
+        carrying information: a warm source low-left, a vignette that closes the
+        frame, and grain so the black reads as film rather than as #000. ------ */
+.atm{position:fixed;inset:0;pointer-events:none;z-index:0}
+.atm-glow{background:
+  radial-gradient(58vw 58vw at 16% 74%, rgba(227,192,137,.10), transparent 62%),
+  radial-gradient(46vw 40vw at 88% 12%, rgba(127,166,201,.05), transparent 64%)}
+.atm-vig{background:radial-gradient(120% 96% at 50% 42%,
+  transparent 42%, rgba(11,11,11,.62) 88%, rgba(11,11,11,.9) 100%)}
+.atm-grain{opacity:.055;mix-blend-mode:overlay;background-size:128px 128px}
+/* the grain tile is generated at load from frames[].hx - the film grain over
+   this page is made of the same bytes the wipe wrote. No asset, no request,
+   no SVG filter, and therefore no URL of any kind in this file. */
 
-.act-label{margin:0 0 var(--space-12);color:var(--content-tertiary)}
-.act-label .sep{color:var(--content-quaternary)}
-.cap{margin:var(--space-6) 0 0;max-width:62ch;color:var(--content-tertiary)}
-.lede{margin:var(--space-5) 0 0;max-width:62ch;color:var(--content-secondary)}
-.key{color:var(--content-primary)}
-.dim{color:var(--content-tertiary)}
+/* ---- RACK. Almost nothing. The replay marker is the only thing it carries
+        that is not the product's own name. ------------------------------- */
+.rack{position:relative;z-index:3;flex:0 0 auto;display:flex;align-items:center;
+  gap:var(--space-6);padding:var(--space-5) var(--space-8) var(--space-3)}
+.wordmark{font:600 var(--size-footnote)/1 var(--font-display);letter-spacing:.34em;
+  color:var(--content-secondary);text-transform:uppercase}
+.stamp{margin-left:auto;display:flex;align-items:center;gap:var(--space-3);
+  font-family:var(--font-mono);font-size:var(--size-overline);
+  line-height:var(--lh-overline);letter-spacing:.06em;
+  color:var(--content-quaternary);white-space:nowrap}
+.stamp .dot{width:5px;height:5px;border-radius:50%;
+  background:var(--content-quaternary);flex:0 0 auto}
+.stamp b{font-weight:400;color:var(--content-tertiary)}
+.stamp .hash{color:var(--content-secondary)}
 
-/* ---- fixed chrome: recedes, then retracts at the handover --------------- */
-#chrome{position:fixed;left:clamp(var(--space-6),6vw,120px);top:var(--space-6);
-        z-index:6;color:var(--content-tertiary);opacity:0;
-        transition:transform var(--dur-morph) var(--ease-standard),
-                   opacity var(--dur-morph) var(--ease-standard);
-        pointer-events:none}
-#chrome.retract{transform:translateY(-180%);opacity:0}
+/* ---- STAGE ------------------------------------------------------------ */
+#stage{position:relative;z-index:2;flex:1 1 auto;min-height:0}
+.beat{position:absolute;inset:0;padding:0 var(--space-8);
+  display:grid;align-content:center;
+  opacity:0;pointer-events:none;
+  transition:opacity var(--dur-large) var(--ease-exit)}
+.beat[data-live="1"]{opacity:1;pointer-events:auto;
+  transition:opacity var(--dur-enter) var(--ease-enter)}
 
-/* ---- 01 VOID ------------------------------------------------------------ */
-.void-stage{align-items:center;justify-content:center;text-align:center}
-.void-stage .act-label{position:absolute;top:var(--space-16);
-                       left:clamp(var(--space-6),6vw,120px);margin:0}
-.hero{font:700 var(--size-display-1)/1.14 var(--font-display);letter-spacing:-.025em;
-      color:var(--content-primary);margin:0;
-      transform:translateY(-2.5vh)}   /* optical centre sits above true centre */
-.hline{display:block;white-space:pre}
-.ch{display:inline-block}
-.hint{position:absolute;left:clamp(var(--space-6),6vw,120px);bottom:var(--space-8);
-      font-family:var(--font-mono);font-size:var(--size-micro);line-height:var(--lh-micro);
-      letter-spacing:.18em;color:var(--content-tertiary)}
+/* every element inside a live beat arrives on the same spring, staggered by
+   its own index. Transform and opacity only. */
+.rise{opacity:0;transform:translate3d(0,14px,0)}
+.beat[data-live="1"] .rise{opacity:1;transform:none;
+  transition:opacity var(--dur-enter) var(--ease-enter) calc(var(--i,0) * 90ms),
+             transform var(--dur-enter) var(--ease-enter) calc(var(--i,0) * 90ms)}
 
-/* ---- 02 THE CLAIM ------------------------------------------------------- */
-.term{font-family:var(--font-mono);font-size:var(--size-subhead);line-height:var(--lh-subhead);
-      color:var(--content-secondary);position:relative;white-space:pre;overflow:hidden;
-      padding:var(--space-1) 0}
-.term + .term{margin-top:var(--space-3)}
-.term .pr{color:var(--content-quaternary)}
-.cover{position:absolute;inset:0;background:var(--surface-canvas)}
-.cover::before{content:"";position:absolute;left:0;top:10%;bottom:10%;width:2px;
-               background:var(--content-tertiary)}
-.claim{margin:var(--space-12) 0 0;display:flex;align-items:baseline;gap:var(--space-5);flex-wrap:wrap}
-.success{font:700 var(--size-display-1)/var(--lh-display-1) var(--font-display);
-         letter-spacing:-.025em;color:var(--sig-nominal)}
-.success .glyph{margin-right:var(--space-3)}
+/* ---- THE ONE BIG THING ------------------------------------------------ */
+.kicker{font:600 var(--size-overline)/var(--lh-overline) var(--font-text);
+  letter-spacing:.42em;text-transform:uppercase;color:var(--content-tertiary);
+  margin:0 0 var(--space-6)}
+.colossus{margin:0;font-family:var(--font-mono);font-weight:600;
+  font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1;
+  font-size:clamp(88px,13.4vw,208px);line-height:.86;letter-spacing:-.055em;
+  color:var(--content-primary);white-space:nowrap;
+  text-shadow:0 0 90px rgba(227,192,137,.16)}
+.colossus .x{font-size:.34em;letter-spacing:-.02em;color:var(--content-tertiary);
+  margin-left:.12em;vertical-align:.34em}
+.colossus .of{font-size:.28em;letter-spacing:.01em;word-spacing:-.2em;
+  color:var(--content-quaternary);margin-left:.24em;vertical-align:.36em;
+  font-weight:400}
+.say{margin:var(--space-6) 0 0;max-width:34ch;
+  font:400 var(--size-title-2)/1.24 var(--font-display);letter-spacing:-.014em;
+  color:var(--content-secondary)}
+.beat.with-medium .say{max-width:27ch}
+.say b{color:var(--content-primary);font-weight:600}
+.say.small{font:400 var(--size-title-3)/1.3 var(--font-display);max-width:30ch}
 
-/* ---- 03 THE NUMBER ------------------------------------------------------ */
-.colossus{font:700 var(--size-colossus)/var(--lh-colossus) var(--font-display);
-          letter-spacing:-.03em;font-family:var(--font-mono);
-          font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1,"lnum" 1}
-.gold{color:var(--content-accent)}
-.colossus .unit{font-size:.34em}
+/* ---- THE QUIET LINE OF EVIDENCE, always last, always small ------------ */
+.evid{display:flex;align-items:center;gap:var(--space-6);flex-wrap:wrap;
+  margin-top:var(--space-12);padding-top:var(--space-4);
+  border-top:1px solid var(--stroke-hairline)}
+.evid .cell{display:flex;flex-direction:column;gap:3px;min-width:0}
+.evid .k{font:600 var(--size-overline)/var(--lh-overline) var(--font-text);
+  letter-spacing:.24em;text-transform:uppercase;color:var(--content-quaternary)}
+.evid .v{font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
+  font-size:var(--size-footnote);line-height:var(--lh-footnote);
+  color:var(--content-secondary);white-space:nowrap}
+.evid .v .u{color:var(--content-quaternary);font-size:.78em;margin-left:.28em}
+.evid .rule{width:1px;align-self:stretch;background:var(--stroke-hairline)}
 
-/* ---- 04 THE FLOOR ------------------------------------------------------- */
-.deriv{display:grid;grid-template-columns:minmax(0,auto) 1fr;
-       column-gap:var(--space-12);row-gap:var(--space-5);align-items:baseline;max-width:920px}
-.deriv dt{color:var(--content-tertiary);font-size:var(--size-caption);line-height:var(--lh-caption);
-          letter-spacing:.18em;text-transform:uppercase;font-weight:600}
-.deriv dd{margin:0;color:var(--content-primary);font-size:var(--size-title-3);
-          line-height:var(--lh-title-3)}
-.deriv dd .side{display:block;color:var(--content-tertiary);font-size:var(--size-caption);
-                line-height:var(--lh-caption);margin-top:var(--space-1);letter-spacing:.02em}
-.rule{height:1px;background:var(--stroke-hairline);transform-origin:left center;
-      margin:var(--space-4) 0}
-.formula{font-family:var(--font-mono);font-size:var(--size-footnote);line-height:var(--lh-footnote);
-         color:var(--content-secondary)}
-.floor-out{font:700 var(--size-display-1)/var(--lh-display-1) var(--font-display);
-           font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
-           color:var(--content-primary);letter-spacing:-.02em}
-.floor-out .unit{font-size:.4em}
+/* the verdict chip: colour never alone - a glyph and a word, every time */
+.chip{display:inline-flex;align-items:center;gap:var(--space-2);
+  font:600 var(--size-micro)/1 var(--font-text);letter-spacing:.2em;
+  text-transform:uppercase;padding:9px var(--space-4);
+  border-radius:var(--radius-capsule);border:1px solid currentColor}
+.chip .gl{font-family:var(--font-mono);font-size:var(--size-caption)}
+.c-abort{color:var(--sig-abort)}
+.c-caution{color:var(--sig-caution)}
+.c-quiet{color:var(--content-tertiary);border-color:var(--stroke-rim)}
 
-/* ---- 05 THE COLLISION --------------------------------------------------- */
-.pair{display:grid;row-gap:var(--space-6)}
-.fig{display:flex;align-items:baseline;gap:var(--space-6);flex-wrap:wrap}
-.fig .tag{color:var(--content-tertiary);font-size:var(--size-caption);line-height:var(--lh-caption);
-          letter-spacing:.18em;text-transform:uppercase;font-weight:600;min-width:11ch}
-.fig .val{font:700 var(--size-display-2)/var(--lh-display-2) var(--font-display);
-          font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
-          color:var(--content-primary);letter-spacing:-.022em}
-.fig .val .unit{font-size:.38em}
-.ratio-row{display:flex;align-items:baseline;gap:var(--space-6);flex-wrap:wrap;
-           color:var(--content-tertiary);font-size:var(--size-footnote);line-height:var(--lh-footnote);
-           font-family:var(--font-mono)}
-.factor{margin-top:var(--space-6);display:flex;align-items:baseline;gap:var(--space-5);flex-wrap:wrap}
-.factor .n{font:700 var(--size-colossus)/var(--lh-colossus) var(--font-display);
-           font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
-           color:var(--content-primary);letter-spacing:-.03em;transform-origin:left bottom}
-.factor .x{font-size:var(--size-title-1);color:var(--content-tertiary);font-family:var(--font-mono)}
-.verdict{margin-top:var(--space-8);display:flex;align-items:center;gap:var(--space-5);flex-wrap:wrap}
-.stamp{display:inline-flex;align-items:center;gap:var(--space-3);
-       font:700 var(--size-title-1)/var(--lh-title-1) var(--font-display);
-       letter-spacing:.06em;color:var(--sig-abort)}
-.stamp .glyph{font-family:var(--font-mono)}
-.stamp-code{font-family:var(--font-mono);font-size:var(--size-title-3);line-height:var(--lh-title-3);
-            color:var(--sig-abort);letter-spacing:.04em}
-.abort-rule{height:1px;background:var(--sig-abort);transform-origin:left center;
-            margin-top:var(--space-6)}
-.action{margin-top:var(--space-5);display:flex;gap:var(--space-3);align-items:baseline;
-        color:var(--content-secondary);max-width:70ch}
-.action .k{font-size:var(--size-caption);letter-spacing:.18em;text-transform:uppercase;
-           font-weight:600;color:var(--content-tertiary);white-space:nowrap}
-
-/* ---- 06 THE SECOND WITNESS ---------------------------------------------- */
-.witness{display:grid;row-gap:var(--space-6)}
-.wrow{display:grid;grid-template-columns:11ch minmax(0,1fr);column-gap:var(--space-6);
-      align-items:baseline}
-.wrow .tag{color:var(--content-tertiary);font-size:var(--size-caption);line-height:var(--lh-caption);
-           letter-spacing:.18em;text-transform:uppercase;font-weight:600}
-.hash{position:relative;font-family:var(--font-mono);
-      font-size:var(--size-footnote);line-height:var(--lh-footnote);
-      letter-spacing:.04em;word-break:break-all}
-.hash .layer{display:block}
-.hash .cold{position:absolute;inset:0;color:var(--vp-30);opacity:0}
-.hash .warm{color:var(--content-secondary)}
-.unchanged{margin-top:var(--space-8);display:flex;align-items:baseline;gap:var(--space-5);flex-wrap:wrap}
-.unchanged .big{font:700 var(--size-display-2)/var(--lh-display-2) var(--font-display);
-                letter-spacing:-.022em;color:var(--content-primary)}
-
-/* ---- 07 THE LOOP -------------------------------------------------------- */
-.loopline{position:relative;margin:var(--space-8) 0 var(--space-12);height:var(--space-12)}
-.loopline .bar{position:absolute;left:0;right:0;top:50%;height:1px;
-               background:var(--stroke-hairline);transform-origin:left center}
-.node{position:absolute;top:50%;transform:translate(-50%,-50%);
-      display:inline-flex;align-items:center;gap:var(--space-2);
-      background:var(--surface-canvas);padding:0 var(--space-4);
-      font-family:var(--font-mono);font-size:var(--size-caption);line-height:var(--lh-caption);
-      letter-spacing:.18em;color:var(--content-primary)}
-.node .dot{width:var(--space-2);height:var(--space-2);border-radius:var(--radius-capsule);
-           background:var(--content-tertiary)}
-.ltab{width:100%;border-collapse:collapse;max-width:920px;table-layout:fixed}
-.ltab th,.ltab td{text-align:left;padding:var(--space-3) var(--space-6) var(--space-3) 0;
-                  vertical-align:baseline}
-.ltab thead th{font-size:var(--size-overline);line-height:var(--lh-overline);letter-spacing:.18em;
-               text-transform:uppercase;font-weight:600;color:var(--content-tertiary);
-               border-bottom:1px solid var(--stroke-hairline)}
-.ltab tbody th{font-weight:400;font-size:var(--size-footnote);line-height:var(--lh-footnote);
-               color:var(--content-tertiary)}
-.ltab td{font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
-         font-size:var(--size-callout);line-height:var(--lh-callout);color:var(--content-primary)}
-.ltab .u{color:var(--content-tertiary);font-size:.78em;margin-left:.3em}
-.zero{margin-top:var(--space-12);display:flex;align-items:baseline;gap:var(--space-5);flex-wrap:wrap}
-.zero .n{font:700 var(--size-display-1)/var(--lh-display-1) var(--font-display);
-         font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
-         color:var(--content-primary);letter-spacing:-.025em}
-
-/* ---- 08 HANDOVER -------------------------------------------------------- */
-.panel{background:var(--surface-glass);border:1px solid var(--stroke-rim);
-       border-radius:var(--radius-xl);padding:var(--space-4);
-       box-shadow:var(--e2),inset 0 1px 0 var(--specular-top);
-       max-width:820px;backdrop-filter:var(--glass-thin);-webkit-backdrop-filter:var(--glass-thin)}
-.panel .inner{border-radius:var(--radius-sm);background:var(--fill-quiet);padding:var(--space-5)}
-/* concentricity: outer 28 − inset 16 = inner 12 */
-.notclaimed{margin:0;padding:0;list-style:none;display:grid;row-gap:var(--space-3)}
-.notclaimed li{display:grid;grid-template-columns:2ch 1fr;column-gap:var(--space-3);
-               color:var(--content-tertiary);font-size:var(--size-footnote);
-               line-height:var(--lh-footnote)}
-.notclaimed .g{font-family:var(--font-mono);color:var(--content-quaternary)}
-.tele{margin:var(--space-8) 0 0;display:flex;gap:var(--space-6);flex-wrap:wrap;align-items:baseline;
-      font-family:var(--font-mono);font-size:var(--size-footnote);line-height:var(--lh-footnote);
-      color:var(--content-tertiary)}
-.tele .v{color:var(--content-primary)}
-.go{position:relative;display:inline-flex;align-items:center;gap:var(--space-3);
-    min-height:var(--target-min);padding:0 var(--space-6);margin-top:var(--space-12);
-    border-radius:var(--radius-capsule);background:var(--fill-accent);
-    color:var(--content-on-accent);text-decoration:none;border:0;
-    font:600 var(--size-headline)/1 var(--font-text);letter-spacing:.01em;
-    box-shadow:var(--e2);overflow:hidden;
-    transition:transform var(--dur-micro) var(--ease-standard)}
-.go::after{content:"";position:absolute;inset:0;background:var(--fill-pressed);opacity:0;
-           transition:opacity var(--dur-micro) var(--ease-standard)}
-.go:active{transform:scale(.96)}
-.go:active::after{opacity:1}
-.go .arrow{font-family:var(--font-mono)}
-
-/* ---- ?perf meter -------------------------------------------------------- */
-#perf{position:fixed;right:var(--space-6);bottom:var(--space-6);z-index:9;
-      background:var(--surface-glass);border:1px solid var(--stroke-rim);
-      border-radius:var(--radius-sm);padding:var(--space-3) var(--space-4);
-      backdrop-filter:var(--glass-thin);-webkit-backdrop-filter:var(--glass-thin);
-      font-family:var(--font-mono);font-size:var(--size-micro);line-height:var(--lh-micro);
-      color:var(--content-tertiary);display:grid;row-gap:2px;white-space:pre;pointer-events:none;user-select:none}
-#perf b{font-weight:400;color:var(--content-primary)}
-
-/* ---- narrow viewports: stay on the type scale --------------------------- */
-@media (max-width:900px){
-  .hero{font-size:var(--size-display-2);line-height:1.16}
-  .success{font-size:var(--size-display-2);line-height:var(--lh-display-2)}
-  .colossus{font-size:var(--size-display-1);line-height:var(--lh-display-1)}
-  .factor .n{font-size:var(--size-display-1);line-height:var(--lh-display-1)}
-  .floor-out{font-size:var(--size-display-2);line-height:var(--lh-display-2)}
-  .fig .val{font-size:var(--size-title-1);line-height:var(--lh-title-1)}
-  .term{font-size:var(--size-footnote);line-height:var(--lh-footnote);
-        white-space:pre-wrap;word-break:break-all}
-  .wrow{grid-template-columns:1fr;row-gap:var(--space-2)}
-  .deriv{grid-template-columns:1fr;row-gap:var(--space-4)}
+/* ---- THE MEDIUM. 524,288 sectors, 1024 x 512, one pixel per sector. --- */
+/* the medium is one persistent object across beats 02-05: the wipe happens to
+   the same canvas the carve just read, rather than to a new picture of one */
+#mediumlayer{position:absolute;z-index:1;right:var(--space-8);top:50%;
+  transform:translate3d(0,-50%,0);opacity:0;pointer-events:none;
+  transition:opacity var(--dur-large) var(--ease-standard)}
+#mediumlayer[data-on="1"]{opacity:1}
+.beat .col{position:relative;z-index:2;max-width:none}
+.beat.with-medium .col{max-width:min(33%,430px)}
+@media (max-width:1180px){
+  #mediumlayer{position:relative;right:auto;top:auto;transform:none;
+    margin-top:var(--space-6)}
+  .beat.with-medium .col{max-width:none}
+}
+.mediumwrap{position:relative;width:100%;display:flex;justify-content:flex-end;
+  align-items:center}
+canvas#medium{display:block;width:min(1024px,58vw);height:auto;aspect-ratio:2/1;
+  image-rendering:pixelated;background:#0B0B0B;
+  border:1px solid var(--stroke-rim);border-radius:var(--radius-sm);
+  box-shadow:0 40px 120px rgba(11,11,11,.9), 0 0 100px rgba(227,192,137,.06)}
+.medium-cap{position:absolute;left:2px;bottom:-24px;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;
+  font-family:var(--font-mono);font-size:var(--size-overline);
+  letter-spacing:.1em;color:var(--content-quaternary);white-space:nowrap}
+/* the beat that is mostly medium: text left, medium right, overlapping air */
+.split{display:grid;grid-template-columns:minmax(300px,.82fr) minmax(0,1.18fr);
+  gap:var(--space-12);align-items:center}
+@media (max-width:1180px){
+  .split{grid-template-columns:minmax(0,1fr)}
+  canvas#medium{width:100%}
 }
 
-/* ---- REDUCED MOTION: one stacked static document, every number present --- */
-html.rm .act,html.rm .act[data-act="1"],html.rm .act[data-act="8"]{height:auto}
-html.rm .gap{display:none}
-html.rm .stage{position:static;height:auto;overflow:visible;display:block;
-               padding:var(--space-16) clamp(var(--space-6),6vw,120px);
-               border-top:1px solid var(--stroke-hairline)}
-html.rm #film > .act:first-child .stage{border-top:0}
-html.rm [data-anim]{opacity:1!important;transform:none!important}
-html.rm .ch{transform:none!important}
-html.rm .cover{display:none}
-html.rm .hint{display:none}
-html.rm #chrome{position:static;opacity:1;transform:none;margin:var(--space-8) 0 0
-                clamp(var(--space-6),6vw,120px)}
-html.rm .hash .cold{opacity:1!important;position:static}
-html.rm .hash .warm{display:none}
-html.rm .rule,html.rm .abort-rule,html.rm .loopline .bar{transform:none!important}
-html.rm .hero{transform:none}
-html.rm .void-stage{text-align:left;align-items:flex-start}
-html.rm .void-stage .act-label{position:static}
-html.rm .loopline{height:auto;margin:var(--space-6) 0 var(--space-8)}
-html.rm .loopline .bar{display:none}
-html.rm .node{position:static;margin:0 var(--space-6) 0 0;padding:0}
-html.rm .go{opacity:1}
+/* legend for the medium, tiny, only where it is needed */
+.legend{display:flex;gap:var(--space-5);flex-wrap:wrap;margin-top:var(--space-5)}
+.legend span{display:inline-flex;align-items:center;gap:var(--space-2);
+  font:400 var(--size-micro)/1.4 var(--font-text);color:var(--content-quaternary);
+  letter-spacing:.04em}
+.legend i{width:11px;height:11px;border-radius:3px;flex:0 0 auto;
+  border:1px solid var(--stroke-rim)}
+
+/* ---- SPINE ------------------------------------------------------------ */
+.spine{position:relative;z-index:3;flex:0 0 auto;display:flex;align-items:center;
+  gap:var(--space-5);padding:var(--space-4) var(--space-8) var(--space-6)}
+.go{display:inline-flex;align-items:center;gap:var(--space-3);min-height:48px;
+  padding:0 var(--space-6);border-radius:var(--radius-capsule);
+  text-decoration:none;white-space:nowrap;
+  font:600 var(--size-footnote)/1 var(--font-text);letter-spacing:.22em;
+  text-transform:uppercase;
+  transition:transform var(--dur-micro) var(--ease-standard)}
+.go:active{transform:scale(.96)}
+.go .arrow{font-family:var(--font-mono);font-weight:400}
+.go-run{background:var(--fill-accent);color:var(--content-on-accent);
+  box-shadow:0 10px 34px rgba(227,192,137,.18),inset 0 1px 0 var(--specular-top)}
+.go-alt{color:var(--content-tertiary);border:1px solid var(--stroke-rim);
+  font-size:var(--size-micro);min-height:44px;padding:0 var(--space-5)}
+
+/* the beat rail: position is the state, never colour alone */
+.rail{display:flex;align-items:center;gap:14px;margin-left:var(--space-4)}
+.rail button{appearance:none;background:none;border:0;padding:10px 2px;
+  cursor:pointer;display:block}
+.rail button i{display:block;width:26px;height:2px;border-radius:2px;
+  background:var(--content-quaternary);opacity:.42;
+  transition:opacity var(--dur-small) var(--ease-standard),
+             transform var(--dur-small) var(--ease-standard),
+             background var(--dur-small) var(--ease-standard)}
+.rail button[aria-current="true"] i{background:var(--content-accent);opacity:1;
+  transform:scaleX(1.85)}
+.keys{margin-left:auto;display:flex;align-items:center;gap:var(--space-4);
+  font:400 var(--size-micro)/1 var(--font-text);color:var(--content-quaternary);
+  white-space:nowrap}
+.keys kbd{font-family:var(--font-mono);font-size:var(--size-overline);
+  color:var(--content-tertiary);border:1px solid var(--stroke-rim);
+  border-radius:5px;padding:3px 6px}
+
+/* ---- SHORT SCREENS. 1366 x 768 is the projector. ---------------------- */
+@media (max-height:800px){
+  .rack{padding:var(--space-4) var(--space-6) var(--space-2)}
+  .spine{padding:var(--space-3) var(--space-6) var(--space-4)}
+  .beat{padding:0 var(--space-6)}
+  .colossus{font-size:clamp(84px,12.8vw,176px)}
+  .say{font:400 var(--size-title-3)/1.28 var(--font-display);max-width:26ch}
+  .evid{margin-top:var(--space-8)}
+  canvas#medium{width:min(880px,58vw)}
+}
+
+/* Reduced motion: the reveal is a courtesy, never a gate. Everything is at its
+   destination immediately and the medium paints its final state. */
+@media (prefers-reduced-motion:reduce){
+  .rise,.beat[data-live="1"] .rise{opacity:1;transform:none;transition:none}
+  .atm-grain{display:none}
+}
 </style>
 </head>
 <body>
 
-<div id="chrome" class="t-overline">SENTINELWIPE <span class="sep">·</span> THE APPROACH <a href="index.html" class="t-overline" style="display:inline-flex;align-items:center;gap:var(--space-2);min-height:44px;padding:0 var(--space-4);border-radius:var(--radius-capsule);border:1px solid var(--stroke-rim);background:var(--fill-quiet);color:var(--content-tertiary);text-decoration:none;white-space:nowrap"><span aria-hidden="true" style="font-family:var(--font-mono)">&#8592;</span>Entry <kbd style="font-family:var(--font-mono);text-transform:none;letter-spacing:0">Esc</kbd></a></div>
+<div class="atm atm-glow"></div>
+<div class="atm atm-vig"></div>
+<div class="atm atm-grain"></div>
 
-<main id="film">
+<div id="app">
 
-<!-- ==================== 01 · VOID ==================================== -->
-<section class="act" data-act="1" aria-label="01 VOID">
-  <div class="stage void-stage">
-    <p class="t-overline act-label" data-anim style="opacity:0">01 <span class="sep">/</span> VOID</p>
-    <h1 class="hero" data-anim><span class="hline" data-n="23"><span class="ch" style="--i:0">E</span><span class="ch" style="--i:1">v</span><span class="ch" style="--i:2">e</span><span class="ch" style="--i:3">r</span><span class="ch" style="--i:4">y</span><span class="ch" style="--i:5">&nbsp;</span><span class="ch" style="--i:6">s</span><span class="ch" style="--i:7">a</span><span class="ch" style="--i:8">n</span><span class="ch" style="--i:9">i</span><span class="ch" style="--i:10">t</span><span class="ch" style="--i:11">i</span><span class="ch" style="--i:12">s</span><span class="ch" style="--i:13">a</span><span class="ch" style="--i:14">t</span><span class="ch" style="--i:15">i</span><span class="ch" style="--i:16">o</span><span class="ch" style="--i:17">n</span><span class="ch" style="--i:18">&nbsp;</span><span class="ch" style="--i:19">t</span><span class="ch" style="--i:20">o</span><span class="ch" style="--i:21">o</span><span class="ch" style="--i:22">l</span></span><span class="hline" data-n="21"><span class="ch" style="--i:0">o</span><span class="ch" style="--i:1">n</span><span class="ch" style="--i:2">&nbsp;</span><span class="ch" style="--i:3">t</span><span class="ch" style="--i:4">h</span><span class="ch" style="--i:5">e</span><span class="ch" style="--i:6">&nbsp;</span><span class="ch" style="--i:7">m</span><span class="ch" style="--i:8">a</span><span class="ch" style="--i:9">r</span><span class="ch" style="--i:10">k</span><span class="ch" style="--i:11">e</span><span class="ch" style="--i:12">t</span><span class="ch" style="--i:13">&nbsp;</span><span class="ch" style="--i:14">a</span><span class="ch" style="--i:15">s</span><span class="ch" style="--i:16">s</span><span class="ch" style="--i:17">e</span><span class="ch" style="--i:18">r</span><span class="ch" style="--i:19">t</span><span class="ch" style="--i:20">s</span></span><span class="hline" data-n="15"><span class="ch" style="--i:0">t</span><span class="ch" style="--i:1">h</span><span class="ch" style="--i:2">a</span><span class="ch" style="--i:3">t</span><span class="ch" style="--i:4">&nbsp;</span><span class="ch" style="--i:5">i</span><span class="ch" style="--i:6">t</span><span class="ch" style="--i:7">&nbsp;</span><span class="ch" style="--i:8">w</span><span class="ch" style="--i:9">o</span><span class="ch" style="--i:10">r</span><span class="ch" style="--i:11">k</span><span class="ch" style="--i:12">e</span><span class="ch" style="--i:13">d</span><span class="ch" style="--i:14">.</span></span></h1>
-    <p class="hint" data-anim>SCROLL TO CONTINUE</p>
-  </div>
-</section>
-<div class="gap"></div>
+  <header class="rack">
+    <span class="wordmark">Sentinelwipe</span>
+    <span class="stamp">
+      <span class="dot" aria-hidden="true"></span>
+      REPLAY &#183; RECORDED RUN <b data-num="run.run_id" data-fmt="raw"></b>
+      &#183; SHA-256 <b class="hash" id="rSha">computing</b>
+    </span>
+  </header>
 
-<!-- ==================== 02 · THE CLAIM ============================== -->
-<section class="act" data-act="2" aria-label="02 THE CLAIM">
-  <div class="stage">
-    <div class="wrap">
-      <p class="t-overline act-label">02 <span class="sep">/</span> THE CLAIM</p>
-      <div class="term" id="t2a"><span class="pr">$ </span>wipe --target &lt;root&gt;/t2.img --allow-root &lt;root&gt; --i-understand &lt;root&gt;/t2.img --sanitize ata-sanitize-block-erase<span class="cover" data-cover></span></div>
-      <div class="term" id="t2b"><span class="pr">&gt; </span>device_reported_success = <span class="" data-num="lie.device_reported_success" data-fmt="raw"></span><span class="cover" data-cover></span></div>
-      <div class="claim" data-anim style="opacity:0">
-        <span class="success"><span class="glyph">✓</span>SUCCESS</span>
-        <span class="t-caption dim" style="letter-spacing:.18em;text-transform:uppercase">reported by device · return code not trusted</span>
-      </div>
-      <p class="t-callout cap" data-anim style="opacity:0">The drive said it was done. Every tool on the market stops reading here.</p>
+  <main id="stage">
+
+    <!-- The medium persists across beats 02-05. The story changes around it;
+         it does not get rebuilt, so the wipe happens to the same object the
+         carve just read. 1024 x 512 backing store, one pixel per sector. -->
+    <div id="mediumlayer" aria-hidden="true">
+      <canvas id="medium" width="1024" height="512"></canvas>
+      <span class="medium-cap" id="medCap"></span>
     </div>
-  </div>
-</section>
-<div class="gap"></div>
 
-<!-- ==================== 03 · THE NUMBER ============================= -->
-<section class="act" data-act="3" aria-label="03 THE NUMBER">
-  <div class="stage">
-    <div class="wrap">
-      <p class="t-overline act-label">03 <span class="sep">/</span> THE NUMBER</p>
-      <p class="colossus gold" data-anim style="opacity:0;margin:0"><span class="num " data-num="lie.sanitize.measured_ns" data-fmt="int"></span> <span class="unit">ns</span></p>
-      <p class="t-body cap" data-anim style="opacity:0">elapsed, as reported by the device.</p>
-      <p class="t-footnote dim" data-anim style="opacity:0;margin-top:var(--space-6)">
-        <span class="mono" data-num="lie.sanitize.operation" data-fmt="raw"></span> · <span class="num " data-num="lie.sanitize.passes" data-fmt="int"></span> pass over <span class="num " data-num="lie.sanitize.capacity_bytes" data-fmt="int"></span> bytes of capacity.
-      </p>
-    </div>
-  </div>
-</section>
-<div class="gap"></div>
-
-<!-- ==================== 04 · THE FLOOR ============================== -->
-<section class="act" data-act="4" aria-label="04 THE FLOOR">
-  <div class="stage">
-    <div class="wrap">
-      <p class="t-overline act-label">04 <span class="sep">/</span> THE FLOOR</p>
-      <dl class="deriv">
-        <dt data-anim style="opacity:0">Measured rate</dt>
-        <dd data-anim style="opacity:0"><span class="num " data-num="lie.sanitize.rate_bps" data-fmt="fix6"></span> <span class="unit">B/s</span>
-          <span class="side">baseline.source <span class="mono" data-num="lie.sanitize.baseline_source" data-fmt="raw"></span> · measured <span class="mono" data-num="lie.sanitize.baseline_measured" data-fmt="raw"></span></span></dd>
-        <dt data-anim style="opacity:0">Work</dt>
-        <dd data-anim style="opacity:0"><span class="num " data-num="lie.sanitize.work_bytes" data-fmt="int"></span> <span class="unit">bytes</span>
-          <span class="side">probe <span class="num " data-num="lie.sanitize.probe_bytes" data-fmt="int"></span> bytes in <span class="num " data-num="lie.sanitize.probe_elapsed_ns" data-fmt="int"></span> ns</span></dd>
-      </dl>
-      <div class="rule" data-anim style="transform:scaleX(0)"></div>
-      <div class="fig" style="align-items:flex-end">
-        <p class="floor-out" data-anim style="opacity:0;margin:0"><span class="num " data-num="lie.sanitize.floor_ns" data-fmt="int"></span> <span class="unit">ns</span></p>
-        <p class="formula" data-anim style="opacity:0;margin:0 0 var(--space-2)">
-          floor_ns = work_bytes × probe_elapsed_ns ÷ probe_bytes</p>
-      </div>
-      <p class="t-callout cap" data-anim style="opacity:0">Derived, never hardcoded — a fixed threshold would false-positive on fast NVMe. Computed in u128, truncating downward, so rounding always favours the device.</p>
-    </div>
-  </div>
-</section>
-<div class="gap"></div>
-
-<!-- ==================== 05 · THE COLLISION · THE PEAK ============ -->
-<section class="act" data-act="5" aria-label="05 THE COLLISION">
-  <div class="stage">
-    <div class="wrap">
-      <p class="t-overline act-label">05 <span class="sep">/</span> THE COLLISION</p>
-      <div class="pair">
-        <div class="fig" data-anim style="opacity:0" id="obs">
-          <span class="tag">Observed</span><span class="val"><span class="num " data-num="lie.sanitize.measured_ns" data-fmt="int"></span> <span class="unit">ns</span></span></div>
-        <div class="fig" data-anim style="opacity:0" id="flr">
-          <span class="tag">Floor</span><span class="val"><span class="num " data-num="lie.sanitize.floor_ns" data-fmt="int"></span> <span class="unit">ns</span></span></div>
-      </div>
-      <div class="ratio-row" data-anim style="opacity:0">
-        <span>ratio measured ÷ floor = <span class="num " data-num="lie.sanitize.ratio" data-fmt="fix6"></span></span>
-        <span>refusal threshold <span class="num " data-num="lie.sanitize.threshold" data-fmt="fix6"></span></span>
-      </div>
-      <div class="factor">
-        <span class="n" data-anim style="opacity:0"><span class="num " data-calc="lie_factor" data-fmt="fix3"></span></span>
-        <span class="x" data-anim style="opacity:0">× faster than the medium can be written</span>
-      </div>
-      <div class="verdict" id="v5" data-anim style="opacity:0;transform:translateY(12px) scale(1.04)">
-        <span class="stamp"><span class="glyph">✕</span>REFUSED</span>
-        <span class="stamp-code"><span class="mono" data-num="lie.sanitize.code" data-fmt="raw"></span></span>
-        <span class="t-caption dim" style="letter-spacing:.18em;text-transform:uppercase">severity <span class="" data-num="lie.sanitize.severity" data-fmt="raw"></span></span>
-      </div>
-      <div class="abort-rule" data-anim style="transform:scaleX(0)"></div>
-      <p class="action" data-anim style="opacity:0">
-        <span class="k">Action</span>
-        <span class="t-callout">The sanitisation claim is refused and the return code is discarded: <span class="mono">return_code_trusted = <span class="" data-num="lie.sanitize.return_code_trusted" data-fmt="raw"></span></span>. The device reported success and the report says so; the verdict does not come from it.</span>
-      </p>
-    </div>
-  </div>
-</section>
-<div class="gap"></div>
-
-<!-- ==================== 06 · THE SECOND WITNESS ==================== -->
-<section class="act" data-act="6" aria-label="06 THE SECOND WITNESS">
-  <div class="stage">
-    <div class="wrap">
-      <p class="t-overline act-label">06 <span class="sep">/</span> THE SECOND WITNESS</p>
-      <div class="witness">
-        <div class="wrow" data-anim id="w6a" style="transform:translateX(-70%)">
-          <span class="tag">Before</span>
-          <span class="hash"><span class="layer warm"><span class="" data-num="lie.witness.before" data-fmt="raw"></span></span><span class="layer cold"><span class="" data-num="lie.witness.before" data-fmt="raw"></span></span></span>
-        </div>
-        <div class="wrow" data-anim id="w6b" style="transform:translateX(70%)">
-          <span class="tag">After</span>
-          <span class="hash"><span class="layer warm"><span class="" data-num="lie.witness.after" data-fmt="raw"></span></span><span class="layer cold"><span class="" data-num="lie.witness.after" data-fmt="raw"></span></span></span>
+    <!-- ============ 01 THE PROBLEM ============ -->
+    <section class="beat" data-live="1" aria-label="The problem">
+      <div class="col">
+        <p class="kicker rise" style="--i:0">The problem</p>
+        <h1 class="colossus rise" style="--i:1"><span id="bSpeed"></span><span class="x">&#215;</span></h1>
+        <p class="say rise" style="--i:2">faster than this drive&#8217;s own measured
+          write rate can cross the medium once. <b>It reported success.</b></p>
+        <div class="evid rise" style="--i:3">
+          <span class="cell"><span class="k">It returned in</span>
+            <span class="v"><span data-num="lie.sanitize.measured_ns" data-fmt="int"></span><span class="u">ns</span></span></span>
+          <span class="rule"></span>
+          <span class="cell"><span class="k">Physics allows</span>
+            <span class="v"><span data-num="lie.sanitize.floor_ns" data-fmt="int"></span><span class="u">ns</span></span></span>
+          <span class="rule"></span>
+          <span class="cell"><span class="k">Timing gate</span>
+            <span class="v"><span data-num="lie.sanitize.ratio" data-fmt="fix6"></span>
+              &#8201;&lt;&#8201;<span data-num="lie.sanitize.threshold" data-fmt="fix6"></span></span></span>
+          <span class="rule"></span>
+          <span class="chip c-abort"><span class="gl" aria-hidden="true">&#10007;</span>Not certified</span>
         </div>
       </div>
-      <div class="unchanged" data-anim style="opacity:0">
-        <span class="big">UNCHANGED</span>
-        <span class="t-footnote dim mono">medium_unchanged = <span class="" data-num="lie.witness.unchanged" data-fmt="raw"></span> · witness over <span class="num " data-num="lie.witness.sectors" data-fmt="int"></span> <span class="unit">sectors</span> · SHA-256</span>
-      </div>
-      <p class="t-callout cap" data-anim style="opacity:0">Impossibly fast — and the bytes it claimed to erase are unchanged. Two independent witnesses, neither trusting the firmware.</p>
-    </div>
-  </div>
-</section>
-<div class="gap"></div>
+    </section>
 
-<!-- ==================== 07 · THE LOOP =============================== -->
-<section class="act" data-act="7" aria-label="07 THE LOOP">
-  <div class="stage">
-    <div class="wrap">
-      <p class="t-overline act-label">07 <span class="sep">/</span> THE LOOP</p>
-      <div class="loopline">
-        <div class="bar" data-anim style="transform:scaleX(0)"></div>
-        <span class="node" data-anim style="opacity:0;left:8%"><span class="dot"></span>CARVE</span>
-        <span class="node" data-anim style="opacity:0;left:50%"><span class="dot"></span>WIPE</span>
-        <span class="node" data-anim style="opacity:0;left:92%"><span class="dot"></span>CARVE</span>
-      </div>
-      <table class="ltab">
-        <thead><tr>
-          <th style="width:34%"></th>
-          <th data-col="b" data-anim style="opacity:0">Before wipe</th>
-          <th data-col="a" data-anim style="opacity:0">After wipe</th>
-        </tr></thead>
-        <tbody>
-          <tr><th>Candidates scanned</th>
-            <td data-col="b" data-anim style="opacity:0"><span class="num " data-num="loop.before.scanned" data-fmt="int"></span></td>
-            <td data-col="a" data-anim style="opacity:0"><span class="num " data-num="loop.after.scanned" data-fmt="int"></span></td></tr>
-          <tr><th>Candidates admitted</th>
-            <td data-col="b" data-anim style="opacity:0"><span class="num " data-num="loop.before.admitted" data-fmt="int"></span></td>
-            <td data-col="a" data-anim style="opacity:0"><span class="num " data-num="loop.after.admitted" data-fmt="int"></span></td></tr>
-          <tr><th>Recovered byte-exact</th>
-            <td data-col="b" data-anim style="opacity:0"><span class="num " data-num="loop.recall_before" data-fmt="int"></span> <span class="u">of <span class="num " data-num="loop.planted" data-fmt="int"></span> planted</span></td>
-            <td data-col="a" data-anim style="opacity:0"><span class="num " data-num="loop.recall_after" data-fmt="int"></span> <span class="u">of <span class="num " data-num="loop.planted" data-fmt="int"></span> planted</span></td></tr>
-          <tr><th>Entropy <span class="u">bits/byte</span></th>
-            <td data-col="b" data-anim style="opacity:0"><span class="num " data-num="loop.entropy.before" data-fmt="fix6"></span></td>
-            <td data-col="a" data-anim style="opacity:0"><span class="num " data-num="loop.entropy.after" data-fmt="fix6"></span></td></tr>
-        </tbody>
-      </table>
-      <div class="zero" data-anim style="opacity:0">
-        <span class="n"><span class="num " data-num="loop.after.admitted" data-fmt="int"></span> <span class="unit">of <span class="num " data-num="loop.planted" data-fmt="int"></span></span></span>
-        <span class="t-caption dim" style="letter-spacing:.18em;text-transform:uppercase">admitted after the wipe</span>
-      </div>
-      <p class="t-callout cap" data-anim style="opacity:0">The post-wipe scan found <span class="num " data-num="loop.after.scanned" data-fmt="int"></span> candidates and admitted <span class="num " data-num="loop.after.admitted" data-fmt="int"></span> — signature matching alone would have reported all of them. Of the <span class="num " data-num="loop.planted" data-fmt="int"></span> planted files, <span class="num " data-num="loop.reachability.contiguous" data-fmt="int"></span> were contiguous, <span class="num " data-num="loop.reachability.needs_bifragment_reassembly" data-fmt="int"></span> needed bifragment reassembly and <span class="num " data-num="loop.reachability.unreachable_by_construction" data-fmt="int"></span> were unreachable by construction.</p>
-    </div>
-  </div>
-</section>
-<div class="gap"></div>
-
-<!-- ==================== 08 · HANDOVER ============================== -->
-<section class="act" data-act="8" aria-label="08 HANDOVER">
-  <div class="stage">
-    <div class="wrap">
-      <p class="t-overline act-label" data-anim style="opacity:0">08 <span class="sep">/</span> HANDOVER</p>
-      <h2 class="t-display-2" data-anim style="opacity:0;color:var(--content-primary);margin:0 0 var(--space-6)">
-        Every tool asserts. This one publishes the arithmetic.</h2>
-      <div class="panel" data-anim style="opacity:0">
-        <div class="inner">
-          <p class="t-overline" style="margin:0 0 var(--space-4)">What this film does not claim</p>
-          <ul class="notclaimed">
-            <li><span class="g">—</span><span>No Ed25519 signature and no Merkle chain. <span class="mono">core/ledger</span> is a one-line stub; no signature status is rendered anywhere on this surface.</span></li>
-            <li><span class="g">—</span><span><span class="mono">deterministic_core</span> and <span class="mono">measurement_envelope</span> are not emitted as named regions. Any grouping above is this page's own, per <span class="mono">docs/wipe_schema.md</span> §4.</span></li>
-            <li><span class="g">—</span><span>Nothing was mounted. Read mode <span class="mono"><span class="" data-num="device.transport" data-fmt="raw"></span></span> against an image; <span class="mono">model</span>, <span class="mono">serial</span> and <span class="mono">firmware</span> are the literal string <span class="mono"><span class="" data-num="device.model" data-fmt="raw"></span></span>.</span></li>
-            <li><span class="g">—</span><span>Verification is <span class="mono"><span class="" data-num="verification.mode" data-fmt="raw"></span></span> at coverage <span class="num " data-num="verification.coverage_fraction" data-fmt="fix6"></span>; <span class="mono">whole_medium_claim</span> is <span class="mono"><span class="" data-num="outcome.whole_medium_claim" data-fmt="raw"></span></span> and the longest unsampled run is <span class="num " data-num="verification.largest_unsampled_run_sectors" data-fmt="int"></span> <span class="unit">sectors</span>.</span></li>
-          </ul>
+    <!-- ============ 02 THE MEDIUM ============ -->
+    <section class="beat with-medium" data-medium="before" aria-label="The medium">
+      <div class="col">
+        <p class="kicker rise" style="--i:0">The medium</p>
+        <h1 class="colossus rise" style="--i:1"><span data-num="loop.planted" data-fmt="int"></span><span class="of">files</span></h1>
+        <p class="say small rise" style="--i:2">planted at known offsets, with known
+          hashes. Deleted, not erased &#8212; the ordinary case.</p>
+        <div class="evid rise" style="--i:3">
+          <span class="cell"><span class="k">Capacity</span>
+            <span class="v"><span data-num="device.capacity_bytes" data-fmt="int"></span><span class="u">B</span></span></span>
+          <span class="rule"></span>
+          <span class="cell"><span class="k">Entropy before</span>
+            <span class="v"><span data-num="loop.entropy.before" data-fmt="fix6"></span><span class="u">bits/byte</span></span></span>
         </div>
       </div>
-      <p class="tele" data-anim style="opacity:0">
-        <span>telemetry <span class="v"><span class="num " data-num="telemetry.achieved_hz" data-fmt="fix6"></span> <span class="unit">Hz</span></span> measured at period <span class="v"><span class="num " data-num="telemetry.period_ms" data-fmt="int"></span> <span class="unit">ms</span></span></span>
-        <span>floor <span class="v"><span class="num " data-num="telemetry.rate_floor_hz" data-fmt="fix6"></span> <span class="unit">Hz</span></span></span>
-        <span>met_rate_floor <span class="v"><span class="mono" data-num="telemetry.met_rate_floor" data-fmt="raw"></span></span> · <span class="v">MET</span></span>
-      </p>
-      <a class="go" href="instrument.html" data-anim style="opacity:0">
-        Open the instrument <span class="arrow">→</span></a>
-      <p class="t-footnote dim" data-anim style="opacity:0;margin-top:var(--space-5)">
-        Outcome <span class="mono"><span class="" data-num="outcome.code" data-fmt="raw"></span></span> · run <span class="mono"><span class="" data-num="run.run_id" data-fmt="raw"></span></span> · elapsed <span class="num " data-num="run.elapsed_ns" data-fmt="int"></span> <span class="unit">ns</span>
-      </p>
+    </section>
+
+    <!-- ============ 03 RECOVERED ============ -->
+    <section class="beat with-medium" data-medium="found" aria-label="Recovered">
+      <div class="col">
+        <p class="kicker rise" style="--i:0">Carve</p>
+        <h1 class="colossus rise" style="--i:1"><span data-num="loop.recall_before" data-fmt="int"></span><span class="of">of <span data-num="loop.planted" data-fmt="int"></span></span></h1>
+        <p class="say small rise" style="--i:2">recovered <b>byte-exact</b>. Every one
+          joined to the fixture manifest by SHA-256, not by row count.</p>
+        <div class="legend rise" style="--i:3">
+          <span><i style="background:#CFCBC4"></i>above the gate</span>
+          <span><i style="background:#4A4741"></i>rejected</span>
+          <span><i style="background:#1F1E1C"></i>not mapped by the report</span>
+        </div>
+        <div class="evid rise" style="--i:4">
+          <span class="cell"><span class="k">Candidates scanned</span>
+            <span class="v"><span data-num="loop.before.scanned" data-fmt="int"></span></span></span>
+          <span class="rule"></span>
+          <span class="cell"><span class="k">Above the confidence gate</span>
+            <span class="v"><span data-num="loop.before.admitted" data-fmt="int"></span></span></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 04 SANITIZE ============ -->
+    <section class="beat with-medium" data-medium="wipe" aria-label="Sanitize">
+      <div class="col">
+        <p class="kicker rise" style="--i:0">Sanitize &#183; NIST SP 800-88 <span data-num="dispatch.nist_category" data-fmt="raw"></span></p>
+        <h1 class="say rise" style="--i:1;margin:0;color:var(--content-primary);
+          font-weight:600">Overwrite the medium, then read it back.</h1>
+        <p class="rise" style="--i:2;margin:var(--space-5) 0 0;
+          font:400 clamp(15px,1.5vw,20px)/1.4 var(--font-mono);letter-spacing:-.01em;
+          color:var(--content-secondary);overflow-wrap:anywhere"
+          data-num="dispatch.method" data-fmt="raw"></p>
+        <p class="say small rise" style="--i:3;margin-top:var(--space-4)">Chosen by
+          the medium, not by a preference. The sweep is recorded telemetry.</p>
+        <div class="evid rise" style="--i:4">
+          <span class="cell"><span class="k">Telemetry frames</span>
+            <span class="v" id="bFrames"></span></span>
+          <span class="rule"></span>
+          <span class="cell"><span class="k">Entropy after</span>
+            <span class="v"><span data-num="loop.entropy.after" data-fmt="fix6"></span><span class="u">bits/byte</span></span></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 05 NOTHING ============ -->
+    <section class="beat with-medium" data-medium="after" aria-label="Nothing">
+      <div class="col">
+        <p class="kicker rise" style="--i:0">Carve again</p>
+        <h1 class="colossus rise" style="--i:1"><span data-num="loop.recall_after" data-fmt="int"></span><span class="of">of <span data-num="loop.planted" data-fmt="int"></span></span></h1>
+        <p class="say small rise" style="--i:2">Same engine. Same parameters. The
+          randomised medium still raised
+          <b><span data-num="loop.after.scanned" data-fmt="int"></span> signature hits</b>
+          &#8212; a signature-only carver would have called every one of them a
+          recovered file. Structure validation admitted none.</p>
+        <div class="evid rise" style="--i:3">
+          <span class="cell"><span class="k">Signature candidates</span>
+            <span class="v"><span data-num="loop.after.scanned" data-fmt="int"></span></span></span>
+          <span class="rule"></span>
+          <span class="cell"><span class="k">Admitted</span>
+            <span class="v"><span data-num="loop.after.admitted" data-fmt="int"></span></span></span>
+          <span class="rule"></span>
+          <span class="chip c-quiet"><span class="gl" aria-hidden="true">&#8709;</span>Nothing recovered</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 06 THE LIMIT ============ -->
+    <section class="beat" aria-label="What this run does not claim">
+      <div class="col">
+        <p class="kicker rise" style="--i:0">What this run does not claim</p>
+        <h1 class="colossus rise" style="--i:1"><span data-num="verification.coverage_fraction" data-fmt="fix6"></span></h1>
+        <p class="say rise" style="--i:2">of the medium was read back and checked.
+          <b>We do not claim the rest.</b></p>
+        <div class="evid rise" style="--i:3">
+          <span class="cell"><span class="k">Sectors verified</span>
+            <span class="v"><span data-num="verification.sectors_verified_min" data-fmt="int"></span>
+              <span class="u">of <span data-num="device.total_sectors" data-fmt="int"></span></span></span></span>
+          <span class="rule"></span>
+          <span class="cell"><span class="k">Longest unsampled run</span>
+            <span class="v"><span data-num="verification.largest_unsampled_run_sectors" data-fmt="int"></span>
+              <span class="u">sectors</span></span></span>
+          <span class="rule"></span>
+          <span class="cell"><span class="k">whole_medium_claim</span>
+            <span class="v"><span data-num="outcome.whole_medium_claim" data-fmt="raw"></span></span></span>
+          <span class="rule"></span>
+          <span class="chip c-caution"><span class="gl" aria-hidden="true">&#9650;</span>Sampled, not exhaustive</span>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <nav class="spine" aria-label="Spine">
+    <a class="go go-run" href="instrument.html" id="goRun">Run the loop
+      <span class="arrow" aria-hidden="true">&#8594;</span></a>
+    <a class="go go-alt" href="approach.html">How it works
+      <span class="arrow" aria-hidden="true">&#8594;</span></a>
+    <div class="rail" role="tablist" aria-label="Beats">
+      <button type="button" role="tab" data-beat="0" aria-current="true" aria-label="01 The problem"><i></i></button>
+      <button type="button" role="tab" data-beat="1" aria-current="false" aria-label="02 The medium"><i></i></button>
+      <button type="button" role="tab" data-beat="2" aria-current="false" aria-label="03 Carve"><i></i></button>
+      <button type="button" role="tab" data-beat="3" aria-current="false" aria-label="04 Sanitize"><i></i></button>
+      <button type="button" role="tab" data-beat="4" aria-current="false" aria-label="05 Carve again"><i></i></button>
+      <button type="button" role="tab" data-beat="5" aria-current="false" aria-label="06 Limits"><i></i></button>
     </div>
-  </div>
-</section>
+    <div class="keys">
+      <span id="kAdv"><kbd>Space</kbd> advance</span>
+      <span><kbd>Esc</kbd> start</span>
+    </div>
+  </nav>
 
-</main>
-
-<div id="perf" hidden></div>
-
+</div>
 <script type="application/json" id="payload">{"meta":{"note":"Every value in this file was read out of a committed artifact. Regenerate with ui/build_payload.py. Nothing here is illustrative.","sources":{"lie":"docs/evidence/fake_sanitize_run.txt","carve":"fixtures/sample_output.json","wipe":"a live run of core/target/release/wipe"},"schemas":{"carve":"sentinelwipe.carve.report/1","wipe":"sentinelwipe.wipe.report/1"}},"lie":{"command":"wipe --target <root>/t2.img --allow-root <root> --i-understand <root>/t2.img --sanitize ata-sanitize-block-erase","primitive":"ata-sanitize-block-erase","device_reported_success":true,"sanitize":{"operation":"ATA SANITIZE BLOCK ERASE (simulated)","code":"UNVERIFIED_TIMING","severity":"unverified","simulated":true,"device_reported_success":true,"return_code_trusted":false,"work_bytes":268435456,"capacity_bytes":268435456,"passes":1,"measured_ns":1000,"floor_ns":431059458,"ratio":2e-06,"threshold":0.05,"baseline_source":"observed_pass","baseline_measured":true,"probe_bytes":268435456,"probe_elapsed_ns":431059458,"rate_bps":622734175.107695,"note":"UNVERIFIED_TIMING \u00b7 ATA SANITIZE BLOCK ERASE (simulated) \u00b7 measured 0.000001 s against an expected minimum of 0.431059 s (0.000002 of it) at a measured 622734175.107695 B/s. Device reported success; the return code was not trusted."},"overwrite":{"operation":"host overwrite: single_pass_seeded_random_shake128","code":"VERIFIED_TIMING","severity":"verified","simulated":false,"device_reported_success":true,"return_code_trusted":false,"work_bytes":268435456,"capacity_bytes":268435456,"passes":1,"measured_ns":432911500,"floor_ns":451268000,"ratio":0.959322,"threshold":0.05,"baseline_source":"calibration_probe","baseline_measured":true,"probe_bytes":33554432,"probe_elapsed_ns":56408500,"rate_bps":594847088.647987,"note":"VERIFIED_TIMING \u00b7 host overwrite: single_pass_seeded_random_shake128 \u00b7 measured 0.432912 s against an expected minimum of 0.451268 s (0.959322 of it)."},"witness":{"sectors":256,"before":"c82e10f39199bc4fb1728f8bf12f3049717809b47956437d3f549917b57fc9c6","after":"c82e10f39199bc4fb1728f8bf12f3049717809b47956437d3f549917b57fc9c6","unchanged":true},"device":{"kind":"image file","model":"unknown","serial":"unknown","transport":"file","medium":"image","is_physical_medium":false,"logical_sector_bytes":512,"total_sectors":524288,"capacity_bytes":268435456}},"loop":{"before":{"scanned":58,"admitted":33},"after":{"scanned":30,"admitted":0},"recall_before":28,"recall_after":0,"planted":40,"reachability":{"contiguous":28,"needs_bifragment_reassembly":5,"unreachable_by_construction":7},"entropy":{"before":7.06169,"after":7.999999,"estimator":"Shannon over a 256-bin byte histogram of every byte of the medium, Neumaier-compensated; the same support and the same estimator fixtures/corpus.py used for the manifest figure, so the two may be subtracted. Printed TRUNCATED to six places, not rounded, so a measured 7.9999995 never prints as the unattainable 8.000000; `delta` is the difference of the two printed values, so these three numbers subtract exactly. NOT the strided per-frame telemetry sample."}},"device":{"kind":"image file","model":"unknown","serial":"unknown","firmware":"unknown","transport":"file","identity_source":"file-metadata","is_physical_medium":false,"medium":"image","has_hidden_regions":false,"logical_sector_bytes":512,"physical_sector_bytes":null,"total_sectors":524288,"capacity_bytes":268435456,"writable":true},"dispatch":{"method":"single_pass_seeded_random_shake128","method_selected_by":"detected-medium","passes":1,"nist_category":"Clear","legacy_shape":null,"sanitize_primitive":null,"sanitize_selected_by":"detected-medium","rationale":"regular file standing in for a medium: there is no controller, so no firmware primitive exists to attempt and any that is requested is simulated and labelled so"},"authorization":{"decision_code":"ALLOW_FILE","require_confirmation":true,"allowed_roots":["/Users/rosh/Personal/Hackathons/Smart India Hackathon 2026/sentinelwipe/out/ui-run"]},"run":{"run_id":"sentinelwipe/wipe/v1","target_resolved":"/Users/rosh/Personal/Hackathons/Smart India Hackathon 2026/sentinelwipe/out/ui-run/medium.img","elapsed_ns":732819375,"elapsed_s":0.732819},"overwrite":{"method":"single_pass_seeded_random_shake128","simulated":false,"nist_category":"Clear","legacy_shape":null,"bytes_written":268435456,"duration_ns":433561458,"duration_s":0.433561,"bytes_per_second":619140495.648024,"passes":[{"pass":1,"of":1,"pattern":"shake128_seeded_stream","sectors_written":524288,"bytes_written":268435456,"duration_ns":431637042,"sync_ns":5601709,"bytes_per_second":621900879.396722,"chunk_writes":256,"chunk_sectors_first":2048,"chunk_sectors_final":2048,"chunk_resizes":0,"max_chunk_ns":2841667}],"scope_limit":"An overwrite pass against an image file overwrites the byte range of that file and nothing else. It does not reach, and this tool does not claim to reach, prior copies of those bytes held by the host filesystem (copy-on-write snapshots, journals) or remapped by the host storage controller (wear levelling, over-provisioning, bad-block retirement). Purge of the underlying physical medium is neither performed nor claimed."},"verification":{"mode":"sampled","all_passes_verified":true,"coverage_fraction":0.001953,"sectors_verified_min":1024,"sectors_unverified_max":523264,"largest_unsampled_run_sectors":2815,"passes":[{"pass":1,"of":1,"mode":"sampled_read_back","pattern":"shake128_seeded_stream","verdict":"PATTERN_CONFIRMED_ON_SAMPLE","sectors_verified":1024,"sectors_unverified":523264,"bytes_verified":524288,"coverage_fraction":0.001953,"largest_unsampled_run_sectors":2815,"mismatched_sectors":0,"mismatches_truncated":false,"duration_ns":1894625,"bytes_per_second":276723889.951837,"sample_digest_hex":"09a55d5416c2db9d58c60411505fe89c68ac6cb1c6c3b55b7d37ea68277084af","claim":"Pass 1 of 1: 1024 of 524288 sectors were read back and every one carried the expected pattern. Coverage 0.1953% of the medium. The longest run of consecutive sectors this sample did not touch is 2815 sectors (1441280 bytes): an unwiped region of that size, positioned between two sample points, would produce this same verdict with zero mismatches. SAMPLING IS NOT PROOF OF THE WHOLE MEDIUM. This verdict covers only the sectors the sampling plan named and this run actually read back. Sectors outside the sample were not read after the pass and carry no verification claim from this run. A pass that skipped an unsampled sector would produce this same verdict. Sample positions are derived from the run seed, which is published in the certificate so a third party can reproduce them. A device whose firmware knew the seed could write only the sampled sectors and pass. This procedure detects incidental failure -- a skipped range, an ignored write, a pass that did not run -- and does not detect adversarial firmware."}]},"audit":{"overwrite":{"operation":"host overwrite: single_pass_seeded_random_shake128","code":"VERIFIED_TIMING","severity":"verified","simulated":false,"device_reported_success":true,"return_code_trusted":false,"work_bytes":268435456,"capacity_bytes":268435456,"passes":1,"measured_ns":433561458,"floor_ns":456509664,"ratio":0.949731,"threshold":0.05,"baseline_source":"calibration_probe","baseline_measured":true,"probe_bytes":33554432,"probe_elapsed_ns":57063708,"rate_bps":588017028.266021,"note":"VERIFIED_TIMING \u00b7 host overwrite: single_pass_seeded_random_shake128 \u00b7 measured 0.433561 s against an expected minimum of 0.456510 s (0.949731 of it)."},"sanitize":null,"return_code_trusted":false},"telemetry":{"schema":"sentinelwipe.wipe.telemetry/1","period_ms":8,"events":49,"wall_ms":433.562916,"achieved_hz":113.017046,"min_gap_ms":1.612958,"max_gap_ms":10.11525,"rate_floor_hz":20.0,"met_rate_floor":true,"longest_uninstrumented_interval_ns":7496334,"longest_uninstrumented_interval_ms":7.496334,"note":"met_rate_floor is the verdict, not achieved_hz: any stretch in which nothing is written deflates events-over-wall without a frame ever being late. A frame can only be emitted from a write, so the floor is a property of the write stream; longest_uninstrumented_interval is the pass sync plus read-back sweep during which nothing was written and is the explanation for max_gap_ms when it exceeds the period."},"limits":["An overwrite pass against an image file overwrites the byte range of that file and nothing else. It does not reach, and this tool does not claim to reach, prior copies of those bytes held by the host filesystem (copy-on-write snapshots, journals) or remapped by the host storage controller (wear levelling, over-provisioning, bad-block retirement). Purge of the underlying physical medium is neither performed nor claimed.","SAMPLING IS NOT PROOF OF THE WHOLE MEDIUM. This verdict covers only the sectors the sampling plan named and this run actually read back. Sectors outside the sample were not read after the pass and carry no verification claim from this run. A pass that skipped an unsampled sector would produce this same verdict.","Sample positions are derived from the run seed, which is published in the certificate so a third party can reproduce them. A device whose firmware knew the seed could write only the sampled sectors and pass. This procedure detects incidental failure -- a skipped range, an ignored write, a pass that did not run -- and does not detect adversarial firmware.","SAMPLED VERIFICATION HAS A BLIND SPOT AND THIS IS ITS MEASURED SIZE ON THIS RUN. The longest run of consecutive sectors no sample touched is 2815 sectors, 1441280 bytes, 0.005369 of the medium. An unwiped region of that size or smaller, positioned between two sample points, produces PATTERN_CONFIRMED_ON_SAMPLE with zero mismatched sectors and an unchanged sample digest: the verdict is a statement about the sectors read and about nothing else. `--verify exhaustive` reads every sector and is what turns it into a whole-medium statement. Regression test: core/wipe/src/verify.rs::a_region_left_unwiped_between_sample_points_survives_a_confirmed_sample."],"outcome":{"code":"OVERWRITE_VERIFIED_ON_SAMPLE","passes_verified":true,"whole_medium_claim":false,"verification_coverage_fraction":0.001953,"sanitized":true,"sanitized_scope":"sampled_sectors_only","evidence":"read-back verification of the pattern each pass wrote, over the SAMPLED sectors only, at the coverage published in `verification.coverage_fraction`. `sanitized` here means every sector read carried its pattern; it is not a whole-medium claim and `whole_medium_claim` is false. No device return code contributed to this field."},"entropy":{"before":7.06169,"after":7.999999,"delta":0.938309,"bytes_measured":268435456,"estimator":"Shannon over a 256-bin byte histogram of every byte of the medium, Neumaier-compensated; the same support and the same estimator fixtures/corpus.py used for the manifest figure, so the two may be subtracted. Printed TRUNCATED to six places, not rounded, so a measured 7.9999995 never prints as the unattainable 8.000000; `delta` is the difference of the two printed values, so these three numbers subtract exactly. NOT the strided per-frame telemetry sample."},"probe":{"bytes":33554432,"sectors":65536,"pattern":"shake128_seeded_stream","duration_ns":57063708,"duration_s":0.057064,"sync_ns":6444291,"bytes_per_second":588017028.266021,"admitted_as_baseline":true,"refusal":null,"note":"Written before pass 1 with the FINAL pass's pattern, so every byte of it is overwritten again by the wipe and the medium's final state is identical with and without it. It exists so the behavioural audit judges the overwrite against a sample the overwrite did not produce."},"frames":[{"t":9.107,"fs":0,"n":12288,"bd":6291456,"bps":690872198.3,"en":7.9959,"hs":10240,"hx":"4449ea1f2dc5e50c7f0c575354c85de2dce61117953261f6f72f1f3dcf8de7d7f104b4a88a9b1ca245c1f02fa5408befd55971adc71333f3bfbc6e57460a93997c898f0135daa83b83da153cfc8c0e2b85399184929bedd9e9366d5accc3a5ee969cfaa1e220a4054fb9e5b9c491eb800577ade6d18b0d02b4501a95a1af5491bf7eded6ddc90746cfdcf1e92e42a941e065d4150712b258e7d0d4127367bc8f2ee4260edf4fc83a120fea8b1b9176e89495bfa7c33d29a4e7de4e8957481559ca6bcf32302f534339cdc28c4ce11ee01e700880f94101cea0550df2092de35a54fbaff85f28ffa1d12ef97850e75f4ba415eee3096f1946406144eddd310353"},{"t":17.134,"fs":12288,"n":10240,"bd":11534336,"bps":673166084.4,"en":7.9956,"hs":20480,"hx":"28e9b6eb83b4e15c06220ce1331c45cb5dcce8ca3e83e86297014d9218e9e2064c0df82312cb500a93656dc504912d70b160761b798dfddf4e93e03c2409565d274bfbcc4624b94099fa8e5a38738e4c6ceab4d4bb0d0543f1abb31299a71e06bab3a3e4dd39014c9c2ec81a8a1f7dc0a422b31f289a949040bec774f34563f3d06fd4757d645878d74d2e75f98d5b635c7df4b25dc69d276afa576713ab644a53f745b08afd034c1209f7e3b631fe03cd5a85392ca5b79f05e51f81c24213dcab34c125dafae95d239eaa8576c85b396de68a438fe9292948e80477ab022bde208ae288119d28bc4a87433cfccaa55d5c3a6212ff27258f4c6f8c2f371f314d"},{"t":26.896,"fs":22528,"n":12288,"bd":17825792,"bps":662774595.9,"en":7.9962,"hs":32768,"hx":"ff170967b5a9ed89f38db323d2f47512619cc13fcbc940c080cc5c9fcb73d8ac18bc3b911f157812c0ed4e020e8a13a1f3db4590fe61887777d441e9ca2a6f23c62e311b9a6f3c4ed3ce3d06800c6319db8ac3effad41ab5cc9240f4ee6aa418cfdd0d8d864c21a6a7df3a892aa4ccd1cc81b49c3804fc00c19024198d87929b5ea7fc23f14f6286b42fa3ebf4c24d89e0da54e748236cfab3421b75a68c4bb6fbbdc1be98787c0370656b4a6c8bb5032a4262f325ee3e70dfa93e3b31c570f5e1f08b69459d5d122375ba73a9952d0fc5bb4917a37646927e1d438a12b48c2eb0fef422071ad6942fe16fbae2170a0884d554b842627e724740c3e811f55e6f"},{"t":36.36,"fs":34816,"n":12288,"bd":24117248,"bps":663281528.0,"en":7.9963,"hs":45056,"hx":"d95a9f8426fcad8d6f121dcf2ca60451c52ecb0e7195d180bfeea7bed28eafb955e9543c7d4ed7031faaa21bd294a46ec0f410b039a9dde6328e1796bfe99dc96ae5f9357b52bd919d45f071e6f0355a566d9c82f5110a1e825c48b2cf098974adf212a5abe1db7d3cb1991acc7c3a57ae52e4de30856f77250a631b390af46d4fffc2e3036c636d220c5bdc512df8f75a439db4dbc11c5722ba3c047f2a00fad4d934ab11443f215d6249f0e77ee296cab057e6867b1a0d1bc8c7b7ef7ce157af86a92c3e663235a87a3a581b9548f98873996060cb5c8772e12795bfd98fce0055f16ba7bb6628bf7e022a3817bcf6926f0bab958f66739f2d46c95e0587c4"},{"t":44.449,"fs":47104,"n":10240,"bd":29360128,"bps":660528993.2,"en":7.9957,"hs":55296,"hx":"d59ffc8c79567d515acdd80e2808a3c33416b12fc4eefa45e7e04b90b75d4f0c24b70d591b9a39ed20403e20a495861501ac4d1bf57af2a7f540c2f10b58b82ca41ccc0b6574d8df9947bab0e22534341a1df86bb2955169730bc2a45636d1d901e5c5dd742e4fe2fac37b768952e3aa245b2c2bd47d6e92e00527221480000a61873fa744ee85f1c1429f5b7efaabfc25e2055228590bb772b1ab6904bf17d5f3da4dc6fde78bb5ba1a33847555d4be5b39d830c9dd3e7458214ec046f0e4feadf598e7f201dba3c64854e9884baae68c2dd4a018c62d7c70bc06b00e2cc9fced0984afbf46d91d616ba9f0c4a0efd01dea836add792cb2917aee03d39aebc7"},{"t":52.971,"fs":57344,"n":10240,"bd":34603008,"bps":653241813.9,"en":7.9949,"hs":65536,"hx":"e9797a8d88d5cb288347570d3c6bf85960a2378522afa82cdb583d9d7544111425798d3e0a76418db9fb42f4f08460afa14b3cccbd2ed0f7925b7ad19ca27a6aad73567351e88fb130a004482642eace4eb4c99c0641744eb56773696709388410d2255dacf9cb1db42ad76ed298a371b07559089937fc9640d8b293041f1f5e21cc82448c7555e3f92b7f9a3578252a068f380ecf57d425b89b4c25d2332e84fcd102763631cfc2f0cb2cdfe62cb1a8abb9fd878f30b617a9f4a079364ef16e3b7581b838ee7f7eb45f08d2bba0eb3e78605f57a5ee4735175c31bc7044e676686d4642813ce8f0946b34a9e75f1b928b89e9e5441bab141e9e16e03495a359"},{"t":62.382,"fs":67584,"n":12288,"bd":40894464,"bps":655554355.1,"en":7.9966,"hs":77824,"hx":"1ed3900a76dacaf9b7f19675278b1991420053d9e2dfbc7c447aab4bdf57767320854038489e414bb67857ef4e600fee4762a625bc1e0ea3021f5c0b093e84307b7f75c61475211fa103dac950524fb3375e8f437e047d66a7c8800758db74b19ccb35d270eddbd1e8a7dd6790c485809968767a758374d6ffd9a034479628cffaf64bf15ca798c34f7e17a4724865c89367f9dae8a54711485770c9e909a98a2cbafa4b0d6c2bbe2575712cbfc3e1ad91e3278d9050da384a2c2e38b606a690914f9c4dcbd80a98fa0d4072ac149692392fe19203fdf9af210615418d94c6c043d4a9e1d9c6fd09a01669de86a302b9bda6cfa6087fda9f306844a0f4f7426f"},{"t":70.785,"fs":79872,"n":10240,"bd":46137344,"bps":651795115.9,"en":7.995,"hs":88064,"hx":"f40ee8f1e9aec9eb1e40a57ca3b73016083bbb9006ab94e28b84121ddc19d013fb4e50b725d6fa696eb91c8386cdcf2646ad1a2a1530d2eb8021a02544ecfc79520756a185a1d8b116f36c584edf7606881b3513cad499a35c1eb8249a212a289bb0013558f96b2b6cd0dd36d726751e6ef74051ca257afb0b3eadd2dce965d2b813503ae96a8e775be1b2f2ee512b0efb21fb0fcc99c05fe29e1bd46a93c0c4c83f169c9d1bd4c39d83780e04da59972f7e8cc26b510ff26cd05714881bfd35518dacad87fc381ad0ad1c14731cc060b6ab35e361259d98e6e92b6619a0578efc254f6f28de2860df8ef0505c7d67cc051a66a11ce6f1db85f148c3f242b9d6"},{"t":79.242,"fs":90112,"n":10240,"bd":51380224,"bps":648398065.6,"en":7.9952,"hs":98304,"hx":"80ece41948c9fcc1a8c944d77ba57df8f797ff26a887f81e4551db8ef4bc5301f509f30d41345b5e57fcb22e0ef41de2f7ab362f72c096a079163024562ec52b0d5d234628d46cf305f4fffa1237ecb70dff76062c0af65cbf9726257d39c2cbe89fc989eb1ecaddf3522afa99883e0f3d80150ade4daf04da679c362bd672a50d6ec300e5049319446a051ce5deb2686aecbc67562f49f8c45c5fb5226a40d7f48d04c253f91ef33a89479a4c500d429e262b3ce3f67551d2b638464a99db920aecf9f744219e8d83d753deb53a27919b7a2ebf348095e784ce855508dfb9adc2fe523f14660bf896bbcb73e353c9f25a52131b79a87de1a95c4a36deb41373"},{"t":87.332,"fs":100352,"n":10240,"bd":56623104,"bps":648363267.3,"en":7.9957,"hs":108544,"hx":"cb3f30269a69ec95c97bb1d03115106d9e103dd8ff6b91b79fee5764c58c0465384df4c94513cefb7d909c783b8e36825be04e43aa066d1fef026bd562a00896cf68ad0d1de538388066ab1ef3d24e0125bbe4b572c9fda0cf4ef39ede4c332c192b1a77d331234faf545c420e21bdb1141be457d1743ab55d1cc6130b901b5448c9c7b34ba7eed04a0210d265a0a2131df519b7b32ba213ac5d9b600cddf6d1d46648e60272cb7d2e666cdc5c08fd3aa6a1fa974c9f9c00ea70df0292d6ae1f4d1b97bdd63fa328e7d895edb3e1431f54a54565e7e55111228730f9d09110e3fd91d9a5fdc4996bd1c3d7fa283fe364e55b2f313617046ecb6252212f38ffac"},{"t":95.914,"fs":110592,"n":10240,"bd":61865984,"bps":645013202.5,"en":7.9951,"hs":118784,"hx":"508baba72a972a0cb0613107d4561277496628798d95886ac29d0dbfd8cf34adafd4096d6b56b5b289e400c0f76e6403730c10eb09248e8d6f573cdf117e71c0046adfa423805bee36af42fdc1f10194c81a82f5c4bd8ca57b1deae6f355e71c288d95368afbc5bd11139986657a74e79e1436acf7141fc240d6681cdd2031c21836be13bc223d180c13fc169a83fbf434edd7b157dcf7b70ee725305532ec12a18a8fdbf6a6c9c5cad4a69240f2f83232a0e3f64437d7851cc2369ba068385c7dd2e9aca506e5f75eda88fc17828b1bcdf2dffcc819463fe82e666e5750a50e1d10ce88fe4b32d02d1b3b45b331f5c0bc18dc49eb7143d179c7ae8912453381"},{"t":106.03,"fs":120832,"n":12288,"bd":68157440,"bps":642815571.6,"en":7.9964,"hs":131072,"hx":"838726aaea0e783012d0dd04faf9c462d2e370e872700098469ca4969c35bc1954efdf34e6ca8b27ce30dd3ee87b1aeac800ac02ff75b35e39ff0f466cd434c8b12a1f2e5960df8a00cb3eafc24211f18a336c1ec3820c803d7c0a6578305f71abdf3605996e3d3de70f99607fb08c62d43ddfb1ee4faab1f233630709fb5435540ca6f6f52657908bd584b1d24ac17f5fa5b153f07175d2124d08efc71199dc61502a140c5dfda5a931f7659b56242bb909ae2ba70462975687614a16d7ef7580ce5bf3ff80c1e4710098ba6072a4938d1740cbce10b62e790ee74fae30f94c6092e5d9a814ff19a4c94c548ad3e61d30471d49e57b242e374d9d1496533442"},{"t":114.12,"fs":133120,"n":10240,"bd":73400320,"bps":643184951.1,"en":7.9955,"hs":141312,"hx":"70d28ae51ca30ceabfd6e7840ddddca55080c088e95da98a1c7724e52c53e693e1a422f92caaacdfb97172e44e12c674f789f1a1a9b142462505beeeb5e17f41103ef0d4f03fd913b0979385188dd30842a54b32f874463ba6af9dddd59bb2ed924b3a1f3df059e2e51206b4462a90511cbdc0e1751d8d1058508d2b3ad904a668389a546330139ebfd8ae3fdc4640a404b888258ff4b360b498472d15cf78ff6cfbef09a3cb84165bdb1395c501cbe78f11d321b33e4405e0f0a4785dbf044036ec06681a5fc44af2a5438a7595ede4fa76f2873f435292a023e8989ef4c5165129f0b9fb2f27ba11e0cad409de8440cc9ea2577adde9801c0b0544eee4eada"},{"t":122.839,"fs":143360,"n":10240,"bd":78643200,"bps":640212096.3,"en":7.9961,"hs":151552,"hx":"65999c701f93aecfdbc8558c88ffebb84734331b9c84c50ee7a34b2aeb0ee8d8b04c025a9ea16366df5ea9512bd619c6db791ba7aea4bf21f21d0f32fee1bdcf2fb487b7c60b43b237f597577eed863cc3907cc63d456443fdad61edcf009c4582cf4accc28130bc3ae9beb7f3d50862fce22161a35668767450f2b4456f2f443654d58f8151e923479251b9e153b42c13fca3744d2670382d2b54a1cf1771ccbcac034afe4254bc5d632197da19979a95fd623c3928f84c2edef3f55d4df5dfbd06315f3cfac7c96fdd42582d749dfb7e0a65e9757052b6f8cedbe67a88c655d8a563b0330d9dd946098a3a0791fdddba218531ea1bc4eb2075c564c9f7f5a2"},{"t":130.922,"fs":153600,"n":10240,"bd":83886080,"bps":640732448.6,"en":7.9952,"hs":161792,"hx":"867915168cebbd707c68f667fb017945ea6dd278a7df12d139bb627c566a4eb65670701b317d3d42ceb147e7c9d7a45525519ea88829afe7569f144287c881cd70bf1c38a189869f991bb28fc58fea9019a2db76481085b6d936a02ab8e90e115609f83a1dd3e63d285f094be3966d7c7a1396af525171c0a7c80a5f4ad6c86a53b4a556af713786243a6b5741a3aa9c246153f9dff0da5f5a582d8be349b9946c5282cd463824afcfc244dd936d2f69170c96d16e6bba12e563ec342df6e7dd806066a740163e600228a46b0f20b2decd477452fecfd4d20c6953dd5bc9d6e322724555cfaf4d4be95b990cee6081d4396155fa4de7439e39d453299c4a4a04"},{"t":139.444,"fs":163840,"n":10240,"bd":89128960,"bps":639175007.8,"en":7.9954,"hs":172032,"hx":"94cd189fc880bf2618bf249d36a504ed88103aa2308d1e937b4210234091f463447f3e00751eb5f734e3792dee33b26f39439bafbb1d1de5693fce4fbf0c7be3445b0b535bbcfcdd56e4a2df62c8b689abffe27230907fff3fe8ceef00b83bf7a09d405c812ccb3101f24e57a2f3ee3f25efcf0ff6ebc7b6a2fd47526e9c2d85a42b7df8416e20290935957c09998ba3cba1ab168de50bebaae8d589a3f9da1782009f1cd45681e3571fb148ab8ec9ec4326c3d6f8bc3471c4e733fc7fc16e0416e5244056bf79653c37215e554a7442f1272ae0c2f3d1264fd3ac32f422eec1b557c7a9b2e2411735240bf30322cb09c78f2dc098479ec8c22d0956e5da2a9a"},{"t":148.118,"fs":174080,"n":10240,"bd":94371840,"bps":637140653.3,"en":7.9955,"hs":182272,"hx":"4376145a0c3f420c4ed9a249df827465229f24e776489c68ac50e740d92d713d4e4591dc33a93498169bce25db32568acfa772b4e277424d73cab84f2eedda6d0ea442d5d5f5565f1a74d24a62e7f0f6385bd7485fe145242cb849638411f1819daf550bad3960ab9dc165aaaa4b6c40389a9fd4104685dac9724824037725c8c19eddae73244032608cdab0519fbc3e572aaa22635ed61e6b91df7386ad051b9b48933a3d6a5f100beac74adf9518813dd404f721015f3bd555105bdcdb515e6f32b37e5758972db916c8bcb82a558f45a4a65204a3c9fb360de9e2a60370e07daa8b7035aa9ef44f0b101f528dce9ed77497dec01af66a9bce1e3a72715c24"},{"t":157.538,"fs":184320,"n":12288,"bd":100663296,"bps":638979393.0,"en":7.9968,"hs":194560,"hx":"4e739849d01744a6278c83dd734bce11f68ec5020e79bf7a3a2e35f746560be4c796f205547d442e315e430344987b977d904e941e1161840f26c8d3e02f6c963f7408459b8c5d05dfe721ce28c68aa157c16c207290c06161dd3430c68230d5abddeadbee60e243422ccc42221a77d557881104b94c02d294fdf95e235298d30497e40d441c409a861554952208ecbb05e4f63ac0626e358f225c1c9da609f99d2f13d480cecb95ee7685fd5eec6a424c86dd021a17a81ddda8afd456c3349715ecf03e519bbd8d6714c943717372a62470c0042d6caf5bee8da4dd48a1139fcf584dd4321faaad90e60ec9f60a76082eb13850b46de06bf0a7f74934de3489"},{"t":166.119,"fs":196608,"n":10240,"bd":105906176,"bps":637530228.4,"en":7.9954,"hs":204800,"hx":"515bbb6c0be311816429896d32c1a7fdc8849c4474ad86e09e527404bc037d095c6eb1d5b5e45da7501d8bda388acbc2788c556e81d6bb9804b6d81b47d448db00e5dd353fb874a883a540532a3ed9f4dac0cc9c7d94e89b1f95997d60879d3229ca04d874b133f6ae80ee7800f081c725c978727ca362013945bd6abbcf3b1b0c67072b6185d5f39f74326048c487d18ed4a6a45f0d5519660da570b4c77a5cd892c8d6809a9e1993b3591149622358908fcc45bb699f31ba96591de552bf436cb7eacabbe53e82da59bc2aff28f1ed96115bc8c1bb1b71853004359b115fe7c874107aa9e7c0fc798831d5550c8488d09166e019e7c602f94d2da527101cc3"},{"t":174.847,"fs":206848,"n":10240,"bd":111149056,"bps":635691727.9,"en":7.9953,"hs":215040,"hx":"a7bfe27a1fef28de681556118bf5cc6c24d66af9db9eccddcfbbb1e40bee6cbe735d22d30725dce7fa9790fbea221a6140ac37903ce468c070ab97d6f58e653a46e05aa62685e2f3928ade67d98ce8a19131665cac1b4fb9d329c937e3a86603ab2b370926507734355d95c8cc592c68607b6ab34d1f31ac8597e5a41b53c8c3e7e636ce6dfafcf964b4b24a7eb278829903f0b759c773d53ce3482ca5764703b59638adae92947481efae30ab08cc0f186b2dde046c7e3d00b9043c748815d2ce4850c5010f19b147f8feaafad9863816a9382f87919b3c3ae9b1c66b5a4ac4258750a44423b4bc6dace3d199bbeac6e66b0a9d4c545d57cbeb2eb90caec8c7"},{"t":184.291,"fs":217088,"n":12288,"bd":117440512,"bps":637254666.8,"en":7.9962,"hs":227328,"hx":"4384a17ec51fe89f4593020ecf89d8e96bb5f7fff52e4414ae8822ca250839c30ed128146f4e7fd7417c9df17ec5b537653f94d12212c84f84edb72acf009566ef1628f16058ede6690b7d4aa26c2fbaca7ba38f2992577e30e1db57ea0406fe8082d7ff6af3c2b93bdee47362cb367204e6706983452f66baefbc4f190ecdd56e2a3b14b2c689cd339a12757a1f531b122d28c7877de0689f774d82c7a193bc33dee1840e998f89ef414bc3c59c6428b79a350f160627ffa24423c6c379282e775c92202b248ee66499554d2c72023cdce91470371697c6d4856477b87c8793a8658c472113f14778a8f279132f11078c0e65b47e4db4fbfebe00ace8438833"},{"t":193.123,"fs":229376,"n":10240,"bd":122683392,"bps":635260664.8,"en":7.9957,"hs":237568,"hx":"c66aba19bc6e80268355d948e193469fa336ddf39202f82f230a83ae68eeb3439c701e8f0351598525f98735cf15d8c2a83266bfaf04f18e097ee64adba12dcda09e5764753c1603ae8f4dc6696e864902dd2edcf548fa12e6d26e9ea5cbad2474898206bb122f4317fbede78e4995e15bf028ae76f3b156bd067a4bcbcaf78896704a9a6e3245cdc317e4aafd2836ca0e1b1952049ba7166fd3a50f55552f9aa7ec0ab84a5d503bdcad7ff6dab697c6ce26605e71636151cb96d8bd39fed046a018a5029e5fb8e7aba651d904164ba9dd46c401047647d4ff65a82d1547e384b9bc0a171828bd935bf46fbafb2c76e7e296dcdc43bc48a84c05b2ca26b89da4"},{"t":201.746,"fs":239616,"n":10240,"bd":127926272,"bps":634094265.0,"en":7.9949,"hs":247808,"hx":"768ce9a563d92881a7b8a7c2e1996ee75f9ef15315cb1a4aa5fef677120d5c40aae0ad6cd282646220a4760c7b68b1084b297fae8c86832112bdb75d9841c65ea455331de0b9e437f2a7ecfb822efd07337239769726f1c01c4cc2bb6cf67f64cd59aa4e5b6323860841556c6cf1339923ae9ebcc1e1a40a1d5e0c09c46f2bcc3fc42ce2f44965863c287a11773f197505ee87e6e2715cde35878788e8ad78aff6e423ec429bf7f63e9aadc5e40f0a76b1177f73b704feb7f553ddf1bedb943d30612cef3bd5091cca533458d76190c52fead7e6b524ec67acb9298d539fc888018921cff07df42fe580c3c727637df26f08d4d94113f3e7d0592dfbf17948ba"},{"t":211.05,"fs":249856,"n":12288,"bd":134217728,"bps":635952653.4,"en":7.996,"hs":260096,"hx":"635334a2cf1db3b69f51a3e07bfb89987f9d2580366c58eaa35b57d51e5aeada201ee8e196923502c728c6912e93c3d722272be67e68e00d5317d78b5d7da04fa660f26f87709ff4a76f3d9efa89381f5aaead7d6905ece36f68b31c29144951eedcac24110ed3afdbe8f8c51154af9442c62f8c2b225d81c4cfcbcc7462b4d13a7dce5987d977de96fbedab94413a06fb7d2d3c00575d76eec8a2336c6c7ca3de710a08397e8dc6a523d22a451fb769610d9c2dac66b87f0dfb51cc66efb823399bc62c524fee181b2d10674ed329f67b4748f228d9463eb3db2387f7acfd9ff2d5bc5541d2984319e73fd15f6a670d9a75ccdb73ced76ee02eb3c4aa1b78a8"},{"t":219.549,"fs":262144,"n":10240,"bd":139460608,"bps":635214164.9,"en":7.9953,"hs":270336,"hx":"52ab6c4271a52347c4425038bd0547f4a88038e7df54853a74909b545e20f1e5d2afb8a5eaac37501349e5cb9a142aed8160d4c31e2ad5ed2c21872937aa12f2a6e77f8c1dfef1976a9f14a4e998001228e182778725adc9131b3dd9d0fe3c6050a3f82f14fbace9af483ec8f7c162943880ccfbd5c44db53264b07ecf5d212d945218f094d5c0a5d02eb042694bfba23cf3c805d884df3b554494695bc44b6200dd916ce7026f36db536af4a744e7f1da0a1b55aa731e811531ae45b9970fefecf93bee1257a5d959096695a310b12c74ded4344be60d64ce66fbca0df9f4980c7087f7cd6013e325563cf60a63eebac783e8d4d685aa326ee1dc2634a6f6a9"},{"t":228.211,"fs":272384,"n":10240,"bd":144703488,"bps":634076812.6,"en":7.9953,"hs":280576,"hx":"cacfa853eb016cdf0d5ab667ffb5871d91e5bc01a0293829a3eb9fed623803ca70c01690df6f48fb62912fba043130d2ac32bb069602a1aa3654f1b8cb7ffeec9507657e68f7169dc2d6e4d72ad6de769212bfb278750987679df40f3f0922200fc7baad29e417f7f36e9cb70261012aa444d5d5573b781fe173f50ab29ad338aaec2800e422fc3958bf2e06db0e30c892a06236dce9d94d33324869c0d0031d16324bb8777bef8959ed3995738766c6ed778c6e9324a2264f3b5499c73f3a6ee227bb4c8aaccb9edacad2bdf94acc2d4788ec859b7aab4b0c6636b6de8f1e8439ca28315c879065ed877584868a99ffb2ac8b058fdbdaddf97e3eb3ffbc5a09"},{"t":237.525,"fs":282624,"n":12288,"bd":150994944,"bps":635700265.7,"en":7.9956,"hs":292864,"hx":"0a8999ccdb03d8ce2e34542fb4247fc0d26a123f62d93d9ddc36aad93d7970104db07adcab93752b3fca389bc8cabee9431830f67fc036b6628b9ced2cc2943551d886aac3d29ec419ab53cf7244188c75390768a576a9575aa341117f5bf1031df11181ef80a0959fe9eef52bb142d4d304359898bccb094c289cebaa430fdd147269c896ac021114aeea9214b2a8fb57a0a71b7f4e55eb036720c0cf07a8bda6a136da9df22ea9152abcfc0f198864820e8c725688880364a9adc919accb1b35e0e080c63cdfa96a1411c4b56661462bd72a3c56b9a309f3ead674fd1c7475f72e63e1e7b309a082066f0049b6c451262807c589630fbc268df1faa7375c42"},{"t":246.033,"fs":294912,"n":10240,"bd":156237824,"bps":635028458.5,"en":7.9954,"hs":303104,"hx":"34f213c1cee05b06ff88f8a14ead14cb00e1c565354f109de2bebf9a80d89708713bbd0790244249e2aa3a406987b72b54840a7d897e3e4c752502deb66d7da0a28ff09f521654ac5c6f568c312879d35cd43655cbe533489de5f8ae4338e7097e0f4b4ea75a4fecbf0e937b3a16d5b687fde8ee370ecd515ab5f93b4a72b8b4be1767a7f15f3cb98ab7dc6e384b640c872045bfe1efdf60d18c51f902ee80ac63821e1421fc313d279387dd1a000a089fa20d5fe2ed59588f7b242f317a9f48fe40ac839a905cc74f1dc710b651b71c5d9a2e40e2d7220dbc54854d52bc4b02c81cb1f906917d457bc936487e97c16448029854626e21291c6a5c84b5e5f2f1"},{"t":254.569,"fs":305152,"n":10240,"bd":161480704,"bps":634329493.0,"en":7.9959,"hs":313344,"hx":"90099fe3d8ebc4e865e4d4a6aa06f7ba55977518f9eebf8e5ecc2657c5b3fb33e9fd8e84eb313247c136ca972039666b8802ce09475079ce1d15dbc9836669d480603577e1ab8b11200f7f85108d12cc85320d494c6c8f31aef6be830fe18dbe92a2038dbdd71eaf9b2d2598212a472a25270fc710d66a707f301a9959e20b5b1f2447e68a5d937f30331924ba8c9e60e323361eab4ef1dec193a1ed0eef599329766274a86842494dee0df3be33b8df53aa9c1f265a02cd2831f93741a39119b7aee51fdc524a5a9d1a97391ef8b0d2c89c7d2f12cf494ef18c5f1573d78abb3e64b8aea71c5a18caa88cf0a9a46a3828a19a9da6def5599f9fa6f4a806919a"},{"t":263.858,"fs":315392,"n":12288,"bd":167772160,"bps":635841609.8,"en":7.9963,"hs":325632,"hx":"38453b40d2e607b567b83b07be094ffeb71c4f8fb55e8cf0c14a8add05cc430e6cc008beccd27f7da21c6c2a9fe501fc5373b7a152b38196758620874c01a5fb5442250f5045cf3c663c66df71b3bf9e4cf2f343f6127b0ed35cc1641010593d60b67b41d2ca8eaa1e9015ba97ca64ca9ab126d38ee76ebac3f92f4f337b6ba64338d726f07ad7a5203805c961ed3a9a031b72bf403f8cb8fcae78157a7eeb1ee9c02c81479d77b3aab14513cbcee9ea39e76e74a2a65018ce651e98dcb5fe66a7516a2fc25d3d73572ce74516d21d322cd145ffe297a48a80a084ba524f313972f57f6714c67256b20cb54279f4888a9e5024af2388bae7840747ef4008ac5b"},{"t":272.239,"fs":327680,"n":10240,"bd":173015040,"bps":635525506.5,"en":7.9949,"hs":335872,"hx":"f378364a62ecd1cc8b317e8718d9e0c74b4eea33dc617419e110d1f50bcb41a565dec3ab55b8d19ff3ab6409234005346ecc12623c549d6bd5832ad67e9cc783b1c5b10fcbab3378e377abc41112b420e1b3720d28a28a489e62aefc1e0bd9a008a5a7f396d072b4e74521f93b2ac4b96d65b585d66ec735fb80e5d8509a9adce830e11ce7dcfc70e6dd32dc8dde656e2e233fe7b54b20858fc73b354d76950d0e97f822862e93b25920367b5d080a56bf03b53557b9d7989337e1ee594fe5f62b24e3bfc3156936f14d8caf46e2fdd375a7a90ecc65eba7cb63c77ade3aba65188f545780e81da2e7467d1b33ea35f3ad97f8ec7078263ecc59e245515cf372"},{"t":280.97,"fs":337920,"n":10240,"bd":178257920,"bps":634437463.0,"en":7.9955,"hs":346112,"hx":"a5fd02d6dd42f94a4176a217ddaf2d5247f69ddbf88b3ec9f3ddcb1ca666eaf762859d6d034def4c2caabee992aa552c3f77207301668a2bb0addd0d520020ba0440553737628e6e75f481556e227e7ad404fc224d906b1406b47d9167d2adc7f242c45f025d7cca8e060efef2bc4fc70586161a4d7edf6c0e68496ce655154f34561a4bd1503e78433ba1cf11f23a6986ad16706d1d40d24c85b0a5d426c2d554deea8fa59716b26a4305a369343fecfd7eb3776398b30182643f82b314dab5be6dbee08336e1239595c32f5ae033e7caea2b972381207918aea4839c0e1cc277d9a00d7dc87b4f400b0ccf3185e84f045e6148b266a1433ab1539c3f74fd58"},{"t":290.192,"fs":348160,"n":12288,"bd":184549376,"bps":635955474.1,"en":7.9963,"hs":358400,"hx":"c0e767a9485f5243581d8728464c07b326fbf7c74dab06515199490d9725f7c5ae357c750fab1ff78f57de16a36ef4afcd3c1eade0fec03d9161b22b92dce3519b546eb905b5d408f0af1c5340532ecc19dca4d729511270f23b71527aa36c52850d59514c55f2723d069e4e425491e45ac8f849e3e8d0ac7fbbb7d8563eac42e80c09a7b6f59dbdb3a10431d3e27059704848d5febe425b69ec7f67f3aeea304d2dfd20b90db861f9fc2ab22506b6a8be174311129de30ad2f48e2cc1ee112b074942c44a6de35da5225495d6992495178e5e343bdf12c3bca067ea5ee01be5a50e8a3072bc6c753b589d1e99c8ae799499b144ddcba2053ec07eade7ed7c5e"},{"t":299.18,"fs":360448,"n":10240,"bd":189792256,"bps":634375341.2,"en":7.9961,"hs":368640,"hx":"fbf5246d15ebc6b948d051b6fcc8668f49140f1e0ac78500c61f86f83882763ee0a41d9863ce8758c3d9955f5c52ebe162c88999249159364c3dd2ee9babd1a28fc8ffebba5ef896ebf1089502b3f9a4f287bd614b50d6aa8fb8aaa4f08312dfd83d9ba81152f6e4911b292b52a225a55618ed2b606ec6c53c2b9abce6a3623085bbb99151a5ff436d0dca6a9c0aa7b1f66650dbf2eea499d281f309b1040415921203b49138cd087c569e024720852e92cd26e30338d87c4da31b984aa2835991d7ffc458d832f93d36377a5bbbb1dd84f43fad5378c877e27ece4d30bacce764ed5492f7e4fca2277cf3158f1ef956bd8ee334bebf8c41eecffafced785f75"},{"t":307.882,"fs":370688,"n":10240,"bd":195035136,"bps":633472713.1,"en":7.9955,"hs":378880,"hx":"807f4e786e71caf2fcd2d6a5f5347b90b65f2a638c905c9ac5f68f05053c549168f803ed3f16ceec478a1869183332816edd9437366528abbe91a15702a3e7a7f0892dd94b84d9c96e7d15446dca4fd2417f7fd19a7a1adf15101c380d2a6e2cbc1d272753a54f2d4e15a7500ae240a19451244e9d2b2c623d58da29c8b283cbff2bd5bef428f8d82e6a90c06fa2d4c0e501e2889e9999e71a8dfbc0c8db4c9a091e0e7bc3985aa7354169ca0ff744b4efb7fcb1644f18867ed8906acad2bb6ae06191f2be006faf94aa293cbfef5d9651ef6869dc921ba76d7709b2ba0e5442b8c4c2676d4d403464904d38bc87ae94c721536f4ea0c590bf706e0b55e538a6"},{"t":316.106,"fs":380928,"n":10240,"bd":200278016,"bps":633578409.8,"en":7.9944,"hs":389120,"hx":"37b636eaac5895b0c0cda22409b599d141e476e2f76b5ac95bc138f36031b3a69d738ec74535342c373ae5c5399bc57abcf9824e1ba0a29da5b3c34e0a88d828ffbf341e26d9962a21a4705fec29e1956b85b5e7d6630f1ee03627a0f4e67a2f07707d04a93649df745cd31ef73bccc8bf482fc88dc25ef0891897d402b51f4c48874d991b3257eaab97898aa8b9edc7e80e75e1caa63d4dd859bf3bb2d7a678eb2cc4291e7c9138d2da414102caa70709f87f9e82096b193dc542e3a5ecdf66f10a6db5afd414cf09947ea22850f8656fdde2489968bea370b115bf04757c03c11873b4d3ab7b44d239100c377dbbc139f30bfb5f6f7ccdb12c7c2ac05a1d6c"},{"t":324.792,"fs":391168,"n":10240,"bd":205520896,"bps":632776721.4,"en":7.9958,"hs":399360,"hx":"9df47b2eebf10422f5e5db4f5c15e0f2814fe06642ff927f1e1853afcd6b27fa6fe1c3356863e06fc5114f563196fff8022d6f20efc534a8fa6d3dc8b04b239427bb7979f127f536c8bcfa6afb832592f053601783522e46910a8400583d93c7f13fa855d84717a847882068c0f5a5e4f6074e2f52dab161f6396fcb93a52e52b10af2acf6f0a9e9cbec626e66446d173883ead4548532abbc3a767a7d0f382a1228cc4b87fbadb488f075414e4592c5360862eacc334907262cfc5e6f173fbeaf931a02a154f98982f4502fa2741d82fc5df5657201bfa4fcb9aaa7424532b7c638803719b3ced658971103e15ec9a5a85d34c3d59cc14f24dcfe273043478b"},{"t":333.791,"fs":401408,"n":10240,"bd":210763776,"bps":631423988.9,"en":7.9955,"hs":409600,"hx":"b073a0004cc48ab17dd64252e8b73f346840b69c2b14739cd8d3eaef1459af9fcca11f33b361bcf0661be22d29b194be9a25e18d9681b80def88a25f384dbcd2a303605eff5f2fb0b531c4df119fa13569c4825ed4785393a320f0de8e5a62eca5c4e04ed3910cb3dbb0feb0bdb281d9027da76298c85ae988adf3e71924d5a97dc5c16f70f601c1d9903dfaee0f888fd58ee61856d9482be5b062156f3b891479105a4b254b61d3a5065f18e0577afd388987dbc2bf8c416d76d49eb08ee42474ccd34542d690e20befeec1cc1e6714c9dc9a651be1ac78e4d378fbd5bee4a29842ffbe476780c0f732a076f2619c0aec4af014bcb283f679c6408c5f16f917"},{"t":343.059,"fs":411648,"n":12288,"bd":217055232,"bps":632704948.6,"en":7.9966,"hs":421888,"hx":"b69cf552002c95b22ad18eba3421d1316304904999bfc7cc940003a3b10de74d2b455c0f144b89f7aa7c6f318b3e194ab24d6dc27d8d68dfa441209159de139c4c6c246adb7687035d29a95e399d6bb4e45fdba918a442800c42cf123c33e9086b376d4b57fd98ae71de42d254e6b5d421bf6d0522e48e132f08ae13130c5fe440b9bb8694be3e05e0c61e3d06a3a18deb36dd385f9a4caeab83c17431991b5443def0c26c3de4d5dae185bd61a99e7144e3f41b10d8f8797716183abfc69cec3f3a7e6e70ae73c25a07863290c37b416d9f6d03ab046eb845d9b625ae92af4e8923a4302b3786fd035042e67510f71e90dbe2c18e16032562985bb1bae2f464"},{"t":352.094,"fs":423936,"n":10240,"bd":222298112,"bps":631359976.6,"en":7.9953,"hs":432128,"hx":"78d769b3c589c1f2d97587310d528f55ba7e0fb478dc6a87c83132ff1b779b679e4fb8db0d704e81bdd43001152e4ce2261b8ad972fb8f5d622840a9aec411a056fdcd9509c8f1e12045a43569caab71d15f1d6d6ea9cb254dddaba116b7d33bf90d34d185ee1ddf0fad45f28a8a7c2fbe213e691706df15b8dd172cdbf2bdd7ff918b00a8ef755dd9fd09cbac6196513aede4e6c3265c2e77411ef09ee5f17bdc2e1f503a1b605bc111f4e0cb74899c5d4796d2ca127daca1df5c9a88bae8462c46e8389d055f4098be7d421a2c5a5b221b283b091a08691efbd11fb57dfc2d0a99b349385abd9c77470123d88f5eb687d3a91df6a861f1f9d1af3dd5c38aa1"},{"t":360.857,"fs":434176,"n":10240,"bd":227540992,"bps":630556652.7,"en":7.9953,"hs":442368,"hx":"4d68e6150bcb372e0bb6df89f2be774e8c588da628520f96d118fe8089ee76517a6b7c7b24e4243d2f225994c835ad4a362960d000972ebf60eb3e00699a2ec0b32fcfa3092de39922ce4f04bafbfc8d5782fbbd84030d42ade9ca2ef8c24da2502f2fa9eca01bc639dfefe4b9ff15c91ce6bef93f32623b8630d69febdc26d36440e1aec2dcbb5432e76166b27bbb0ffc6d7e009c9c27e47d0960c25618c8679a395584e1b1ebe2f42507f979f7761593f297609be1d366432b8e4c52f9eb108ea3af10abe6475ebd6f37082a8c9b3d0eadb5c2a983e1fd7153e95934b4ed83ad8bdb454431c2c18c70326a966a53305e277f991145489bc9146d39047c976f"},{"t":370.326,"fs":444416,"n":12288,"bd":233832448,"bps":631422827.8,"en":7.9965,"hs":454656,"hx":"241574e2af1f7a4a99e043b8a1d81b0eb180287bdac1632bd7bff75eb0b2ffc050fab3eeec233057a82abfc8018aae41e5e67184e04c2e1347758df675bfe47a4abb8d7a0d2d98924636f2f37574a3728abaf1f4a3f8c704f1e202c2b0865e198ef74def7a1788957573fd22a365535c7ed5341a77c99914f8771cfb12f58f86b73479fc4da7f93393546a82c1e9e5163195aab6bd8e949f7d6c83e5ca47cf285c125eaea5f0c909ee0b62ed3d35c476e9add1a59fe185fe620ead6e8bd453db2ce1c7c8e4cade13ebdf214befeeb41eeaf2ce5861790388f4d8495de295fc2c670c25e281add52c6d568a796efbb62201cc02cb1c36b7f0641e8f6026d3ad25"},{"t":379.033,"fs":456704,"n":10240,"bd":239075328,"bps":630750556.4,"en":7.9958,"hs":464896,"hx":"648ca6e4016b09300f1b8085caae0a577e25181a7deeae8177e618999b9a9ca4f1b5b54659fcd66fc48b6e7da0575c69d89f37fab4d2fde8260890db75a9d8ddbb02e27461f999ffae4bc5a4801aad5fcb17b55b3a93107975f96c81089da8194df15f91eeeb290542cb65d05e73e6514f55412b9819f606d51cd1f305eab4613a8bcf3adf81787ac77aa11d16e822da8fbdfa56d713d1bc7f7e488c00881bd728ea3b4882b13f108c2b311cc1ec35cd19bbf660564408842aebf047d0b80e14d3d45ec52b0e46167a9295db16fca06b2c009d06b5a42c901ad88b7204557e10784f64151ac82267c5ec69f0c4d6b92b225210356a487d5bf31bed7ba86c0e8a"},{"t":387.845,"fs":466944,"n":10240,"bd":244318208,"bps":629937618.7,"en":7.9954,"hs":475136,"hx":"ccb2c93a8c9f45e12a01b721623ccfdff94e7b42aea3a3c42a8435d558f2d21134469bf34d83b009b6d051ac3e95adac4d8237b5886bd261896c8b87476508dc377adcb49e827deba6cf86fd3eff2baaadd0c88e56a05bd15c6e67876c39e0439502487dc11dc9c74d2a03ef9e248c7cc3e839f9cd1603a1c15ecb3ab6a14ceb3216c8d09df06d9acfa0aa100a3056e0cbd34c7cb7b453d9482ad9e6577319f74467128add1871757ba77abdaf79ae3f39022921effd7f0228cf91db08a260877e21c9b0dde1fd616ff405f83c36f9394af445c12b9648f46a4ae038199d9d8e57195b9b8dd6de403ba58266bd68526b70a9149fcdc1efa484963974dff5a627"},{"t":397.439,"fs":477184,"n":12288,"bd":250609664,"bps":630561527.2,"en":7.996,"hs":487424,"hx":"dbe187c34bea86cd1e638f4950857142b0786d11b9156e2acb8e0c49e3f8e2ea0017e1ab77fa880a2262db166667334d5454ff8f1743247080dbe152014a8f6df13b8aef29d7a1219978b0c5dd473559bdec46c97c058c8e864c5db02b31bc2ef2185ec9b680825aabd21de0e0d18a2f3fc27770a86ca4cb917b5c9c6406839175f279a5faebdca95dabee40a0a3e3106615936b9d7368edac3bdf26de1c6ac532e6521c4337f6c61a9fbc19f4b3352ebe427593cb82143d642dc23189b3a55418323ae743024e76fcc6939f2aa744309c7966d14e16b512f55316dbba3158059a6573b21801f7ca0c5a55e6331595a56a01e49f66775b2842ccf3d92bdf698c"},{"t":406.023,"fs":489472,"n":10240,"bd":255852544,"bps":630143564.0,"en":7.9958,"hs":497664,"hx":"781c4ffa83af747403be20a12ff5c5a405aeefff01df6850282e50c998f88136682c04dc25a04579af38d487d725bb3ea5eb1dfdd298f6c3cd92b9d7b21f18207903621f411cae61fa5cfe7f7937cff693c8907ccaba95ecb92d73776c8dacfe2fc2355e9c231b0f698d0eae94c1364d0b48f6afdfc91c32ae8319719981ff4856271def2a6d8d5445ce711354b3088dbf985eb85edc484c7d0ab42e724de91fe76f9e6f90bc0fbb98faf500caa7c55d84ad87b56b3add488c9d4db96a7c54ab7c423be1edd93a41cbe5611a893ca9a7241bc30001e808be4d9cdcec824bc1fda441fa59a682ed3c39eebdabd1e0b1f7845cdcc2fcfc437579c65664b362a287"},{"t":414.909,"fs":499712,"n":10240,"bd":261095424,"bps":629283714.9,"en":7.9961,"hs":507904,"hx":"66406e606172c6e178472f04216eacf4aef23fd2fd04420d54fd38935f8846208e17a3e391a77777ec3fef239beb1975327cc838c87ca3432ce2758de6bc9c78c8f81960818ff7bf07c1c207ec516fae256b2c26702dd157beca98300f5f48b98c684c7acc4989bb4430e7589888d5733d0e30d54effa8124b228b5befe86594682f627db745195000220d0a678725a29ad0be0532b1b6772445ee1dec9fe47c7887a0dc8ec52853dc78a9c5935c611f49ed4f1e422760855af3780ab2a94ebd105a504c2f306a76c14bfb9ffb07bc8674b632bc7f99ca2bb2f177e21767de7ff2663293880a79167a13b8f63f669cbac1477d5a917b80595806c33e3d42b8aa"},{"t":424.431,"fs":509952,"n":12288,"bd":267386880,"bps":629989415.2,"en":7.9961,"hs":520192,"hx":"168f6f76234895e10b94f4d4b8aa001c6449d517ac0101ce51a2dbfd8de03d4ab72cda0381dc99d71b087bdc2f061d8c4dbdbb6a057c9c2ee32ab33dabc31f8a0d2318a1fc0db03e891f85d52e402c06092cd1003736865cfb9e9cdefa933bb14de149b6a690442a0e783a0feb066775aa84c6bd4d70c48fe4e60b3d680f8d4d508a4178d44e5ad34f70f0cfe392d17545cc04e45f032da4c95b4f9ead4893ab194db16cdcb51b90005391572c61f58baffb6f43ee2e8d965ff3590c42ea7606a84b693a358b545ef7e95b4dc5312032a6cca7254c241dc6316a239af7a7125f8726bf00a4a505b78bede372db712a1da5d2a85ff3aa3e77458b626a415ea18c"},{"t":426.044,"fs":522240,"n":2048,"bd":268435456,"bps":630065533.1,"en":7.976,"hs":522240,"hx":"9d736ce8d8280043ccfd5d097b50614a1082c0f8cf2825bce88151855f278679e5c31cc87007541f21c18766e260c78f3f53ed76fe3784acfacf4cd5ee72b075c2cdd5e43df373e4eec288c39058b185f14271d665321d6d859106817ef0e6bdd8470e162209635b0fe00618bdeff80ea80990574d713620d1d5abb17296f12b53737ccb953fedff8660608dbf4d6ef571a62e02390ba9decfa57679e1f3dd5d819caeb0de69f4777f15fcb8498921a24febf5877fa7644be6a878d7de2a6a7e36c4bb396f9a74322192e5dae3069da933cee362a0b8e6be2b43e4e589bda9ae70e782f1f3052827b6fb6cd155a3634e03898cff71a1f52ff79eeacb5b2606d6"}],"carve":{"policy":{"formula":"confidence = 0.40*signature_integrity + 0.35*structural_validity + 0.15*entropy_consistency + 0.10*size_plausibility","weights":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"weights_sum":1.0,"min_confidence":0.75,"non_structure_ceiling":0.65,"structural_breach_point":0.285714,"signature_ladder":{"header-mismatch":0.0,"header-only":0.5,"no-footer-defined":0.75,"header-and-footer":1.0},"entropy_min_sample_bytes":1024,"entropy_unknown":0.5},"counts":{"records":56,"admitted":35,"rejected":21,"sha256_matches_planted":35,"by_kind":{"JPEG":{"records":13,"admitted":5,"rejected":8},"PNG":{"records":5,"admitted":5,"rejected":0},"PDF":{"records":5,"admitted":5,"rejected":0},"ZIP":{"records":5,"admitted":5,"rejected":0},"SQLITE":{"records":5,"admitted":5,"rejected":0},"MP4":{"records":5,"admitted":5,"rejected":0},"GZIP":{"records":18,"admitted":5,"rejected":13}},"by_assembly":{"contiguous":28,"reassembled":7,"signature-span":21}},"margin":{"lowest_admitted":0.9,"highest_rejected":0.65,"population_gap":0.25,"gate_headroom":0.1,"worst_rejected_structural_validity":0.25,"structural_breach_point":0.285714,"structural_headroom":0.035714,"binds":"structural_headroom"},"ground_truth":{"manifest_path":"out/fixture.manifest.json","manifest_sha256":"1808494ecc3cd5e21d0d9790af5478cda6aa7011b531e20ea1655e3edbc2cd69","planted_total":40,"reachability":{"contiguous":28,"needs_bifragment_reassembly":5,"unreachable_by_construction":7},"unreachable":[{"path":"/evidence_log_2026-01-14.txt","kind":"TXT","reason":"kind TXT has no row in signature::SIGNATURES: no header to scan for"},{"path":"/interview_transcript_raw.txt","kind":"TXT","reason":"kind TXT has no row in signature::SIGNATURES: no header to scan for"},{"path":"/sector_survey_notes.txt","kind":"TXT","reason":"kind TXT has no row in signature::SIGNATURES: no header to scan for"},{"path":"/operator_handover.txt","kind":"TXT","reason":"kind TXT has no row in signature::SIGNATURES: no header to scan for"},{"path":"/wipe_command_history.txt","kind":"TXT","reason":"kind TXT has no row in signature::SIGNATURES: no header to scan for"},{"path":"/evidence_bag_seal.jpg","kind":"JPEG","reason":"2 extents stored out of physical order (extent[1] at 214110208 precedes extent[0] at 214231040); a forward gap search cannot reach them"},{"path":"/media_inventory.docx","kind":"DOCX","reason":"3 extents; bifragment gap carving reassembles at most 2"}],"recall_measured":false,"demonstrated_recall":null,"demonstrated_recall_note":"null because no carve run produced one. carve.rs did not exist when this sample was frozen, so writing a number here would be a claim no test has made. A contiguous engine's demonstrated recall is bounded above by reachability.contiguous and is reported here only once measured."},"provenance":{"producer":"core/carve/examples/gen_sample_output.rs","command":"cargo run --release -p sentinelwipe-carve --example gen_sample_output","is_carve_run":false,"notes":["GENERATED, never hand-written. Every value here was measured: ground truth from out/fixture.manifest.json, the four confidence terms from the shipped confidence::confidence, the structural verdict and every reason string from the shipped structure::validate, and every SHA-256 from the bytes named by the record's own extents.","This is NOT a carve run. carve.rs does not exist at the time this file was frozen. The record set is the union of the manifest's 35 planted carvable objects, each scored on its correctly assembled bytes, and every residue candidate the shipped scanner finds outside every planted extent. It is a schema exercise with real numbers, not a recovery result.","counts.admitted is therefore NOT a recall figure and must never be rendered as one. Seven of the admitted records are `reassembled`, which requires bifragment.rs; two of those seven the fixture plants as unrecoverable by construction and a forward gap search cannot rebuild them at all.","ground_truth.reachability is a CEILING on what an engine could reach on this fixture. ground_truth.demonstrated_recall is what a carver measurably recovered. They are two different numbers, they are reported in two different fields, and a report that has not measured the second one carries null there.","Every `signature-span` record here is residue and its extent is a signature-layer span, not a validator's claim: header to the format's terminator when the scanner found one, and otherwise a window equal to the largest planted object of that kind, which is the span tests/residue_separation.rs uses and which architecture.md D2 names as a policy choice. Only the adversarial ceiling of 0.6500 -- terms 3 and 4 pinned to 1.0 for every decoy -- is safe to quote against a challenge to that choice.","timing is null on purpose: a duration is the one field that would stop this file from regenerating byte-identically."]},"kind_policy":{"JPEG":{"defines_footer":true,"entropy_band_bits_per_byte":[5.5,7.0,7.99,8.0],"size_bounds_bytes":[107,1024,16777216,67108864]},"PNG":{"defines_footer":true,"entropy_band_bits_per_byte":[5.5,7.0,7.99,8.0],"size_bounds_bytes":[67,512,16777216,67108864]},"PDF":{"defines_footer":true,"entropy_band_bits_per_byte":[1.0,3.0,7.99,8.0],"size_bounds_bytes":[300,1024,33554432,134217728]},"ZIP":{"defines_footer":true,"entropy_band_bits_per_byte":[1.0,3.0,7.99,8.0],"size_bounds_bytes":[22,256,67108864,268435456]},"SQLITE":{"defines_footer":false,"entropy_band_bits_per_byte":[0.5,1.5,7.9,8.0],"size_bounds_bytes":[512,4096,134217728,536870912]},"MP4":{"defines_footer":false,"entropy_band_bits_per_byte":[3.0,6.0,7.99,8.0],"size_bounds_bytes":[16,4096,134217728,536870912]},"GZIP":{"defines_footer":false,"entropy_band_bits_per_byte":[5.5,7.0,7.99,8.0],"size_bounds_bytes":[20,128,33554432,134217728]}},"records":[{"kind":"ZIP","offset":1069056,"length":79397,"admitted":true,"reason_code":null,"reason":null,"assembly":"reassembled","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"8b3d1dd7bce506e8","ladder":"header-and-footer","path":"/media_inventory.docx","expected_recoverable":"unrecoverable-by-design","sha256_matches":true,"structure_valid":true,"structure_detail":"ooxml entries=7 xcheck=7/7 payload=7/7 cd@78930 end=79397"},{"kind":"GZIP","offset":1347263,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xD1, reserved bits 5-7 are 0xC0 and RFC 1952 requires them zero","assembly":"signature-span","total":0.55,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"133e800432df9f86","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0xD1, reserved bits 5-7 are 0xC0 and RFC 1952 requires them zero"},{"kind":"GZIP","offset":8054784,"length":109182,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"871561fa7fb2f836","ladder":"no-footer-defined","path":"/carve_session.log.gz","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"gzip: 28-byte header naming 'carve_session.log', 109146 DEFLATE bytes in 1 block(s) -> 393656 bytes, CRC-32 7D84AEC6 verified, ISIZE 393656 matched, 109182 total"},{"kind":"SQLITE","offset":12900352,"length":192512,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"aca915ffe06a7924","ladder":"no-footer-defined","path":"/hash_baseline.db","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"sqlite page=4096 pages=47 usable=4096 page1=0x0D cells=2 end=192512"},{"kind":"JPEG","offset":18325159,"length":61358,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.6500 below MIN_CONFIDENCE 0.7500; structure: jpeg: expected a marker at offset 39375, found 00","assembly":"signature-span","total":0.65,"terms":{"signature_integrity":1.0,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"ce50acd2d44705c1","ladder":"header-and-footer","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"jpeg: expected a marker at offset 39375, found 00"},{"kind":"GZIP","offset":18648694,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xDB, reserved bits 5-7 are 0xC0 and RFC 1952 requires them zero","assembly":"signature-span","total":0.55,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"46609abb9902bd69","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0xDB, reserved bits 5-7 are 0xC0 and RFC 1952 requires them zero"},{"kind":"PNG","offset":21317632,"length":260595,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"04aeca15f9a50b24","ladder":"header-and-footer","path":"/seizure_photo_a.png","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"png: 288x288 depth 8 colour 2, 6 chunks all CRC-verified, 1 IDAT holding 260396 compressed bytes, 260595 total"},{"kind":"PDF","offset":26875904,"length":48983,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"4939ea43ddc7430e","ladder":"header-and-footer","path":"/acquisition_worksheet.pdf","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"pdf-1.7 xref=table objs=22 verified=22/22 root=21 end=48983"},{"kind":"PNG","offset":32710656,"length":207661,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"65ead9586ff4a519","ladder":"header-and-footer","path":"/sector_map_02.png","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"png: 256x256 depth 8 colour 2, 31 chunks all CRC-verified, 26 IDAT holding 207164 compressed bytes, 207661 total"},{"kind":"JPEG","offset":35205775,"length":652632,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.6446 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF80 at offset 2, chain broken","assembly":"signature-span","total":0.64463,"terms":{"signature_integrity":1.0,"structural_validity":0.0,"entropy_consistency":0.964202,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.0,"entropy_consistency":0.14463,"size_plausibility":0.1},"sha256":"4a47b4f18c69d909","ladder":"header-and-footer","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"jpeg: reserved marker FF80 at offset 2, chain broken"},{"kind":"SQLITE","offset":37040128,"length":221184,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"bed97cbc33bd9409","ladder":"no-footer-defined","path":"/carve_results.db","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"sqlite page=4096 pages=54 usable=4096 page1=0x0D cells=2 end=221184"},{"kind":"ZIP","offset":43235328,"length":32453,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"211a9eec0346bfaf","ladder":"header-and-footer","path":"/lab_procedure_v3.docx","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"ooxml entries=7 xcheck=7/7 payload=7/7 cd@31986 end=32453"},{"kind":"JPEG","offset":44064338,"length":23316,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5680 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FFAD at offset 2, chain broken","assembly":"signature-span","total":0.567999,"terms":{"signature_integrity":1.0,"structural_validity":0.0,"entropy_consistency":0.453325,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.0,"entropy_consistency":0.067999,"size_plausibility":0.1},"sha256":"9d2f24d9caf5cde1","ladder":"header-and-footer","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"jpeg: reserved marker FFAD at offset 2, chain broken"},{"kind":"PNG","offset":51361792,"length":183350,"admitted":true,"reason_code":null,"reason":null,"assembly":"reassembled","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"442064812da9726b","ladder":"header-and-footer","path":"/entropy_heatmap.png","expected_recoverable":"bifragment","sha256_matches":true,"structure_valid":true,"structure_detail":"png: 240x240 depth 8 colour 2, 28 chunks all CRC-verified, 23 IDAT holding 182887 compressed bytes, 183350 total"},{"kind":"GZIP","offset":59394048,"length":54871,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"1f0e879bdf7f7489","ladder":"no-footer-defined","path":"/audit_trail.log.gz","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"gzip: 26-byte header naming 'audit_trail.log', 54837 DEFLATE bytes in 1 block(s) -> 196781 bytes, CRC-32 FB4D1D67 verified, ISIZE 196781 matched, 54871 total"},{"kind":"MP4","offset":65796096,"length":221041,"admitted":true,"reason_code":null,"reason":null,"assembly":"reassembled","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"9eba46c122a7e622","ladder":"no-footer-defined","path":"/sealing_procedure.mov","expected_recoverable":"bifragment","sha256_matches":true,"structure_valid":true,"structure_detail":"mp4: brand 'qt', 3 top-level boxes tiling 221041 bytes, 19 boxes walked, 1 track(s), mdat payload 220500 bytes, 55125 sample(s) totalling 220500 bytes across 1 chunk offset(s); 220500 mdat bytes are NOT covered by any checksum -- MP4 defines none"},{"kind":"MP4","offset":65943552,"length":66689,"admitted":true,"reason_code":null,"reason":null,"assembly":"reassembled","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"57d8b12499249296","ladder":"no-footer-defined","path":"/handover_briefing.mov","expected_recoverable":"bifragment","sha256_matches":true,"structure_valid":true,"structure_detail":"mp4: brand 'qt', 3 top-level boxes tiling 66689 bytes, 19 boxes walked, 1 track(s), mdat payload 66148 bytes, 16537 sample(s) totalling 66148 bytes across 1 chunk offset(s); 66148 mdat bytes are NOT covered by any checksum -- MP4 defines none"},{"kind":"SQLITE","offset":73611264,"length":139264,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"7ed9c3eef68aa321","ladder":"no-footer-defined","path":"/device_registry.db","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"sqlite page=4096 pages=34 usable=4096 page1=0x0D cells=2 end=139264"},{"kind":"PNG","offset":79996928,"length":208084,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"04cff656db334ed8","ladder":"header-and-footer","path":"/sector_map_03.png","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"png: 256x256 depth 8 colour 2, 31 chunks all CRC-verified, 26 IDAT holding 207587 compressed bytes, 208084 total"},{"kind":"ZIP","offset":85690368,"length":63749,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"788f9217c6942d72","ladder":"header-and-footer","path":"/incident_summary.docx","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"ooxml entries=7 xcheck=7/7 payload=7/7 cd@63282 end=63749"},{"kind":"GZIP","offset":86478323,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xE3, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero","assembly":"signature-span","total":0.55,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"cd49d93c283e57d3","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0xE3, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero"},{"kind":"JPEG","offset":88398058,"length":343352,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.6386 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF44 at offset 2, chain broken","assembly":"signature-span","total":0.638615,"terms":{"signature_integrity":1.0,"structural_validity":0.0,"entropy_consistency":0.9241,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.0,"entropy_consistency":0.138615,"size_plausibility":0.1},"sha256":"f147e589c580bc7a","ladder":"header-and-footer","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"jpeg: reserved marker FF44 at offset 2, chain broken"},{"kind":"GZIP","offset":89563136,"length":91103,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"442f2fb88c205048","ladder":"no-footer-defined","path":"/controller_dump.bin.gz","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"gzip: 30-byte header naming 'controller_dump.bin', 91065 DEFLATE bytes in 1 block(s) -> 328975 bytes, CRC-32 6EBA8E27 verified, ISIZE 328975 matched, 91103 total"},{"kind":"GZIP","offset":91161674,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x5A, reserved bits 5-7 are 0x40 and RFC 1952 requires them zero","assembly":"signature-span","total":0.55,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"544b13aa85db4975","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0x5A, reserved bits 5-7 are 0x40 and RFC 1952 requires them zero"},{"kind":"GZIP","offset":94937895,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5186 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x99, reserved bits 5-7 are 0x80 and RFC 1952 requires them zero","assembly":"signature-span","total":0.51857,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":0.790466,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.11857,"size_plausibility":0.1},"sha256":"413db97f88fad022","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0x99, reserved bits 5-7 are 0x80 and RFC 1952 requires them zero"},{"kind":"PDF","offset":96673792,"length":43586,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"77a6c227444c6b60","ladder":"header-and-footer","path":"/chain_of_custody.pdf","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"pdf-1.7 xref=table objs=26 verified=26/26 root=25 end=43586"},{"kind":"ZIP","offset":101607424,"length":40801,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"6114f932e1691360","ladder":"header-and-footer","path":"/sanitization_report.docx","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"ooxml entries=7 xcheck=7/7 payload=7/7 cd@40334 end=40801"},{"kind":"SQLITE","offset":108763136,"length":167936,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"2b7d56debb9dd10b","ladder":"no-footer-defined","path":"/custody_ledger.db","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"sqlite page=4096 pages=41 usable=4096 page1=0x0D cells=2 end=167936"},{"kind":"GZIP","offset":114012149,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5286 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x25, reserved bits 5-7 are 0x20 and RFC 1952 requires them zero","assembly":"signature-span","total":0.528646,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":0.857638,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.128646,"size_plausibility":0.1},"sha256":"f0c9126ca789bf93","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0x25, reserved bits 5-7 are 0x20 and RFC 1952 requires them zero"},{"kind":"PDF","offset":114669568,"length":38408,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"0cea32190a6ad8f0","ladder":"header-and-footer","path":"/standards_checklist.pdf","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"pdf-1.7 xref=table objs=30 verified=30/30 root=29 end=38408"},{"kind":"GZIP","offset":117352295,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5464 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xF3, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero","assembly":"signature-span","total":0.546394,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":0.975959,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.146394,"size_plausibility":0.1},"sha256":"2d3c19ff78b85565","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0xF3, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero"},{"kind":"PDF","offset":119242752,"length":54214,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"3c425544e1b4eaae","ladder":"header-and-footer","path":"/examiner_affidavit.pdf","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"pdf-1.7 xref=table objs=18 verified=18/18 root=17 end=54214"},{"kind":"JPEG","offset":125999104,"length":104665,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"80c5f8d627904961","ladder":"header-and-footer","path":"/platter_surface_01.jpg","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"jpeg: SOI..EOI over 104665 bytes, 10 segments, SOF0 256x256 3c, 103993 entropy bytes, 0 restart markers"},{"kind":"JPEG","offset":126324818,"length":232589,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.6196 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF61 at offset 2, chain broken","assembly":"signature-span","total":0.619642,"terms":{"signature_integrity":1.0,"structural_validity":0.0,"entropy_consistency":0.797616,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.0,"entropy_consistency":0.119642,"size_plausibility":0.1},"sha256":"89cac1defe525d82","ladder":"header-and-footer","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"jpeg: reserved marker FF61 at offset 2, chain broken"},{"kind":"MP4","offset":133177344,"length":132841,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"fa77405fe5e5b104","ladder":"no-footer-defined","path":"/bench_capture_01.mov","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"mp4: brand 'qt', 3 top-level boxes tiling 132841 bytes, 19 boxes walked, 1 track(s), mdat payload 132300 bytes, 33075 sample(s) totalling 132300 bytes across 1 chunk offset(s); 132300 mdat bytes are NOT covered by any checksum -- MP4 defines none"},{"kind":"PNG","offset":136941568,"length":158522,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"f2ce70dc1434d9ac","ladder":"header-and-footer","path":"/sector_map_01.png","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"png: 224x224 depth 8 colour 2, 6 chunks all CRC-verified, 1 IDAT holding 158325 compressed bytes, 158522 total"},{"kind":"GZIP","offset":143464448,"length":127302,"admitted":true,"reason_code":null,"reason":null,"assembly":"reassembled","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"2507233008b984e7","ladder":"no-footer-defined","path":"/imaging_transcript.txt.gz","expected_recoverable":"bifragment","sha256_matches":true,"structure_valid":true,"structure_detail":"gzip: 33-byte header naming 'imaging_transcript.txt', 127261 DEFLATE bytes in 1 block(s) -> 459249 bytes, CRC-32 441E42FF verified, ISIZE 459249 matched, 127302 total"},{"kind":"SQLITE","offset":150474752,"length":110592,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"aac4647e0f3f5dad","ladder":"no-footer-defined","path":"/sector_index.db","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"sqlite page=4096 pages=27 usable=4096 page1=0x0D cells=2 end=110592"},{"kind":"JPEG","offset":156942336,"length":92851,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"53b49c5cc138e99f","ladder":"header-and-footer","path":"/bench_setup_wide.jpg","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"jpeg: SOI..EOI over 92851 bytes, 10 segments, SOF0 352x288 3c, 92181 entropy bytes, 0 restart markers"},{"kind":"ZIP","offset":163844096,"length":50215,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"920b8ede6de70533","ladder":"header-and-footer","path":"/custody_addendum.docx","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"ooxml entries=7 xcheck=7/7 payload=7/7 cd@49748 end=50215"},{"kind":"PDF","offset":170430464,"length":46056,"admitted":true,"reason_code":null,"reason":null,"assembly":"reassembled","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"b65043ef139f4979","ladder":"header-and-footer","path":"/disposal_certificate.pdf","expected_recoverable":"bifragment","sha256_matches":true,"structure_valid":true,"structure_detail":"pdf-1.7 xref=table objs=34 verified=34/34 root=33 end=46056"},{"kind":"GZIP","offset":173564124,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5841 below MIN_CONFIDENCE 0.7500; structure: gzip: header parsed over 10 bytes but the DEFLATE stream failed: distance 31 reaches 27 bytes behind the start of output","assembly":"signature-span","total":0.584112,"terms":{"signature_integrity":0.75,"structural_validity":0.25,"entropy_consistency":0.644081,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0875,"entropy_consistency":0.096612,"size_plausibility":0.1},"sha256":"07ccb0fca7e78ce8","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: header parsed over 10 bytes but the DEFLATE stream failed: distance 31 reaches 27 bytes behind the start of output"},{"kind":"JPEG","offset":176111616,"length":108462,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"7af648573406b25e","ladder":"header-and-footer","path":"/drive_label_macro.jpg","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"jpeg: SOI..EOI over 108462 bytes, 10 segments, SOF0 288x288 3c, 107791 entropy bytes, 0 restart markers"},{"kind":"MP4","offset":180529152,"length":176941,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"7c676209552b0026","ladder":"no-footer-defined","path":"/drive_teardown.mov","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"mp4: brand 'qt', 3 top-level boxes tiling 176941 bytes, 19 boxes walked, 1 track(s), mdat payload 176400 bytes, 44100 sample(s) totalling 176400 bytes across 1 chunk offset(s); 176400 mdat bytes are NOT covered by any checksum -- MP4 defines none"},{"kind":"JPEG","offset":180788456,"length":319576,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.6500 below MIN_CONFIDENCE 0.7500; structure: jpeg: expected a marker at offset 59638, found 69","assembly":"signature-span","total":0.65,"terms":{"signature_integrity":1.0,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"ccce6ced12721274","ladder":"header-and-footer","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"jpeg: expected a marker at offset 59638, found 69"},{"kind":"JPEG","offset":200210432,"length":101899,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"da74a75c167e84a2","ladder":"header-and-footer","path":"/seizure_photo_b.jpg","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"jpeg: SOI..EOI over 101899 bytes, 10 segments, SOF0 320x320 3c, 101230 entropy bytes, 0 restart markers"},{"kind":"JPEG","offset":214231040,"length":107908,"admitted":true,"reason_code":null,"reason":null,"assembly":"reassembled","total":1.0,"terms":{"signature_integrity":1.0,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"ab7a4a8ac327ecc4","ladder":"header-and-footer","path":"/evidence_bag_seal.jpg","expected_recoverable":"unrecoverable-by-design","sha256_matches":true,"structure_valid":true,"structure_detail":"jpeg: SOI..EOI over 107908 bytes, 10 segments, SOF0 304x304 3c, 107237 entropy bytes, 0 restart markers"},{"kind":"GZIP","offset":216939024,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5451 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xA0, reserved bits 5-7 are 0xA0 and RFC 1952 requires them zero","assembly":"signature-span","total":0.545107,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":0.967379,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.145107,"size_plausibility":0.1},"sha256":"33d15ce3c94fda33","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0xA0, reserved bits 5-7 are 0xA0 and RFC 1952 requires them zero"},{"kind":"MP4","offset":221540352,"length":88741,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"b6da01622ea4fe10","ladder":"no-footer-defined","path":"/bodycam_intake.mov","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"mp4: brand 'qt', 3 top-level boxes tiling 88741 bytes, 19 boxes walked, 1 track(s), mdat payload 88200 bytes, 22050 sample(s) totalling 88200 bytes across 1 chunk offset(s); 88200 mdat bytes are NOT covered by any checksum -- MP4 defines none"},{"kind":"GZIP","offset":221743528,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xE0, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero","assembly":"signature-span","total":0.55,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"c9c7dc663885f550","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0xE0, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero"},{"kind":"GZIP","offset":228945920,"length":72692,"admitted":true,"reason_code":null,"reason":null,"assembly":"contiguous","total":0.9,"terms":{"signature_integrity":0.75,"structural_validity":1.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.35,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"5bc3fdb1d1864abb","ladder":"no-footer-defined","path":"/dmesg_capture.log.gz","expected_recoverable":"signature-only","sha256_matches":true,"structure_valid":true,"structure_detail":"gzip: 28-byte header naming 'dmesg_capture.log', 72656 DEFLATE bytes in 1 block(s) -> 262286 bytes, CRC-32 B45BFD27 verified, ISIZE 262286 matched, 72692 total"},{"kind":"GZIP","offset":237511630,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5468 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x36, reserved bits 5-7 are 0x20 and RFC 1952 requires them zero","assembly":"signature-span","total":0.546832,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":0.978877,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.146832,"size_plausibility":0.1},"sha256":"371ef00b34863b62","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0x36, reserved bits 5-7 are 0x20 and RFC 1952 requires them zero"},{"kind":"GZIP","offset":242973985,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0x58, reserved bits 5-7 are 0x40 and RFC 1952 requires them zero","assembly":"signature-span","total":0.55,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"778c81c68349cf0a","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0x58, reserved bits 5-7 are 0x40 and RFC 1952 requires them zero"},{"kind":"GZIP","offset":243623154,"length":127302,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.5500 below MIN_CONFIDENCE 0.7500; structure: gzip: FLG is 0xFE, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero","assembly":"signature-span","total":0.55,"terms":{"signature_integrity":0.75,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.3,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"5d10319f2347c406","ladder":"no-footer-defined","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"gzip: FLG is 0xFE, reserved bits 5-7 are 0xE0 and RFC 1952 requires them zero"},{"kind":"JPEG","offset":255993614,"length":413384,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.6500 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF4E at offset 2, chain broken","assembly":"signature-span","total":0.65,"terms":{"signature_integrity":1.0,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"d5f8165baa281244","ladder":"header-and-footer","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"jpeg: reserved marker FF4E at offset 2, chain broken"},{"kind":"JPEG","offset":256383792,"length":23206,"admitted":false,"reason_code":"below-min-confidence-structure-invalid","reason":"confidence 0.6500 below MIN_CONFIDENCE 0.7500; structure: jpeg: reserved marker FF40 at offset 2, chain broken","assembly":"signature-span","total":0.65,"terms":{"signature_integrity":1.0,"structural_validity":0.0,"entropy_consistency":1.0,"size_plausibility":1.0},"weighted":{"signature_integrity":0.4,"structural_validity":0.0,"entropy_consistency":0.15,"size_plausibility":0.1},"sha256":"2a9f8d9ed58c2fc8","ladder":"header-and-footer","path":null,"expected_recoverable":null,"sha256_matches":null,"structure_valid":false,"structure_detail":"jpeg: reserved marker FF40 at offset 2, chain broken"}]}}</script>
 <script>
-(function(){
 "use strict";
+/* =========================================================================
+   SENTINELWIPE - SURFACE 0 - THE VOID
+   No framework, no library, no network request. Every figure is read out of
+   the payload block above by its documented field name, and every pixel of
+   the medium is drawn from a measured extent or from bytes the wipe actually
+   wrote. Nothing here is illustrative.
+   ========================================================================= */
+(function(){
 
-/* ---------- 1 · payload. Every figure on this page is bound from here. --- */
 var P = JSON.parse(document.getElementById("payload").textContent);
+var REDUCED = !!(window.matchMedia &&
+                 window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
-function at(o,p){ var k=p.split("."),i=0; for(;i<k.length;i++){ if(o==null) return null; o=o[k[i]]; } return o; }
-function group(s){ var a=String(s).split("."); return a[0].replace(/\B(?=(\d{3})+(?!\d))/g,",")+(a.length>1?"."+a[1]:""); }
-var FMT = {
-  int:  function(v){ return group(v); },
-  fix3: function(v){ return group(Number(v).toFixed(3)); },
-  fix6: function(v){ return group(Number(v).toFixed(6)); },
-  raw:  function(v){ return String(v); },
-  bool: function(v){ return v===true?"true":v===false?"false":String(v); }
-};
-/* derivations this page computes from the payload, named so they can be audited */
-var CALC = {
-  /* floor_ns ÷ measured_ns — the human factor */
-  lie_factor: function(){ return at(P,"lie.sanitize.floor_ns") / at(P,"lie.sanitize.measured_ns"); }
-};
-var i,n,el,v;
-n = document.querySelectorAll("[data-num]");
-for(i=0;i<n.length;i++){ el=n[i]; v=at(P, el.getAttribute("data-num"));
-  el.textContent = FMT[el.getAttribute("data-fmt")||"int"](v); }
-n = document.querySelectorAll("[data-calc]");
-for(i=0;i<n.length;i++){ el=n[i]; v=CALC[el.getAttribute("data-calc")]();
-  el.textContent = FMT[el.getAttribute("data-fmt")||"int"](v); }
-
-/* ---------- 2 · the one family of curves ------------------------------- */
-function bez(x1,y1,x2,y2){
-  var cx=3*x1, bx=3*(x2-x1)-cx, ax=1-cx-bx,
-      cy=3*y1, by=3*(y2-y1)-cy, ay=1-cy-by;
-  return function(x){
-    if(x<=0) return 0; if(x>=1) return 1;
-    var t=x,e,d,i;
-    for(i=0;i<6;i++){
-      e=((ax*t+bx)*t+cx)*t-x;
-      if(e<1e-5&&e>-1e-5) break;
-      d=(3*ax*t+2*bx)*t+cx; if(d<1e-6&&d>-1e-6) break;
-      t-=e/d;
-    }
-    return ((ay*t+by)*t+cy)*t;
-  };
+/* ---------- formatting: full precision, separators only ----------------- */
+function grp(s){ return s.replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+function n(v){
+  if(v===null||v===undefined) return "null";
+  var s=String(v), neg=false;
+  if(s.charAt(0)==="-"){ neg=true; s=s.slice(1); }
+  var p=s.split("."); p[0]=grp(p[0]);
+  return (neg?"-":"")+p.join(".");
 }
-var E = { standard:bez(.32,.72,0,1), enter:bez(.16,1,.3,1),
-          exit:bez(.7,0,.84,0),      glide:bez(.4,0,.2,1),
-          snap:bez(.34,1.26,.64,1) };
-
-function seg(p,a,b){ var v=(p-a)/(b-a); return v<0?0:v>1?1:v; }
-function put(el,t,o){
-  if(t!==null && el.__t!==t){ el.style.transform=t; el.__t=t; }
-  if(o!==null){ var s=o.toFixed(3); if(el.__o!==s){ el.style.opacity=s; el.__o=s; } }
+function n6(v){
+  if(v===null||v===undefined) return "null";
+  var f=Number(v).toFixed(6).split(".");
+  return grp(f[0])+"."+f[1];
 }
-/* the standard arrival: travel on --ease-enter, opacity on --ease-standard */
-function arrive(el,p,dy,dx){
-  put(el, "translate3d("+((dx||0)*(1-E.enter(p))).toFixed(2)+"px,"+((dy||0)*(1-E.enter(p))).toFixed(2)+"px,0)", E.standard(p));
-}
-function stagger(list,p,a,b,dy){
-  var span=(b-a)/list.length, i;
-  for(i=0;i<list.length;i++) arrive(list[i], seg(p, a+span*i*0.62, a+span*i*0.62+span*1.6), dy, 0);
-}
-
-/* ---------- 3 · reduced motion is the first-class path ---------------- */
-var mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-var RM = mq.matches;
-if(RM) document.documentElement.className += " rm";
-mq.addEventListener && mq.addEventListener("change", function(){ location.reload(); });
-
-/* ---------- 4 · scene bindings ----------------------------------------- */
-var q = function(s,r){ return (r||document).querySelector(s); };
-var qa = function(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); };
-var acts = qa(".act");
-var chrome = q("#chrome");
-
-var S = {};
-
-/* 01 VOID — tracking closes from .08em to .01em, expressed as per-character
-   translation so no frame ever touches layout. Nothing else moves. */
-var hero = q(".hero"), heroLines = qa(".hline", hero), heroChars = [];
-(function(){
-  for(var i=0;i<heroLines.length;i++){
-    var cs = qa(".ch", heroLines[i]);
-    heroChars.push(cs);
+function dig(path){
+  var parts=path.split("."), v=P;
+  for(var i=0;i<parts.length;i++){
+    if(v===null||v===undefined) return undefined;
+    v=v[parts[i]];
   }
+  return v;
+}
+var bound=document.querySelectorAll("[data-num]"), bi, el, bv, fmt;
+for(bi=0;bi<bound.length;bi++){
+  el=bound[bi]; bv=dig(el.getAttribute("data-num")); fmt=el.getAttribute("data-fmt");
+  if(bv===undefined){ el.textContent="MISSING FIELD"; continue; }
+  el.textContent = fmt==="int" ? n(bv) : fmt==="fix6" ? n6(bv)
+                 : bv===null ? "null" : String(bv);
+}
+
+/* the one figure the page divides for itself, exact */
+document.getElementById("bSpeed").textContent =
+  n(P.lie.sanitize.floor_ns / P.lie.sanitize.measured_ns);
+document.getElementById("bFrames").textContent = n(P.frames.length);
+
+/* ---------- SHA-256 of the embedded payload, computed here -------------
+   So the replay stamp is checkable: shasum -a 256 ui/payload.json        */
+var K=[0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,
+0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,
+0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,
+0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,
+0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,
+0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,
+0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,
+0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,
+0xbef9a3f7,0xc67178f2];
+function utf8(str){
+  var out=[], j, c;
+  for(j=0;j<str.length;j++){
+    c=str.charCodeAt(j);
+    if(c<0x80) out.push(c);
+    else if(c<0x800){ out.push(0xc0|(c>>6), 0x80|(c&63)); }
+    else if(c>=0xd800&&c<=0xdbff&&j+1<str.length){
+      var c2=str.charCodeAt(j+1), cp=0x10000+((c-0xd800)<<10)+(c2-0xdc00); j++;
+      out.push(0xf0|(cp>>18),0x80|((cp>>12)&63),0x80|((cp>>6)&63),0x80|(cp&63));
+    } else { out.push(0xe0|(c>>12),0x80|((c>>6)&63),0x80|(c&63)); }
+  }
+  return out;
+}
+function sha256hex(str){
+  var b=utf8(str), bits=b.length*8;
+  b.push(0x80);
+  while(b.length%64!==56) b.push(0);
+  var hi=Math.floor(bits/4294967296), lo=bits>>>0;
+  b.push((hi>>>24)&255,(hi>>>16)&255,(hi>>>8)&255,hi&255,
+         (lo>>>24)&255,(lo>>>16)&255,(lo>>>8)&255,lo&255);
+  var H=[0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
+         0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19];
+  var w=new Array(64),a,bb,c,d,e,f,g,h,t1,t2,s0,s1,ch,mj,t,x;
+  for(t=0;t<b.length;t+=64){
+    for(x=0;x<16;x++)
+      w[x]=(b[t+4*x]<<24)|(b[t+4*x+1]<<16)|(b[t+4*x+2]<<8)|b[t+4*x+3];
+    for(x=16;x<64;x++){
+      s0=((w[x-15]>>>7)|(w[x-15]<<25))^((w[x-15]>>>18)|(w[x-15]<<14))^(w[x-15]>>>3);
+      s1=((w[x-2]>>>17)|(w[x-2]<<15))^((w[x-2]>>>19)|(w[x-2]<<13))^(w[x-2]>>>10);
+      w[x]=(w[x-16]+s0+w[x-7]+s1)|0;
+    }
+    a=H[0];bb=H[1];c=H[2];d=H[3];e=H[4];f=H[5];g=H[6];h=H[7];
+    for(x=0;x<64;x++){
+      s1=((e>>>6)|(e<<26))^((e>>>11)|(e<<21))^((e>>>25)|(e<<7));
+      ch=(e&f)^(~e&g);
+      t1=(h+s1+ch+K[x]+w[x])|0;
+      s0=((a>>>2)|(a<<30))^((a>>>13)|(a<<19))^((a>>>22)|(a<<10));
+      mj=(a&bb)^(a&c)^(bb&c);
+      t2=(s0+mj)|0;
+      h=g;g=f;f=e;e=(d+t1)|0;d=c;c=bb;bb=a;a=(t1+t2)|0;
+    }
+    H[0]=(H[0]+a)|0;H[1]=(H[1]+bb)|0;H[2]=(H[2]+c)|0;H[3]=(H[3]+d)|0;
+    H[4]=(H[4]+e)|0;H[5]=(H[5]+f)|0;H[6]=(H[6]+g)|0;H[7]=(H[7]+h)|0;
+  }
+  var o="";
+  for(x=0;x<8;x++) o+=("00000000"+(H[x]>>>0).toString(16)).slice(-8);
+  return o;
+}
+document.getElementById("rSha").textContent =
+  sha256hex(document.getElementById("payload").textContent);
+
+/* =========================================================================
+   THE MEDIUM
+   524,288 sectors. The backing store is 1024 x 512, which is 524,288 pixels,
+   so the mapping is one pixel per sector with nothing aggregated away.
+
+   Two data sources and no third:
+     - carve.records[].offset / .length  -> where objects sit, exactly
+     - frames[].hx                       -> 12,544 bytes of the pattern the
+                                            wipe actually wrote, read out of
+                                            the telemetry trace
+   The wiped medium is drawn FROM THOSE BYTES. It is not a random() field
+   standing in for one.
+   ========================================================================= */
+var W=1024, Hh=512, NPX=W*Hh;
+var SECT = P.device.logical_sector_bytes;
+var cv  = document.getElementById("medium");
+var ctx = cv.getContext("2d");
+var img = ctx.createImageData(W, Hh);
+var px  = img.data;
+
+/* the real overwrite bytes, concatenated out of every telemetry frame */
+var POOL = (function(){
+  var hx="", i;
+  for(i=0;i<P.frames.length;i++) hx += P.frames[i].hx;
+  var out=new Uint8Array(hx.length>>1);
+  for(i=0;i<out.length;i++) out[i]=parseInt(hx.substr(i*2,2),16);
+  return out;
 })();
-var s1lab = q('.act[data-act="1"] .act-label'), s1hint = q(".hint");
-var heroFs = 64;
-S[1] = function(a,p){
-  var e = E.standard(seg(p,0,.72));            /* the settle, held long */
-  var spread = (0.08-0.01) * heroFs * (1-e);
-  for(var L=0;L<heroChars.length;L++){
-    var cs = heroChars[L], mid = (cs.length-1)/2;
-    for(var i=0;i<cs.length;i++){
-      put(cs[i], "translate3d("+((i-mid)*spread).toFixed(2)+"px,0,0)", null);
-    }
-  }
-  put(hero, "translate3d(0,"+(-2.5*innerHeight/100 + 10*(1-e)).toFixed(2)+"px,0)", E.standard(seg(p,0,.18)));
-  put(s1hint, null, 1-E.exit(seg(p,.80,1)));
-  put(s1lab, null, 0);
-};
+var POOLN = POOL.length;
 
-/* 02 THE CLAIM — a cover block travels off a pre-laid string. transform only. */
-var covers = qa("[data-cover]"), claim = q(".claim"), cap2 = q('.act[data-act="2"] .cap');
-S[2] = function(a,p){
-  put(covers[0], "translate3d("+(E.glide(seg(p,.04,.46))*100).toFixed(3)+"%,0,0)", null);
-  put(covers[1], "translate3d("+(E.glide(seg(p,.48,.66))*100).toFixed(3)+"%,0,0)", null);
-  arrive(claim, seg(p,.66,.86), 14, 0);
-  arrive(cap2,  seg(p,.84,1),    8, 0);
-};
-
-/* 03 THE NUMBER — the one gold element on this viewport. */
-var n3 = q('.act[data-act="3"] .colossus'), c3 = q('.act[data-act="3"] .cap'),
-    f3 = q('.act[data-act="3"] .t-footnote');
-S[3] = function(a,p){
-  arrive(n3, seg(p,0,.40), 24, 0);
-  arrive(c3, seg(p,.34,.62), 10, 0);
-  arrive(f3, seg(p,.52,.80), 10, 0);
-};
-
-/* 04 THE FLOOR — the derivation assembles a row per scroll increment. */
-var d4 = qa('.act[data-act="4"] .deriv > *'), r4 = q('.act[data-act="4"] .rule'),
-    o4 = q('.act[data-act="4"] .floor-out'), fm4 = q('.act[data-act="4"] .formula'),
-    c4 = q('.act[data-act="4"] .cap');
-S[4] = function(a,p){
-  stagger(d4, p, 0, .40, 10);
-  put(r4, "scaleX("+E.standard(seg(p,.40,.56)).toFixed(4)+")", null);
-  arrive(o4, seg(p,.54,.76), 14, 0);
-  arrive(fm4, seg(p,.62,.82), 10, 0);
-  arrive(c4, seg(p,.78,1), 8, 0);
-};
-
-/* 05 THE COLLISION — the peak. The whole motion budget lives in this act. */
-var obs = q("#obs"), flr = q("#flr"), rr5 = q('.act[data-act="5"] .ratio-row'),
-    fn5 = q('.act[data-act="5"] .factor .n'), fx5 = q('.act[data-act="5"] .factor .x'),
-    v5 = q("#v5"), ar5 = q('.act[data-act="5"] .abort-rule'), ac5 = q('.act[data-act="5"] .action');
-var v5latched = false;
-S[5] = function(a,p){
-  arrive(obs, seg(p,0,.20), -22, 0);            /* observed arrives from above  */
-  arrive(flr, seg(p,.14,.34),  22, 0);          /* the floor arrives from below */
-  arrive(rr5, seg(p,.32,.48), 8, 0);
-  var fe = E.enter(seg(p,.36,.62));
-  put(fn5, "translate3d(0,"+(18*(1-fe)).toFixed(2)+"px,0) scale("+(0.94+0.06*fe).toFixed(4)+")", E.standard(seg(p,.36,.58)));
-  arrive(fx5, seg(p,.46,.66), 8, 0);
-  /* the stamp: one latched settle on --ease-standard over --dur-morph, 4% and no bounce */
-  if(!v5latched && p>=.66){ v5latched=true; v5.style.transition=
-      "transform var(--dur-morph) var(--ease-standard), opacity var(--dur-morph) var(--ease-standard)";
-      v5.style.transform="translate3d(0,0,0) scale(1)"; v5.style.opacity="1"; }
-  if(v5latched && p<.52){ v5latched=false; v5.style.transition="none";
-      v5.style.transform="translate3d(0,12px,0) scale(1.04)"; v5.style.opacity="0"; }
-  put(ar5, "scaleX("+E.standard(seg(p,.72,.90)).toFixed(4)+")", null);
-  arrive(ac5, seg(p,.82,1), 8, 0);
-};
-
-/* 06 THE SECOND WITNESS — two hashes lock, then turn cold. */
-var w6a=q("#w6a"), w6b=q("#w6b"), cold=qa('.act[data-act="6"] .cold'),
-    warm=qa('.act[data-act="6"] .warm'), un6=q('.act[data-act="6"] .unchanged'),
-    c6=q('.act[data-act="6"] .cap');
-S[6] = function(a,p){
-  var e = E.enter(seg(p,0,.46));
-  put(w6a, "translate3d("+(-70*(1-e)).toFixed(3)+"%,0,0)", null);
-  put(w6b, "translate3d("+( 70*(1-e)).toFixed(3)+"%,0,0)", null);
-  var lock = E.standard(seg(p,.46,.60));
-  for(var i=0;i<cold.length;i++){ put(cold[i], null, lock); put(warm[i], null, 1-lock); }
-  arrive(un6, seg(p,.58,.80), 12, 0);
-  arrive(c6,  seg(p,.76,1),    8, 0);
-};
-
-/* 07 THE LOOP — columns build on opacity over pre-laid cells. Never layout. */
-var bar7=q('.act[data-act="7"] .bar'), nodes7=qa('.act[data-act="7"] .node'),
-    colB=qa('.act[data-act="7"] [data-col="b"]'), colA=qa('.act[data-act="7"] [data-col="a"]'),
-    z7=q('.act[data-act="7"] .zero'), c7=q('.act[data-act="7"] .cap');
-S[7] = function(a,p){
-  put(bar7, "scaleX("+E.standard(seg(p,0,.18)).toFixed(4)+")", null);
-  for(var i=0;i<nodes7.length;i++)
-    put(nodes7[i], "translate(-50%,-50%)", E.standard(seg(p,.08+i*.05,.20+i*.05)));
-  stagger(colB, p, .26, .46, 8);
-  stagger(colA, p, .46, .66, 8);
-  arrive(z7, seg(p,.64,.82), 12, 0);
-  arrive(c7, seg(p,.80,1),    8, 0);
-};
-
-/* 08 HANDOVER — chrome retracts, the control arrives, nothing cuts. */
-var h8 = qa('.act[data-act="8"] [data-anim]');
-S[8] = function(a,p){
-  stagger(h8, p, .06, .72, 14);
-  if(p>.10) chrome.classList.add("retract"); else chrome.classList.remove("retract");
-};
-
-/* ---------- 5 · one IntersectionObserver. It owns will-change and nothing
-   else: an act's scrub is derived from cached geometry in the loop, so a
-   scene is never wrong because an observer callback had not landed yet. ---- */
-var ANIM = "[data-anim],.ch,[data-cover]";
-if(!RM){
-  var io = new IntersectionObserver(function(es){
-    for(var i=0;i<es.length;i++){
-      var a = es[i].target, on = es[i].isIntersecting;
-      if(a.__wc === on) continue;
-      a.__wc = on;
-      var m = qa(ANIM,a), j;
-      for(j=0;j<m.length;j++) m[j].style.willChange = on ? "transform,opacity" : "";
-    }
-  }, {rootMargin:"12% 0px 12% 0px"});
-  for(var ai=0;ai<acts.length;ai++) io.observe(acts[ai]);
+/* position-hashed index into the real byte pool: every value drawn is a byte
+   the wipe wrote, but consecutive sectors do not read consecutive pool bytes,
+   so 524,288 pixels do not show 12,544 tiling seams. */
+function poolAt(i){
+  var k=(i+0x9E3779B9)|0;
+  k=Math.imul(k ^ (k>>>16), 0x21f0aaad);
+  k=Math.imul(k ^ (k>>>15), 0x735a2d97);
+  k=(k ^ (k>>>15))>>>0;
+  return POOL[k % POOLN];
 }
 
-/* ---------- 6 · the lerp. Native scroll is never intercepted; the lerp
-   damps the value the scenes are scrubbed by, so the film is continuous
-   without taking the scroll away from the user. ---------------------------- */
-var tops = [], vh = innerHeight, hs = [];
-function measure(){
-  vh = innerHeight; tops.length=0; hs.length=0;
-  heroFs = parseFloat(getComputedStyle(hero).fontSize) || 64;
-  for(var i=0;i<acts.length;i++){ tops.push(acts[i].offsetTop); hs.push(acts[i].offsetHeight); }
-}
-measure();
-addEventListener("resize", measure, {passive:true});
-
-var smooth = window.scrollY || 0, chromeOn = -1;
-
-function chromeUpdate(y){
-  var on = y > tops[1]*0.55 ? 1 : 0;
-  if(on!==chromeOn){ chromeOn=on; chrome.style.opacity = on ? "1" : "0"; }
-}
-
-/* perf meter, only behind ?perf */
-var PERF = /(^|[?&])perf(=|&|$)/.test(location.search);
-var pf = document.getElementById("perf"), ring = new Float32Array(240), rn=0, over=0, total=0, lastP=0, last=0;
-var ivl = new Float32Array(240), iv=0, work0=0;
-if(PERF){ pf.hidden=false; }
-
-function frame(now){
-  /* Two different quantities. Conflating them is the classic meter bug:
-       WORK    time spent inside this callback. What the 8.33 ms budget governs.
-       CADENCE wall time between callbacks. The panel refresh, pinned near 16.7 ms
-               on a 60 Hz display, and it can never beat 8.33 ms however fast the
-               page is. Scored against the budget it reports 100% failure on a
-               blank page, which is a defect in the meter, not in the page. */
-  if(PERF){ work0 = performance.now(); if(last){ ivl[iv%240]=now-last; iv++; } }
-  last = now;
-
-  var y = window.scrollY || window.pageYOffset || 0;
-  smooth += (y - smooth) * 0.18;                       /* the lerp */
-  if(Math.abs(y-smooth) < 0.06) smooth = y;
-  chromeUpdate(smooth);
-
-  if(!RM){
-    for(var k=0;k<acts.length;k++){
-      /* on screen, or one viewport either side of it — eight comparisons */
-      if(smooth + vh < tops[k] || smooth > tops[k] + hs[k]) continue;
-      var travel = hs[k] - vh, p;
-      p = travel>0 ? (smooth - tops[k]) / travel : (smooth>=tops[k] ? 1 : 0);
-      S[k+1](acts[k], p<0?0:p>1?1:p);
-    }
-  }
-  if(PERF){
-    var cost = performance.now() - work0;            /* WORK, not cadence */
-    ring[rn%240]=cost; rn++; total++; if(cost>8.33) over++;
-    if(now-lastP>400){
-      lastP=now;
-      var q99=function(buf,n){
-        var m=Math.min(n,240); if(!m) return 0;
-        var a=Array.prototype.slice.call(buf,0,m).sort(function(x,y){return x-y;});
-        return a[Math.min(m-1,Math.max(0,Math.ceil(m*0.99)-1))]||0;
-      };
-      var w=q99(ring,rn), c=q99(ivl,iv);
-      pf.innerHTML = "p99 frame work  <b>"+w.toFixed(2)+"</b> ms / budget 8.33\n" +
-                     "over budget     <b>"+group(over)+"</b> of "+group(total)+" frames\n" +
-                     "display cadence "+c.toFixed(2)+" ms \u2248 "+(c>0?(1000/c).toFixed(0):"\u2014")+" Hz\n" +
-                     "\u2014 cadence is the panel, not the budget";
-    }
-  }
-  requestAnimationFrame(frame);
-}
-
-if(RM){
-  chrome.style.opacity="1";
-  if(PERF) requestAnimationFrame(frame);
-} else {
-  requestAnimationFrame(frame);
-}
-})();
-</script>
-<script>
-/* One keyboard path through the demo: Escape returns to the entry surface,
-   ui/index.html, from anywhere. Guarded so it never fires while the operator
-   is typing the destructive-confirmation string. */
+/* the atmosphere's grain, tiled from the same measured bytes. Built once,
+   after POOL exists, and applied as a data: URI, so the page still asks the
+   network for nothing at all. */
 (function(){
-  document.addEventListener("keydown", function(e){
-    if(e.key!=="Escape"&&e.key!=="Esc") return;
-    var t=e.target, tag=t&&t.tagName?t.tagName.toLowerCase():"";
-    if(tag==="input"||tag==="textarea"||(t&&t.isContentEditable)) return;
-    e.preventDefault();
-    window.location.href="index.html";
+  var g=document.createElement("canvas"); g.width=g.height=128;
+  var gc=g.getContext("2d"), gi=gc.createImageData(128,128), gd=gi.data, i, v;
+  for(i=0;i<128*128;i++){
+    v=POOL[(i*7919+i*i) % POOLN];
+    gd[i*4]=gd[i*4+1]=gd[i*4+2]=v; gd[i*4+3]=255;
+  }
+  gc.putImageData(gi,0,0);
+  try{
+    document.querySelector(".atm-grain").style.backgroundImage =
+      "url(" + g.toDataURL() + ")";
+  }catch(e){ /* a canvas that will not export just leaves the page flat */ }
+})();
+
+/* the extents, resolved to sectors once */
+var EXT = (function(){
+  var r=P.carve.records, out=[], i, o;
+  for(i=0;i<r.length;i++){
+    o=r[i];
+    out.push({ s0: Math.floor(o.offset/SECT),
+               s1: Math.ceil((o.offset+o.length)/SECT),
+               ok: !!o.admitted });
+  }
+  return out;
+})();
+var EXT_ADMITTED = (function(){ var c=0,i;
+  for(i=0;i<EXT.length;i++) if(EXT[i].ok) c++; return c; })();
+
+function setpx(i, r, g, b){
+  var p=i<<2; px[p]=r; px[p+1]=g; px[p+2]=b; px[p+3]=255;
+}
+/* the unmapped floor: near-black, never pure black, so the frame reads as
+   medium rather than as a hole in the page */
+function fillBase(){
+  for(var i=0;i<NPX;i++) setpx(i, 31, 30, 28);
+}
+/* one extent, plus a one-pixel halo above and below at a quarter weight.
+   The halo is a legibility affordance at 1px per sector and it is drawn
+   dimmer than the datum so it can never be mistaken for one. */
+function drawExtent(e, r, g, b){
+  var i, u, d;
+  for(i=e.s0;i<e.s1 && i<NPX;i++){
+    setpx(i, r, g, b);
+    u=i-W; d=i+W;
+    if(u>=0)   setpx(u, (r>>2)+24, (g>>2)+23, (b>>2)+21);
+    if(d<NPX)  setpx(d, (r>>2)+24, (g>>2)+23, (b>>2)+21);
+  }
+}
+function wipeRange(s0, s1, lift){
+  var i, v;
+  for(i=s0;i<s1 && i<NPX;i++){
+    v = poolAt(i);
+    v = 14 + ((v*94)>>8) + lift;          /* 14..122, a readable noise band */
+    setpx(i, v, v-1, v-2);
+  }
+}
+function paint(){ ctx.putImageData(img, 0, 0); }
+
+var CAP = document.getElementById("medCap");
+function cap(s){ CAP.textContent = s; }
+
+var STATE = {
+  before: function(){
+    fillBase();
+    for(var i=0;i<EXT.length;i++) drawExtent(EXT[i], 124, 119, 110);
+    paint();
+    cap("1,024 × 512 · one pixel per sector · " + n(P.device.total_sectors) +
+        " sectors · " + n(EXT.length) + " candidate extents from carve.records");
+  },
+  found: function(){
+    fillBase();
+    var i;
+    for(i=0;i<EXT.length;i++) if(!EXT[i].ok) drawExtent(EXT[i], 74, 71, 65);
+    for(i=0;i<EXT.length;i++) if(EXT[i].ok)  drawExtent(EXT[i], 207, 203, 196);
+    paint();
+    cap("lit: " + n(EXT_ADMITTED) + " extents above carve.policy.min_confidence " +
+        n6(P.carve.policy.min_confidence) + " · dim: " +
+        n(EXT.length-EXT_ADMITTED) + " rejected");
+  },
+  after: function(){
+    wipeRange(0, NPX, 0);
+    paint();
+    cap("every sector drawn from frames[].hx — " + n(POOLN) +
+        " bytes of the pattern this run actually wrote");
+  },
+  wipe: function(){ /* installed below */ }
+};
+
+/* ---- the sweep. 49 recorded frames, each with a real first_sector and a
+   real sector_count that tile the medium exactly. Replayed over a stated
+   window because the recorded wall clock is too short to watch; the stamp
+   under the frame says so and gives both figures. -------------------------- */
+var REPLAY_MS = 2600, raf = 0, sweeping = false;
+function stopSweep(){ if(raf){ cancelAnimationFrame(raf); raf=0; } sweeping=false; }
+
+STATE.wipe = function(){
+  stopSweep();
+  STATE.before();                              /* the medium as carve left it */
+  var F=P.frames, last=F[F.length-1].t, t0=null, k=0;
+  cap("replay · " + n(F.length) + " recorded frames · " +
+      n(P.telemetry.wall_ms) + " ms measured, shown over " + n(REPLAY_MS) + " ms");
+  if(REDUCED){                                 /* no motion: the end state */
+    STATE.after();
+    cap("replay · " + n(F.length) + " recorded frames · final state, motion reduced");
+    return;
+  }
+  sweeping = true;
+  function step(ts){
+    if(t0===null) t0=ts;
+    var prog=(ts-t0)/REPLAY_MS, cut=prog*last, drew=false;
+    while(k<F.length && F[k].t<=cut){
+      /* entropy_sample lifts the band: a frame that measured higher entropy
+         paints brighter, so the sweep carries its own measurement */
+      var lift = Math.round((F[k].en - 7.9) * 60);
+      wipeRange(F[k].fs, F[k].fs+F[k].n, lift>0?lift:0);
+      k++; drew=true;
+    }
+    if(drew) paint();
+    if(k<F.length && sweeping){ raf=requestAnimationFrame(step); }
+    else { raf=0; sweeping=false; STATE.after(); }
+  }
+  raf=requestAnimationFrame(step);
+};
+
+/* =========================================================================
+   BEATS
+   ========================================================================= */
+var beats = document.querySelectorAll(".beat");
+var rail  = document.querySelectorAll(".rail button");
+var layer = document.getElementById("mediumlayer");
+var kAdv  = document.getElementById("kAdv");
+var RUN   = document.getElementById("goRun").getAttribute("href");
+var cur   = -1;
+
+function go(i){
+  if(i<0) i=0;
+  if(i>beats.length-1) i=beats.length-1;
+  if(i===cur) return;
+  cur=i;
+  stopSweep();
+  var j, want=null;
+  for(j=0;j<beats.length;j++){
+    if(j===i){ beats[j].setAttribute("data-live","1");
+               want=beats[j].getAttribute("data-medium"); }
+    else beats[j].removeAttribute("data-live");
+  }
+  for(j=0;j<rail.length;j++)
+    rail[j].setAttribute("aria-current", j===i ? "true" : "false");
+
+  if(want){ layer.setAttribute("data-on","1"); STATE[want](); }
+  else layer.removeAttribute("data-on");
+
+  kAdv.innerHTML = (i===beats.length-1)
+    ? "<kbd>Space</kbd> opens the instrument"
+    : "<kbd>Space</kbd> advance";
+}
+function next(){
+  if(cur>=beats.length-1){ window.location.href=RUN; return; }
+  go(cur+1);
+}
+for(var rb=0;rb<rail.length;rb++)
+  rail[rb].addEventListener("click", function(e){
+    go(Number(e.currentTarget.getAttribute("data-beat")));
   });
+
+document.addEventListener("keydown", function(e){
+  if(e.metaKey||e.ctrlKey||e.altKey) return;
+  var k=e.key;
+  if(k===" "||k==="Spacebar"||k==="ArrowRight"||k==="PageDown"){ e.preventDefault(); next(); }
+  else if(k==="ArrowLeft"||k==="PageUp"||k==="Backspace"){ e.preventDefault(); go(cur-1); }
+  else if(k==="Escape"||k==="Esc"){ e.preventDefault(); go(0); }
+  else if(k>="1"&&k<="6"){ e.preventDefault(); go(Number(k)-1); }
+});
+
+go(0);
+
 })();
 </script>
 </body>
