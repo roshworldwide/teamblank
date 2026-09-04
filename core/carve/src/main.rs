@@ -706,6 +706,12 @@ fn utc_now() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // These moved to sentinelwipe_carve::report in the Phase-4 emitter
+    // extraction; the test module reaches them explicitly rather than
+    // through super::*, which no longer re-exports them.
+    use sentinelwipe_carve::report::{esc, f, relative_label, stats, Json, SCHEMA};
+    use sentinelwipe_carve::confidence::STRUCTURAL_BREACH_POINT;
+    use std::path::Path;
     use sentinelwipe_carve::carve::{DEFAULT_CLUSTER_BYTES, DEFAULT_MAX_GAP_CLUSTERS};
     use sentinelwipe_carve::confidence::MIN_CONFIDENCE;
 
