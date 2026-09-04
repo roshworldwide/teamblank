@@ -65,18 +65,15 @@ Never add a dependency without telling me first.
    tool that can wipe the demo laptop is a disqualifying defect.
 5. **The behavioural audit is real.** Time every sanitize command. A 1 TB "erase"
    completing in 200 ms means the drive lied; flag it, never trust the return code.
-6. **Reproducible, in a declared region.** The certificate is split into two named
-   regions and BOTH are inside the Ed25519 signature and the Merkle chain.
-   `deterministic_core` — run id, target, method, medium witness before and after,
-   medium_unchanged, verdicts, pass/fail — is byte-identical from a fresh clone given
-   the same fixture seed, and carries the reproducibility assertion.
-   `measurement_envelope` — measured rate, derived floor, observed elapsed,
-   baseline.source, probe_bytes, probe_elapsed_ns — is signed but NOT asserted
-   byte-identical, because those are real measurements of a real machine and a
-   baseline that did not move between runs would mean it was not being measured.
-   The certificate states on its face which fields the reproducibility assertion
-   covers. Nothing is left outside the signature: an unsigned section is a tamperable
-   one, and the timing verdict is the single field most worth forging.
+6. **Reproducible in a declared region; signed in full.** Byte-identical
+   `deterministic_core` from a fresh clone at the same fixture seed; Ed25519
+   signature validity over the whole certificate — both regions, the scope block
+   included. The `measurement_envelope` is signed and NOT asserted repeatable:
+   a baseline that did not move between runs was not being measured. Timing is
+   never excluded from the hash to make reproducibility tidy — it is the field
+   most worth forging. No float ever enters the signed payload: ratios are
+   reduced integer pairs, measured continuous values are the engine's own
+   six-decimal strings, verbatim. Resolved in architecture.md D8.
 
 ## Standards mapping — cite, do not paraphrase
 

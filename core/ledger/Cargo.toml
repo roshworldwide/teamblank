@@ -9,3 +9,7 @@ rust-version.workspace = true
 # at Phase 4 as planned: sha2 here for the vector digests and the Merkle chain,
 # ed25519-dalek in the signing step.
 sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+# rand_core+getrandom is ed25519-dalek's keygen requirement, not a new choice:
+# the locked stack names ed25519-dalek, and this is how its keys are born.
+rand_core = { version = "0.6", features = ["getrandom"] }
