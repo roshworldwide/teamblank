@@ -56,6 +56,37 @@ def audit_view(a):
         "note": a["note"],
     }
 
+def planted_block(manifest_path):
+    """The 40 planted files at their true offsets, from the fixture manifest.
+
+    The manifest is not committed -- out/ is gitignored -- but it is regenerated
+    byte-identically from the seed, and the frozen carve sample records its
+    sha256, so main() checks the two agree before this is trusted. Every extent
+    is carried, not just the first, so a fragmented file draws as the two pieces
+    it actually occupies rather than one contiguous lie.
+    """
+    raw = pathlib.Path(manifest_path).read_bytes()
+    man = json.loads(raw)
+    files = sorted(
+        ({
+            "path": f["path"], "kind": f["kind"],
+            "offset": f["offset"], "size": f["size"],
+            "deleted": f["deleted"], "fragmented": f["fragmented"],
+            "recoverable": f["expected_recoverable"],
+            "ext": [[e["byte_offset"], e["byte_length"]] for e in f["extents"]],
+        } for f in man["files"]),
+        key=lambda x: x["offset"])
+    return {
+        "source": "out/fixture.manifest.json",
+        "manifest_sha256": __import__("hashlib").sha256(raw).hexdigest(),
+        "image_sha256": man["image_sha256"],
+        "image_bytes": man["image_bytes"],
+        "bytes_per_cluster": man["bytes_per_cluster"],
+        "count": len(files),
+        "files": files,
+    }
+
+
 def carve_record(r):
     c = r["confidence"]
     return {
@@ -143,6 +174,12 @@ def main():
                         "estimator": wipe["entropy_bits_per_byte"]["estimator"]},
         },
 
+        # Ground truth: where the 40 planted files actually sit on the medium.
+        # The canvas draws these, so what a viewer watches being destroyed is
+        # the real layout of the real fixture and not an arrangement chosen to
+        # look good.
+        "planted": planted_block(REPO / "out/fixture.manifest.json"),
+
         # ---- Surface B: the instrument -----------------------------------
         "device":  wipe["device"],
         "dispatch": wipe["dispatch"],
@@ -188,6 +225,21 @@ def main():
         die("witness before != after: this is not the unchanged-medium case")
     if payload["carve"]["counts"]["records"] != len(payload["carve"]["records"]):
         die("carve record count disagrees with the record list")
+
+    # The manifest is regenerated, not committed. It is only ground truth if it
+    # is the SAME fixture the frozen carve sample was measured against.
+    PL = payload["planted"]
+    if PL["manifest_sha256"] != payload["carve"]["ground_truth"]["manifest_sha256"]:
+        die("planted manifest sha256 != carve.ground_truth.manifest_sha256 — "
+            "the fixture on this machine is not the one the carve sample describes")
+    if PL["image_bytes"] != payload["device"]["capacity_bytes"]:
+        die("planted image_bytes != device.capacity_bytes")
+    if PL["count"] != payload["loop"]["planted"]:
+        die(f'manifest carries {PL["count"]} files, loop.planted says {payload["loop"]["planted"]}')
+    for f in PL["files"]:
+        for o, l in f["ext"]:
+            if o < 0 or (o + l) > PL["image_bytes"]:
+                die(f'{f["path"]}: extent {o}+{l} falls outside the medium')
     for rec in payload["carve"]["records"]:
         if abs(sum(rec["weighted"].values()) - rec["total"]) > 1e-9:
             die(f'record at offset {rec["offset"]}: weighted terms do not sum to the composite')
@@ -207,5 +259,8 @@ def main():
     print(f"  carve    {payload['carve']['counts']['records']} records, "
           f"{payload['carve']['counts']['admitted']} admitted")
     print(f"  frames   {len(payload['frames'])} @ {payload['telemetry']['achieved_hz']:.3f} Hz measured")
+    print(f"  planted  {PL['count']} files at true offsets, "
+          f"{sum(1 for f in PL['files'] if f['fragmented'])} fragmented, manifest "
+          f"{PL['manifest_sha256'][:16]} verified")
 
 main()
