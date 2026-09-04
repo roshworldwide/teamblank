@@ -16,12 +16,15 @@ containment check is what stops a mistake rather than this script's good
 intentions. The fixture's sha256 is recorded before and re-verified after, and a
 change is a hard failure.
 """
-import hashlib, json, pathlib, shutil, subprocess, sys
+import hashlib, json, os, pathlib, shutil, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-CARVE = REPO / "core/target/release/carve"
-WIPE  = REPO / "core/target/release/wipe"
-VERIFY = REPO / "core/target/release/verify"
+# cargo appends .exe on Windows. Without this the pipeline exits 3 naming a path
+# that is correct on macOS and Linux and has never existed on Windows.
+EXE = ".exe" if os.name == "nt" else ""
+CARVE  = REPO / f"core/target/release/carve{EXE}"
+WIPE   = REPO / f"core/target/release/wipe{EXE}"
+VERIFY = REPO / f"core/target/release/verify{EXE}"
 IMG   = REPO / "out/fixture.img"
 MAN   = REPO / "out/fixture.manifest.json"
 WORK  = REPO / "out/ui-run"
