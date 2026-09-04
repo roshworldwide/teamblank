@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SENTINELWIPE RECOVERY</title>
+<style>
+/* ============================================================================
+   AURUM — THE TITANIUM STANDARD · Edition 27.0 · 412 declarations
+   Transcribed from the token appendix (sheet 45) and the semantic layer
+   (sheet 23) of the AURUM deck, not from the build prompt.
+
+   FINISH: BLACK TITANIUM — "DEFAULT · DARK. Cinema, media, telemetry, night.
+   The canonical AURUM expression: the void with one warm light in it."
+   Sheet 22 names five finishes; Desert Gold is CEREMONIAL·LIGHT (onboarding,
+   receipts, anniversaries) and is the wrong costume for a forensic instrument.
+   A product picks one and never mixes.
+
+   AXIS: FRONTIER (sheet 05) — "near-black canvas, monospaced numerics, tabular
+   figures, live telemetry, precision displayed to the digit that actually
+   matters. Legible under stress. No colour without semantics, no motion without
+   cause, no alarm without an action attached."
+
+   TOTAL COLOUR BUDGET: 32 values. Thirteen Titanium + ten Aurum + five Vapor +
+   four Signal. A SCREEN MAY USE AT MOST NINE OF THEM. No value outside this set
+   may ever enter the codebase.
+
+   ONE DIRECTION ONLY: roles reference ramp values; ramp values reference
+   nothing. A role that references another role is an alias, and aliases are
+   audited out at every release.
+
+   OPACITY OVER NEW HEX: strokes and fills are stated as a percentage of a ramp
+   value, never as a new opaque colour, so they stay correct over glass and
+   over media.
+
+   NAMING: category-role-state. No product prefixes, no screen names, no -v2.
+   GOVERNANCE: additive only — a token's value is never edited in place.
+   ============================================================================ */
+
+:root{
+  /* ---- PRIMITIVE · TITANIUM — thirteen values, the structural ramp ---- */
+  --ti-00:#F7F6F4;  --ti-05:#EEEDEA;  --ti-10:#E3E0DB;  --ti-20:#CFCBC4;
+  --ti-30:#B4AFA7;  --ti-40:#98938A;  --ti-50:#7C776E;  --ti-60:#615D56;
+  --ti-70:#4A4741;  --ti-80:#35322C;  --ti-90:#232120;  --ti-95:#171615;
+  --ti-100:#0B0B0B;
+
+  /* ---- PRIMITIVE · AURUM — ten values, the champagne ramp ------------ */
+  --au-05:#FBF3E4;  --au-10:#F6E7CE;  --au-20:#EED6AE;  --au-30:#E3C089;
+  --au-40:#D4A96A;  --au-50:#C08F4E;  --au-60:#A5763D;  --au-70:#835C30;
+  --au-80:#5E4223;  --au-90:#3A2916;
+
+  /* ---- PRIMITIVE · VAPOR — five values, the cold axis.
+         hue 244–256°, chroma <= 0.033. For glass tint, depth and atmosphere
+         ONLY. Never brand, never decoration. --------------------------- */
+  --vp-10:#D0E4EA;  /* specular rim on cold glass   15.33:1 */
+  --vp-30:#A9BAC4;  /* distant-object label          9.54:1 */
+  --vp-50:#657F90;  /* atmosphere mid-depth          4.78:1 */
+  --vp-70:#445D6C;  /* cool elevated fill            2.39:1 */
+  --vp-90:#232B33;  /* chrome-theme canvas           1.37:1 */
+
+  /* ---- PRIMITIVE · SIGNAL — four values, RESERVED FOR STATE.
+         NEVER COLOUR ALONE: every signal use carries a redundant channel —
+         a glyph, a position, or a word. Eight per cent of men cannot resolve
+         nominal from abort by hue, and a system that fails them fails the law.
+         ---------------------------------------------------------------- */
+  --sig-nominal:#38D158;  /* success, completion, within tolerance   9.74:1 */
+  --sig-caution:#FFD60A;  /* degraded, approaching limit            13.94:1
+                             NEVER PAIRED WITH GOLD                        */
+  --sig-abort:#FF453A;    /* failure and destruction                 5.78:1
+                             ALWAYS ACCOMPANIED BY AN ACTION               */
+  --sig-link:#0A84FF;     /* navigation away from context only       5.40:1 */
+
+  /* ============ SEMANTIC LAYER · 42 roles · BLACK TITANIUM ============
+     Product code references a role. It never references a ramp value. */
+
+  /* SURFACE */
+  --surface-canvas:var(--ti-100);              /* the floor. Never elevated,
+                                                  never tinted, never glass  */
+  --surface-grouped:var(--ti-95);              /* behind lists and forms     */
+  --surface-raised:var(--ti-90);               /* cards. One level only —
+                                                  no card inside a card      */
+  --surface-glass:rgba(247,246,244,.09);       /* floating chrome ONLY:
+                                                  bars, popovers, sheets     */
+  --surface-scrim:rgba(11,11,11,.56);          /* behind modals              */
+
+  /* CONTENT */
+  --content-primary:var(--ti-00);              /* titles and the sentence
+                                                  that matters      18.22:1  */
+  --content-secondary:var(--ti-20);            /* body. The workhorse 8.57:1 */
+  --content-tertiary:var(--ti-40);             /* metadata, timestamps,
+                                                  captions   6.44:1 still AA */
+  --content-quaternary:var(--ti-60);           /* placeholder and disabled
+                                                  ONLY. Never a real word    */
+  --content-accent:var(--au-30);               /* ONE INSTANCE PER VIEWPORT
+                                                                    11.40:1  */
+  --content-on-accent:var(--ti-100);           /* label on a filled metal
+                                                  capsule. Obsidian on gold,
+                                                  always                     */
+
+  /* STROKE & FILL — opacity over new hex, always */
+  --stroke-hairline:rgba(247,246,244,.09);     /* 0.5pt separators.
+                                                  PREFER A GAP; a rule only
+                                                  when space fails           */
+  --stroke-rim:rgba(247,246,244,.18);          /* the 1pt edge of every
+                                                  glass object. Non-optional */
+  --stroke-focus:var(--au-30);                 /* 3pt, 2pt offset OUTSIDE the
+                                                  shape. Never removed,
+                                                  never inset                */
+  --fill-quiet:rgba(247,246,244,.07);          /* secondary capsule ground,
+                                                  segmented track, chip      */
+  --fill-pressed:rgba(247,246,244,.14);        /* applied WITH scale .96 —
+                                                  colour alone never reads
+                                                  as pressed                 */
+  --fill-accent:linear-gradient(168deg,var(--au-30),var(--au-40));
+                                               /* 168° two-stop, 6% delta.
+                                                  Flat metal looks printed   */
+  /* LIGHT */
+  --specular-top:rgba(255,255,255,.45);        /* 1pt inset highlight, top
+                                                  edge only. The tell of
+                                                  real glass                 */
+  --specular-bottom:rgba(255,255,255,.12);     /* bounce light. Always
+                                                  weaker than the top by 3x  */
+  --shadow-key:rgba(11,11,11,.68);             /* single source, 12° above   */
+  --glow-accent:rgba(227,192,137,.28);         /* dark themes only. 42px
+                                                  blur, zero offset.
+                                                  NEVER ON TEXT              */
+
+  /* ---- TYPE · the fourteen-step scale ------------------------------- */
+  --font-display:"SF Pro Display",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Inter,system-ui,sans-serif;
+  --font-text:"SF Pro Text",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Inter,system-ui,sans-serif;
+  --font-mono:"SF Mono",ui-monospace,Menlo,"JetBrains Mono",monospace;
+  /* SF Pro is Apple-licensed and this repository is public: never vendored. */
+
+  --size-colossus:96px;   --lh-colossus:88px;
+  --size-display-1:64px;  --lh-display-1:64px;
+  --size-display-2:48px;  --lh-display-2:52px;
+  --size-title-1:34px;    --lh-title-1:40px;
+  --size-title-2:28px;    --lh-title-2:34px;
+  --size-title-3:22px;    --lh-title-3:28px;
+  --size-headline:17px;   --lh-headline:22px;
+  --size-body:17px;       --lh-body:25px;
+  --size-callout:16px;    --lh-callout:21px;
+  --size-subhead:15px;    --lh-subhead:20px;
+  --size-footnote:13px;   --lh-footnote:18px;
+  --size-caption:12px;    --lh-caption:16px;
+  --size-micro:11px;      --lh-micro:13px;
+  --size-overline:10px;   --lh-overline:12px;
+
+  /* ---- SPACE & RADIUS ------------------------------------------------ */
+  --space-1:4px;  --space-2:8px;  --space-3:12px; --space-4:16px;
+  --space-5:20px; --space-6:24px; --space-8:32px; --space-12:48px;
+  --space-16:64px;
+  --radius-sm:12px; --radius-md:16px; --radius-lg:20px; --radius-xl:28px;
+  --radius-capsule:999px;
+  --target-min:44px;   /* AA5 floor. No target under 44px, ever. */
+
+  /* ---- MOTION · six curves, six springs, no exceptions ---------------- */
+  --ease-standard:cubic-bezier(.32,.72,0,1);
+  --ease-enter:cubic-bezier(.16,1,.3,1);
+  --ease-exit:cubic-bezier(.7,0,.84,0);
+  --ease-glide:cubic-bezier(.4,0,.2,1);
+  --ease-snap:cubic-bezier(.34,1.26,.64,1);
+  --dur-micro:90ms;    --dur-small:160ms;   --dur-medium:240ms;
+  --dur-large:400ms;   --dur-enter:520ms;   --dur-morph:620ms;
+  --dur-ambient:4000ms;
+  --stagger:24ms;
+  --frame-budget:8.33ms;   /* every frame ships in 8.33ms or the feature is
+                              not finished. A budget from the first commit,
+                              never polish applied at the end. */
+
+  /* ---- MATERIAL & ELEVATION ------------------------------------------ */
+  --glass-thin:blur(20px) saturate(170%);
+  --glass-regular:blur(28px) saturate(180%);
+  --glass-thick:blur(40px) saturate(150%);
+  --e1:0 1px 2px rgba(11,11,11,.68), 0 0 0 1px rgba(247,246,244,.09);
+  --e2:0 4px 10px rgba(11,11,11,.68), 0 1px 2px rgba(11,11,11,.5);
+  --e3:0 10px 24px rgba(11,11,11,.68), 0 2px 5px rgba(11,11,11,.5);
+  --e4:0 18px 44px rgba(11,11,11,.68), 0 4px 10px rgba(11,11,11,.5);
+  --e5:0 28px 70px rgba(11,11,11,.72), 0 0 42px rgba(227,192,137,.28);
+}
+
+/* ---- The fourteen registers, set in their own spec ------------------- */
+.t-colossus {font:700 var(--size-colossus)/var(--lh-colossus) var(--font-display);letter-spacing:-.03em}
+.t-display-1{font:700 var(--size-display-1)/var(--lh-display-1) var(--font-display);letter-spacing:-.025em}
+.t-display-2{font:700 var(--size-display-2)/var(--lh-display-2) var(--font-display);letter-spacing:-.022em}
+.t-title-1  {font:700 var(--size-title-1)/var(--lh-title-1) var(--font-display);letter-spacing:-.018em}
+.t-title-2  {font:600 var(--size-title-2)/var(--lh-title-2) var(--font-display);letter-spacing:-.014em}
+.t-title-3  {font:600 var(--size-title-3)/var(--lh-title-3) var(--font-display);letter-spacing:-.01em}
+.t-headline {font:600 var(--size-headline)/var(--lh-headline) var(--font-text)}
+.t-body     {font:400 var(--size-body)/var(--lh-body) var(--font-text)}
+.t-callout  {font:400 var(--size-callout)/var(--lh-callout) var(--font-text)}
+.t-subhead  {font:500 var(--size-subhead)/var(--lh-subhead) var(--font-text)}
+.t-footnote {font:400 var(--size-footnote)/var(--lh-footnote) var(--font-text)}
+.t-caption  {font:400 var(--size-caption)/var(--lh-caption) var(--font-text)}
+.t-micro    {font:500 var(--size-micro)/var(--lh-micro) var(--font-text);letter-spacing:.06em}
+.t-overline {font:600 var(--size-overline)/var(--lh-overline) var(--font-text);
+             letter-spacing:.18em;text-transform:uppercase;color:var(--content-tertiary)}
+
+/* Every numeral in this product is monospace and tabular, carries its unit,
+   and is never abbreviated and never animated. Precision displayed to the
+   digit that actually matters. */
+.num {font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
+      font-feature-settings:"tnum" 1,"lnum" 1}
+.unit{color:var(--content-tertiary);font-size:.72em;margin-left:.3em;letter-spacing:.02em}
+
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--surface-canvas);color:var(--content-secondary);
+     font:400 var(--size-body)/var(--lh-body) var(--font-text);
+     -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+::selection{background:rgba(227,192,137,.28);color:var(--au-05)}
+
+/* 2pt ring at 2pt offset OUTSIDE the shape. Never removed, never inset. */
+:focus-visible{outline:2px solid var(--stroke-focus);outline-offset:2px;border-radius:inherit}
+
+/* Sheet 43 — the floor, not the ceiling. Reduced motion is a first-class
+   path: all travel and scale become a 160ms opacity cross-fade at the
+   destination. Parallax and auto-play stop. No state is lost. */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{
+    animation-duration:1ms!important;animation-iteration-count:1!important;
+    transition-duration:160ms!important;transition-property:opacity!important;
+    scroll-behavior:auto!important}
+}
+
+/* ============================================================================
+   SURFACE 3 - LIVE RECOVERY FROM REMOVABLE MEDIA
+   The closer. A stick the room can watch being emptied, and the files coming
+   back with their hashes intact.
+
+   Every number on this page arrives from ui/serve.py during the run. Nothing
+   is precomputed, because nothing CAN be: the operator chooses the files.
+   ============================================================================ */
+
+html,body{height:100%}
+body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
+#app{position:fixed;inset:0;display:flex;flex-direction:column}
+
+.atm{position:fixed;inset:0;pointer-events:none;z-index:0}
+.atm-glow{background:
+  radial-gradient(56vw 56vw at 12% 78%, rgba(227,192,137,.08), transparent 62%),
+  radial-gradient(44vw 38vw at 92% 8%, rgba(127,166,201,.05), transparent 64%)}
+.atm-vig{background:radial-gradient(122% 98% at 50% 42%,
+  transparent 44%, rgba(11,11,11,.6) 88%, rgba(11,11,11,.9) 100%)}
+
+/* ---- RACK -------------------------------------------------------------- */
+.rack{position:relative;z-index:3;flex:0 0 auto;display:flex;align-items:center;
+  gap:var(--space-5);padding:var(--space-4) var(--space-8) var(--space-2)}
+.wordmark{font:600 var(--size-footnote)/1 var(--font-display);letter-spacing:.34em;
+  color:var(--content-secondary);text-transform:uppercase;white-space:nowrap}
+.wordmark span{color:var(--content-quaternary);margin-left:var(--space-3)}
+.back{display:inline-flex;align-items:center;gap:var(--space-2);min-height:36px;
+  padding:0 var(--space-4);border-radius:var(--radius-capsule);
+  border:1px solid var(--stroke-rim);color:var(--content-tertiary);
+  text-decoration:none;font:600 var(--size-overline)/1 var(--font-text);
+  letter-spacing:.2em;text-transform:uppercase;white-space:nowrap}
+.back kbd{font-family:var(--font-mono);letter-spacing:0;text-transform:none;
+  font-size:var(--size-overline);color:var(--content-quaternary)}
+.src{margin-left:auto;display:flex;align-items:center;gap:var(--space-3);
+  padding:7px var(--space-4);border-radius:var(--radius-capsule);
+  border:1px solid var(--stroke-rim);background:var(--fill-quiet);
+  font:600 var(--size-overline)/1 var(--font-text);letter-spacing:.2em;
+  text-transform:uppercase;white-space:nowrap;color:var(--content-tertiary)}
+.src .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:0 0 auto}
+.src .sub{font:400 var(--size-overline)/1 var(--font-mono);letter-spacing:.04em;
+  text-transform:none;color:var(--content-quaternary)}
+.src[data-mode="ok"]{color:var(--sig-nominal);border-color:var(--sig-nominal)}
+.src[data-mode="run"]{color:var(--sig-caution);border-color:var(--sig-caution)}
+.src[data-mode="bad"]{color:var(--sig-abort);border-color:var(--sig-abort)}
+
+/* ---- STAGE ------------------------------------------------------------- */
+#stage{position:relative;z-index:2;flex:1 1 auto;min-height:0;
+  padding:var(--space-3) var(--space-8) 0;
+  display:grid;grid-template-columns:minmax(320px,.62fr) minmax(0,1.38fr);
+  gap:var(--space-8);align-items:start}
+@media (max-width:1100px){#stage{grid-template-columns:minmax(0,1fr)}}
+
+.col{display:flex;flex-direction:column;min-width:0}
+.kicker{font:600 var(--size-overline)/var(--lh-overline) var(--font-text);
+  letter-spacing:.42em;text-transform:uppercase;color:var(--content-tertiary);
+  margin:0 0 var(--space-3)}
+.hero{margin:0;font-family:var(--font-mono);font-weight:600;
+  font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1;
+  font-size:clamp(52px,7vw,104px);line-height:.92;letter-spacing:-.045em;
+  color:var(--content-primary);white-space:nowrap;
+  text-shadow:0 0 80px rgba(227,192,137,.14)}
+.hero .of{display:block;font-size:.22em;letter-spacing:.02em;font-weight:400;
+  color:var(--content-quaternary);margin:8px 0 0;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.hero.small{font-size:clamp(26px,3vw,40px);letter-spacing:-.02em;
+  white-space:normal;line-height:1.15}
+.saysub{margin:var(--space-4) 0 0;max-width:38ch;
+  font:400 var(--size-callout)/1.4 var(--font-display);color:var(--content-secondary)}
+.saysub b{color:var(--content-primary);font-weight:600}
+
+/* the three steps, and which one you are on */
+.steps{margin-top:var(--space-6);padding-top:var(--space-4);
+  border-top:1px solid var(--stroke-hairline);display:flex;
+  flex-direction:column;gap:var(--space-3)}
+.step{display:flex;gap:var(--space-4);align-items:flex-start;
+  padding-left:var(--space-4);border-left:2px solid var(--stroke-hairline)}
+.step[data-state="now"]{border-left-color:var(--sig-caution)}
+.step[data-state="done"]{border-left-color:var(--sig-nominal)}
+.step .n{font:600 var(--size-overline)/1.5 var(--font-mono);letter-spacing:.1em;
+  color:var(--content-quaternary);flex:0 0 auto;width:20px}
+.step[data-state="now"] .n{color:var(--sig-caution)}
+.step[data-state="done"] .n{color:var(--sig-nominal)}
+.step .b{min-width:0}
+.step .t{display:block;font:600 var(--size-footnote)/1.4 var(--font-text);
+  color:var(--content-secondary)}
+.step[data-state="now"] .t{color:var(--content-primary)}
+.step .d{display:block;margin-top:2px;font:400 var(--size-overline)/1.55 var(--font-mono);
+  letter-spacing:.02em;color:var(--content-quaternary)}
+
+/* ---- RIGHT: the volume, then the evidence ------------------------------ */
+.panel{min-width:0;display:flex;flex-direction:column;gap:var(--space-4)}
+.vols{display:flex;gap:var(--space-3);flex-wrap:wrap}
+.vol{display:flex;flex-direction:column;gap:3px;text-align:left;
+  padding:var(--space-3) var(--space-5);border-radius:var(--radius-md);
+  border:1px solid var(--stroke-rim);background:var(--fill-quiet);cursor:pointer;
+  color:var(--content-tertiary);min-width:190px}
+.vol:disabled{opacity:.34;cursor:not-allowed}
+.vol[data-sel="1"]{border-color:var(--content-accent);color:var(--content-primary)}
+.vol .l{font:600 var(--size-subhead)/1 var(--font-mono);letter-spacing:-.01em}
+.vol .m{font:400 var(--size-overline)/1.5 var(--font-mono);letter-spacing:.04em;
+  color:var(--content-quaternary)}
+
+.bars{display:flex;flex-direction:column;gap:var(--space-2)}
+.bar-row{display:flex;align-items:center;gap:var(--space-4)}
+.bar-k{flex:0 0 96px;font:600 var(--size-overline)/1 var(--font-text);
+  letter-spacing:.2em;text-transform:uppercase;color:var(--content-quaternary)}
+.track{flex:1 1 auto;height:6px;border-radius:3px;background:var(--fill-quiet);
+  overflow:hidden;min-width:0}
+.track i{display:block;height:100%;width:0;background:var(--sig-caution);
+  transform-origin:left center}
+.bar-v{flex:0 0 auto;font-family:var(--font-mono);font-size:var(--size-overline);
+  font-variant-numeric:tabular-nums lining-nums;color:var(--content-tertiary);
+  white-space:nowrap}
+
+/* the file table: one row per enrolled object, verdict on the right */
+.tw{flex:1 1 auto;min-height:0;overflow:auto;border-top:1px solid var(--stroke-hairline)}
+table{width:100%;border-collapse:collapse;font-family:var(--font-mono);
+  font-size:var(--size-footnote);font-variant-numeric:tabular-nums lining-nums}
+thead th{position:sticky;top:0;background:#0B0B0B;text-align:left;
+  padding:var(--space-3) var(--space-4) var(--space-2) 0;
+  font:600 var(--size-overline)/1 var(--font-text);letter-spacing:.2em;
+  text-transform:uppercase;color:var(--content-quaternary);
+  border-bottom:1px solid var(--stroke-rim);white-space:nowrap}
+tbody td{padding:7px var(--space-4) 7px 0;border-bottom:1px solid var(--stroke-hairline);
+  color:var(--content-tertiary);vertical-align:top}
+tbody tr[data-hit="1"] td{color:var(--content-secondary)}
+tbody tr[data-hit="1"] td.f{color:var(--content-primary)}
+td.f{max-width:0;width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.h{color:var(--content-quaternary);white-space:nowrap}
+td.v{white-space:nowrap;font-weight:600}
+.ok{color:var(--sig-nominal)}
+.no{color:var(--content-quaternary)}
+.warn{color:var(--sig-caution)}
+.bad{color:var(--sig-abort)}
+
+/* ---- CONTROL BAR ------------------------------------------------------- */
+.bar{position:relative;z-index:3;flex:0 0 auto;display:flex;align-items:center;
+  gap:var(--space-4);padding:var(--space-3) var(--space-8) var(--space-4)}
+.run{display:inline-flex;align-items:center;gap:var(--space-3);min-height:52px;
+  padding:0 var(--space-8);border:0;border-radius:var(--radius-capsule);
+  cursor:pointer;white-space:nowrap;
+  font:600 var(--size-subhead)/1 var(--font-text);letter-spacing:.22em;
+  text-transform:uppercase;background:var(--fill-accent);
+  color:var(--content-on-accent);
+  transition:opacity var(--dur-micro) var(--ease-standard)}
+.run:disabled{opacity:.34;cursor:not-allowed}
+.run .gl{font-family:var(--font-mono);font-size:var(--size-caption)}
+.ghost{display:inline-flex;align-items:center;gap:var(--space-3);min-height:44px;
+  padding:0 var(--space-5);border-radius:var(--radius-capsule);
+  border:1px solid var(--stroke-rim);background:none;cursor:pointer;
+  color:var(--content-tertiary);text-decoration:none;white-space:nowrap;
+  font:600 var(--size-overline)/1 var(--font-text);letter-spacing:.2em;
+  text-transform:uppercase}
+.ghost:disabled{opacity:.34;cursor:not-allowed}
+.barnote{flex:1 1 auto;min-width:0;font:400 var(--size-footnote)/1.45 var(--font-text);
+  color:var(--content-quaternary)}
+.barnote b{color:var(--content-secondary);font-family:var(--font-mono);font-weight:600}
+.scopenote{margin-top:var(--space-3);font:400 var(--size-overline)/1.6 var(--font-mono);
+  letter-spacing:.02em;color:var(--sig-caution)}
+
+@media (max-height:800px){
+  .rack{padding:var(--space-3) var(--space-6) var(--space-1)}
+  #stage{padding:var(--space-2) var(--space-6) 0;gap:var(--space-6)}
+  .bar{padding:var(--space-2) var(--space-6) var(--space-3)}
+  .hero{font-size:clamp(46px,5.6vw,80px)}
+}
+</style>
+</head>
+<body>
+
+<div class="atm atm-glow"></div>
+<div class="atm atm-vig"></div>
+
+<div id="app">
+
+  <header class="rack">
+    <span class="wordmark">Sentinelwipe<span>Recovery</span></span>
+    <a class="back" href="index.html">&#8592;&nbsp;Entry <kbd>Esc</kbd></a>
+    <span class="src" id="srcBadge" data-mode="" role="status">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="srcWord">Checking</span>
+      <span class="sub" id="srcSub"></span>
+    </span>
+  </header>
+
+  <main id="stage">
+
+    <div class="col">
+      <p class="kicker" id="kicker">Removable media</p>
+      <h1 class="hero" id="hero">&#8212;</h1>
+      <p class="saysub" id="saysub">Choose the volume. Nothing is written to it
+        at any point &#8212; every handle this tool opens on a device is opened
+        read-only.</p>
+
+      <div class="steps" id="steps">
+        <div class="step" data-step="enrol">
+          <span class="n">01</span>
+          <span class="b"><span class="t">Enrol the volume</span>
+            <span class="d" id="dEnrol">hash every file, before anything is deleted</span></span>
+        </div>
+        <div class="step" data-step="delete">
+          <span class="n">02</span>
+          <span class="b"><span class="t">Delete the files yourself</span>
+            <span class="d" id="dDelete">in Explorer &#183; this tool does not touch them</span></span>
+        </div>
+        <div class="step" data-step="recover">
+          <span class="n">03</span>
+          <span class="b"><span class="t">Image, carve, compare</span>
+            <span class="d" id="dRecover">join recovered bytes to the enrolment by SHA-256</span></span>
+        </div>
+      </div>
+
+      <p class="scopenote" id="scopeNote" hidden></p>
+    </div>
+
+    <div class="panel">
+      <div class="vols" id="vols"></div>
+
+      <div class="bars" id="bars" hidden>
+        <div class="bar-row">
+          <span class="bar-k">Imaging</span>
+          <span class="track"><i id="barImage"></i></span>
+          <span class="bar-v" id="valImage">&#8212;</span>
+        </div>
+        <div class="bar-row">
+          <span class="bar-k">Carving</span>
+          <span class="track"><i id="barCarve"></i></span>
+          <span class="bar-v" id="valCarve">&#8212;</span>
+        </div>
+      </div>
+
+      <div class="tw">
+        <table>
+          <thead><tr>
+            <th style="width:38%">Enrolled file</th>
+            <th>Kind</th>
+            <th>Bytes</th>
+            <th>SHA-256</th>
+            <th>Verdict</th>
+          </tr></thead>
+          <tbody id="rows">
+            <tr><td colspan="5" style="color:var(--content-quaternary);padding-top:var(--space-5)">
+              No volume enrolled yet.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <nav class="bar">
+    <button class="run" id="mainBtn" type="button" disabled>
+      <span class="gl" aria-hidden="true">&#9654;</span><span id="mainLabel">Enrol the volume</span>
+    </button>
+    <button class="ghost" id="resetBtn" type="button">Start over</button>
+    <span class="barnote" id="barnote">Start <b>python ui/serve.py</b> and open
+      127.0.0.1:8787/recover.html. This page needs the server: a page opened from
+      a file cannot read a device.</span>
+  </nav>
+
+</div>
+<script>
+"use strict";
+/* =========================================================================
+   SENTINELWIPE - SURFACE 3 - LIVE RECOVERY FROM REMOVABLE MEDIA
+
+   NETWORK. Same-origin relative paths to ui/serve.py on 127.0.0.1 and nothing
+   else. No external host appears in this file.
+
+   There is no payload block here and there could not be one: the operator
+   chooses the files, so every figure on this page is measured during the run
+   or does not exist. A state that has not been measured shows an em dash.
+   ========================================================================= */
+(function(){
+
+var $ = function(id){ return document.getElementById(id); };
+function grp(s){ return s.replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+function n(v){
+  if(v===null||v===undefined) return "—";
+  var s=String(v), p=s.split("."); p[0]=grp(p[0]); return p.join(".");
+}
+function esc(s){
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+                  .replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+function gb(b){ return (b/1e9).toFixed(2)+" GB"; }
+
+var VOL=null, ENROL=null, PHASE="pick", ES=null;
+
+function badge(mode, word, sub){
+  $("srcBadge").setAttribute("data-mode", mode||"");
+  $("srcWord").textContent = word;
+  $("srcSub").textContent = sub || "";
+}
+function note(html){ $("barnote").innerHTML = html; }
+function step(name, state){
+  var el=document.querySelector('.step[data-step="'+name+'"]');
+  if(el){ if(state) el.setAttribute("data-state", state);
+          else el.removeAttribute("data-state"); }
+}
+function hero(html, small){
+  $("hero").innerHTML = html;
+  $("hero").className = small ? "hero small" : "hero";
+}
+
+/* ---------- 0. which volumes are there --------------------------------- */
+function loadVolumes(){
+  fetch("/api/usb/volumes", {cache:"no-store"}).then(function(r){ return r.json(); })
+  .then(function(d){
+    var box=$("vols"), rem=0, i, v, b;
+    box.innerHTML="";
+    for(i=0;i<(d.volumes||[]).length;i++){
+      v=d.volumes[i];
+      b=document.createElement("button");
+      b.type="button"; b.className="vol"; b.disabled=!v.removable;
+      b.innerHTML='<span class="l">'+esc(v.letter)+':</span>'+
+        '<span class="m">'+esc(v.removable ? "removable" : v.kind)+' · '+
+        esc(v.filesystem)+' · '+gb(v.capacity_bytes)+'</span>';
+      if(v.removable){
+        rem++;
+        (function(vol, btn){
+          btn.addEventListener("click", function(){ pick(vol, btn); });
+        })(v, b);
+      } else {
+        b.title = "fixed disks are never imaged by this tool";
+      }
+      box.appendChild(b);
+    }
+    if(!rem){
+      badge("bad","No media","plug in a USB stick");
+      hero("0<span class=\"of\">removable volumes found</span>");
+      note("No removable volume is mounted. Plug in a stick and press "+
+           "<b>Start over</b>. Fixed disks are listed but this tool refuses to "+
+           "image them.");
+    } else {
+      badge("ok","Ready", rem+" removable");
+      hero("—", true);
+      $("hero").textContent = "Choose a volume";
+    }
+  })
+  .catch(function(){
+    badge("bad","No server","start ui/serve.py");
+    hero("—", true);
+    $("hero").textContent = "Server not running";
+    note("This page cannot reach <b>ui/serve.py</b>. A page opened from a file "+
+         "cannot read a device, so there is nothing to fall back to. Start "+
+         "<b>python ui/serve.py</b> and reload.");
+  });
+}
+
+function pick(v, btn){
+  if(PHASE==="running") return;
+  VOL=v;
+  var all=document.querySelectorAll(".vol"), i;
+  for(i=0;i<all.length;i++) all[i].removeAttribute("data-sel");
+  btn.setAttribute("data-sel","1");
+  hero(esc(v.letter)+':<span class="of">'+esc(v.filesystem)+' · '+
+       n(v.capacity_bytes)+" bytes</span>");
+  $("saysub").innerHTML = "Label <b>"+esc(v.label||"(none)")+"</b>. Nothing is "+
+    "written to this volume at any point — every handle opened on it is "+
+    "opened read-only.";
+  PHASE="enrol"; step("enrol","now");
+  $("mainBtn").disabled=false;
+  $("mainLabel").textContent="Enrol the volume";
+  note("Hash every file on <b>"+esc(v.letter)+":</b> first. That is the ground "+
+       "truth the recovery is judged against, and it has to be taken "+
+       "<b>before</b> anything is deleted.");
+}
+
+/* ---------- 1. enrol ---------------------------------------------------- */
+function doEnrol(){
+  $("mainBtn").disabled=true;
+  badge("run","Enrolling","hashing "+VOL.letter+":");
+  fetch("/api/usb/enrol?letter="+encodeURIComponent(VOL.letter), {cache:"no-store"})
+  .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+  .then(function(res){
+    if(!res.ok){ throw new Error(res.j.error || "enrolment failed"); }
+    ENROL=res.j;
+    renderEnrolment();
+    step("enrol","done"); step("delete","now");
+    PHASE="delete";
+    badge("ok","Enrolled", ENROL.count+" files hashed");
+    hero(n(ENROL.count)+'<span class="of">files enrolled · '+
+         n(ENROL.carvable)+" carvable</span>");
+    $("saysub").innerHTML = "Hashed before anything was deleted. <b>"+
+      n(ENROL.count-ENROL.carvable)+"</b> of them have no signature this carver "+
+      "knows, and we are saying so now rather than explaining it afterwards.";
+    $("mainBtn").disabled=false;
+    $("mainLabel").textContent="Recover";
+    note("Now delete the files on <b>"+esc(VOL.letter)+":</b> yourself, in "+
+         "Explorer. Windows does not use the Recycle Bin for removable drives, "+
+         "so they go straight out. Then press <b>Recover</b>.");
+  })
+  .catch(function(e){
+    badge("bad","Failed", "");
+    note("<b>"+esc(e.message)+"</b>");
+    $("mainBtn").disabled=false;
+  });
+}
+
+function renderEnrolment(){
+  var t=$("rows"), i, f, tr, html="";
+  if(!ENROL.count){
+    t.innerHTML='<tr><td colspan="5" style="color:var(--sig-caution);'+
+      'padding-top:var(--space-5)">The volume is empty. Copy some files to it '+
+      'and enrol again.</td></tr>';
+    return;
+  }
+  for(i=0;i<ENROL.files.length;i++){
+    f=ENROL.files[i];
+    html+='<tr data-sha="'+esc(f.sha256)+'"><td class="f">'+esc(f.path)+"</td>"+
+      "<td>"+esc(f.kind||f.ext||"—")+"</td>"+
+      "<td>"+n(f.size)+"</td>"+
+      '<td class="h">'+esc(f.sha256.slice(0,16))+"…</td>"+
+      '<td class="v '+(f.carvable?"no":"warn")+'">'+
+        (f.carvable ? "enrolled" : "▲ no signature") + "</td></tr>";
+  }
+  t.innerHTML=html;
+}
+
+/* ---------- 2. recover -------------------------------------------------- */
+function doRecover(){
+  PHASE="running";
+  $("mainBtn").disabled=true;
+  $("bars").hidden=false;
+  $("barImage").style.width="0%"; $("barCarve").style.width="0%";
+  $("valImage").textContent="—"; $("valCarve").textContent="—";
+  step("delete","done"); step("recover","now");
+  badge("run","Imaging","read-only");
+  hero("—", true); $("hero").textContent="Imaging the volume";
+  note("Reading <b>"+esc(VOL.letter)+":</b> into an image file. The carver never "+
+       "touches the device: it reads the copy, which is the order a forensic "+
+       "examiner works in.");
+
+  ES = new EventSource("/api/usb/recover?letter="+encodeURIComponent(VOL.letter));
+
+  ES.addEventListener("imaging", function(e){
+    var d=JSON.parse(e.data), pct = d.total ? (100*d.done/d.total) : 0;
+    $("barImage").style.width = pct.toFixed(2)+"%";
+    $("valImage").textContent = n(d.done)+" B  ·  "+
+      n(Math.round(d.bps||0))+" B/s";
+  });
+  ES.addEventListener("image", function(e){
+    var d=JSON.parse(e.data);
+    $("barImage").style.width="100%";
+    $("valImage").textContent = n(d.bytes)+" B in "+n(d.elapsed_s)+" s";
+    badge("run","Carving","the image, not the device");
+    $("hero").textContent="Carving";
+    if(!d.whole_volume){
+      $("scopeNote").hidden=false;
+      $("scopeNote").textContent = "▲ " + d.scope;
+    }
+    note("Image SHA-256 <b>"+esc(d.sha256.slice(0,32))+"…</b> — the copy "+
+         "is hashed so it can be shown to be a copy.");
+  });
+  ES.addEventListener("carve", function(e){
+    var d=JSON.parse(e.data);
+    $("barCarve").style.width="100%";
+    $("valCarve").textContent = n(d.counts.records)+" candidates · "+
+      n(d.counts.admitted)+" admitted · "+n(d.elapsed_s)+" s";
+  });
+  ES.addEventListener("compare", function(e){
+    var d=JSON.parse(e.data);
+    paintResult(d);
+  });
+  ES.addEventListener("done", function(){
+    ES.close(); ES=null;
+    PHASE="done";
+    step("recover","done");
+    $("mainBtn").disabled=false;
+    $("mainLabel").textContent="Run it again";
+  });
+  ES.addEventListener("failed", function(e){
+    var m="the run failed";
+    try{ m=JSON.parse(e.data).message; }catch(_){}
+    if(ES){ ES.close(); ES=null; }
+    PHASE="done";
+    badge("bad","Failed","");
+    $("hero").textContent="Failed";
+    note("<b>"+esc(String(m))+"</b>");
+    $("mainBtn").disabled=false;
+  });
+}
+
+function paintResult(d){
+  var hits={}, i, h;
+  for(i=0;i<d.hits.length;i++){ hits[d.hits[i].sha256]=d.hits[i]; }
+  var misses={};
+  for(i=0;i<d.not_recovered.length;i++){
+    misses[d.not_recovered[i].path]=d.not_recovered[i];
+  }
+
+  var rows=$("rows").querySelectorAll("tr"), tr, sha, cell;
+  for(i=0;i<rows.length;i++){
+    tr=rows[i]; sha=tr.getAttribute("data-sha");
+    if(!sha) continue;
+    cell=tr.cells[4];
+    h=hits[sha];
+    if(h){
+      tr.setAttribute("data-hit","1");
+      cell.className="v ok";
+      cell.textContent="✓ byte-exact"+(h.admitted?"":" (below gate)");
+    } else {
+      tr.removeAttribute("data-hit");
+      cell.className="v no";
+      cell.textContent="∅ not recovered";
+    }
+  }
+
+  badge(d.byte_exact_matches ? "ok" : "bad", "Recovered",
+        d.byte_exact_matches+" of "+d.enrolled+" byte-exact");
+  hero(n(d.byte_exact_matches)+'<span class="of">of '+n(d.enrolled)+
+       " enrolled files, byte-exact</span>");
+  $("saysub").innerHTML = "Joined to the enrolment by <b>SHA-256</b> — not by "+
+    "name, not by size. A recovered object is correct only if its bytes hash to "+
+    "what was there before the deletion.";
+
+  var lines = [];
+  lines.push("<b>"+n(d.byte_exact_and_admitted)+"</b> of the "+
+             n(d.byte_exact_matches)+" also cleared the confidence gate.");
+  var nosig = 0, other = 0;
+  for(i=0;i<d.not_recovered.length;i++){
+    if(d.not_recovered[i].carvable) other++; else nosig++;
+  }
+  if(nosig) lines.push("<b>"+n(nosig)+"</b> had no signature to scan for — "+
+                       "predicted before the run, not explained after it.");
+  if(other) lines.push("<b>"+n(other)+"</b> carvable and not matched.");
+  note(lines.join(" "));
+}
+
+/* ---------- controls ---------------------------------------------------- */
+$("mainBtn").addEventListener("click", function(){
+  if(PHASE==="enrol") return doEnrol();
+  if(PHASE==="delete" || PHASE==="done") return doRecover();
+});
+$("resetBtn").addEventListener("click", function(){
+  if(ES){ ES.close(); ES=null; }
+  VOL=null; ENROL=null; PHASE="pick";
+  step("enrol",null); step("delete",null); step("recover",null);
+  $("bars").hidden=true; $("scopeNote").hidden=true;
+  $("rows").innerHTML='<tr><td colspan="5" style="color:var(--content-quaternary);'+
+    'padding-top:var(--space-5)">No volume enrolled yet.</td></tr>';
+  $("mainBtn").disabled=true; $("mainLabel").textContent="Enrol the volume";
+  $("saysub").textContent="Choose the volume. Nothing is written to it at any "+
+    "point — every handle this tool opens on a device is opened read-only.";
+  loadVolumes();
+});
+document.addEventListener("keydown", function(e){
+  if(e.metaKey||e.ctrlKey||e.altKey) return;
+  var k=e.key.toLowerCase();
+  if(k==="escape"){ e.preventDefault(); window.location.href="index.html"; }
+  else if(k==="r" && !$("mainBtn").disabled){ e.preventDefault(); $("mainBtn").click(); }
+});
+
+loadVolumes();
+
+})();
+</script>
+</body>
+</html>

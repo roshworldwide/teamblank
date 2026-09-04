@@ -17,7 +17,8 @@ Exit codes:  0 ok  ·  3 nothing to do  ·  4 token drift  ·  5 malformed page
 import json, pathlib, re, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-PAGES = ("ui/index.html", "ui/approach.html", "ui/instrument.html")
+PAGES = ("ui/index.html", "ui/approach.html", "ui/instrument.html",
+         "ui/recover.html")
 OPEN_RE = re.compile(r'(<script[^>]*id="payload"[^>]*>)(.*?)(</script>)', re.S)
 
 def die(code, msg):
@@ -50,8 +51,13 @@ def main():
         if not f.exists(): die(3, f"missing {rel}")
         h = f.read_text()
 
+        # A live-only surface carries no payload and could not: ui/recover.html
+        # recovers files the OPERATOR chose, so every figure on it is measured
+        # during the run or does not exist. Its token layer is still checked --
+        # that is the part a page can drift on.
         m = OPEN_RE.search(h)
-        if not m: die(5, f'{rel}: no <script id="payload"> block')
+        if not m and rel != "ui/recover.html":
+            die(5, f'{rel}: no <script id="payload"> block')
 
         page_tok = primitives(h[:h.index("</style>")] if "</style>" in h else h)
         for k, v in prim.items():
@@ -60,7 +66,7 @@ def main():
             elif page_tok[k].split("/*")[0].strip() != v.split("/*")[0].strip():
                 drift.append(f"{rel}: {k} is {page_tok[k]!r}, tokens.css says {v!r}")
 
-        if m.group(2).strip() != compact:
+        if m and m.group(2).strip() != compact:
             f.write_text(h[:m.start(2)] + compact + h[m.end(2):])
             changed.append(rel)
 

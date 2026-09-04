@@ -42,10 +42,15 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import webbrowser
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 UI = REPO / "ui"
+# ui/ on the path so `import usb` works however this file was invoked --
+# python ui/serve.py puts it there, `python -m` and an IDE runner do not.
+if str(UI) not in sys.path:
+    sys.path.insert(0, str(UI))
 EXE = ".exe" if os.name == "nt" else ""
 CARVE = REPO / f"core/target/release/carve{EXE}"
 WIPE = REPO / f"core/target/release/wipe{EXE}"
@@ -310,7 +315,111 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json(readiness())
         if self.path.startswith("/api/run"):
             return self._sse_run()
+        if self.path.startswith("/api/usb/volumes"):
+            return self._usb_volumes()
+        if self.path.startswith("/api/usb/enrol"):
+            return self._usb_enrol()
+        if self.path.startswith("/api/usb/recover"):
+            return self._sse_recover()
         return super().do_GET()
+
+    # ---- removable media --------------------------------------------------
+    # Read-only, all three. ui/usb.py opens every volume handle "rb" and there
+    # is no write path in it: this half of the product recovers, it never wipes.
+    # The wipe is demonstrated against a loopback image and nothing else.
+    def _letter(self):
+        q = urllib.parse.urlparse(self.path).query
+        return urllib.parse.parse_qs(q).get("letter", [""])[0]
+
+    def _usb_volumes(self):
+        try:
+            import usb
+            return self._json({"volumes": usb.volumes()})
+        except Exception as exc:
+            return self._json({"error": str(exc)}, 500)
+
+    def _usb_enrol(self):
+        letter = self._letter()
+        try:
+            import usb
+            e = usb.enrol(letter)
+            usb.WORK.mkdir(parents=True, exist_ok=True)
+            (usb.WORK / "enrolment.json").write_text(
+                json.dumps(e, indent=2), encoding="utf-8")
+            # the file list goes back so the page can name what will and will
+            # not come back BEFORE anything is deleted
+            return self._json(e)
+        except (ValueError, PermissionError, FileNotFoundError) as exc:
+            return self._json({"error": str(exc)}, 400)
+        except Exception as exc:
+            return self._json({"error": str(exc)}, 500)
+
+    def _sse_recover(self):
+        letter = self._letter()
+        if not _RUN_LOCK.acquire(blocking=False):
+            return self._json({"error": "a run is already in progress"}, 409)
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
+            def emit(kind, payload):
+                self.wfile.write(
+                    f"event: {kind}\ndata: {json.dumps(payload)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+
+            try:
+                import usb
+                enr = usb.WORK / "enrolment.json"
+                if not enr.exists():
+                    raise RuntimeError(
+                        "nothing was enrolled. Hash the volume BEFORE deleting "
+                        "from it, or there is no ground truth to compare against.")
+                enrolment = json.loads(enr.read_bytes())
+                v = usb._require_removable(letter)
+                emit("start", {"volume": v, "enrolled": enrolment["count"],
+                               "carvable": enrolment["carvable"]})
+
+                emit("phase", {"name": "image", "state": "begin"})
+                last = [0.0]
+
+                def prog(done, total, secs):
+                    # throttled: the browser does not need 2,000 events
+                    if secs - last[0] < 0.12:
+                        return
+                    last[0] = secs
+                    emit("imaging", {"done": done, "total": total,
+                                     "elapsed_s": round(secs, 6),
+                                     "bps": round(done / secs, 6) if secs else None})
+
+                img = usb.image_volume(letter, usb.WORK / "evidence.img", progress=prog)
+                emit("phase", {"name": "image", "state": "end"})
+                emit("image", img)
+
+                emit("phase", {"name": "carve", "state": "begin"})
+                report, secs = usb.carve_image(usb.WORK / "evidence.img",
+                                               usb.WORK / "carve.json")
+                emit("phase", {"name": "carve", "state": "end"})
+                emit("carve", {"counts": report["counts"], "elapsed_s": secs,
+                               "policy": report["policy"]})
+
+                res = usb.compare(enrolment, report, img)
+                (usb.WORK / "result.json").write_text(
+                    json.dumps({"image": img, "compare": res}, indent=2),
+                    encoding="utf-8")
+                emit("compare", res)
+                emit("done", {"artifacts": str(usb.WORK)})
+            except BrokenPipeError:
+                pass
+            except Exception as exc:
+                try:
+                    emit("failed", {"message": str(exc)})
+                except Exception:
+                    pass
+        finally:
+            _RUN_LOCK.release()
 
     def _sse_run(self):
         if not _RUN_LOCK.acquire(blocking=False):
