@@ -630,11 +630,14 @@ canvas#medium{display:block;width:min(1024px,58vw);height:auto;aspect-ratio:2/1;
   </main>
 
   <nav class="spine" aria-label="Spine">
-    <a class="go go-run" href="instrument.html" id="goRun">Run the loop
+    <!-- The forward exit. One tab, one direction: the title card runs the
+         loop, the loop hands off to this deck, and this deck hands off to the
+         USB recovery. `goRun` is what Space follows on the last beat, so the
+         primary control and the keyboard agree by construction. -->
+    <a class="go go-run" href="recover.html" id="goRun">Recover from a USB
       <span class="arrow" aria-hidden="true">&#8594;</span></a>
+    <a class="go go-alt" href="instrument.html">&#8592;&nbsp;The loop</a>
     <a class="go go-alt" href="approach.html">How it works
-      <span class="arrow" aria-hidden="true">&#8594;</span></a>
-    <a class="go go-alt" href="recover.html">Recover from a USB
       <span class="arrow" aria-hidden="true">&#8594;</span></a>
     <div class="rail" role="tablist" aria-label="Beats">
       <button type="button" role="tab" data-beat="0" aria-current="true" aria-label="01 The problem"><i></i></button>
@@ -963,7 +966,7 @@ function go(i){
   else layer.removeAttribute("data-on");
 
   kAdv.innerHTML = (i===beats.length-1)
-    ? "<kbd>Space</kbd> opens the instrument"
+    ? "<kbd>Space</kbd> opens the USB recovery"
     : "<kbd>Space</kbd> advance";
 }
 function next(){
