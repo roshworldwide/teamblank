@@ -17,7 +17,7 @@ Exit codes:  0 ok  ·  3 nothing to do  ·  4 token drift  ·  5 malformed page
 import json, pathlib, re, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-PAGES = ("ui/approach.html", "ui/instrument.html")
+PAGES = ("ui/index.html", "ui/approach.html", "ui/instrument.html")
 OPEN_RE = re.compile(r'(<script[^>]*id="payload"[^>]*>)(.*?)(</script>)', re.S)
 
 def die(code, msg):
@@ -73,7 +73,7 @@ def main():
     if changed:
         for c in changed: print(f"inline: payload re-inlined into {c}")
     else:
-        print("inline: payload already current in both pages")
+        print(f"inline: payload already current in all {len(PAGES)} pages")
     a = payload["audit"]["overwrite"]; o = payload["outcome"]; v = payload["verification"]
     print(f"inline: showing  {o['code']}  coverage {v['coverage_fraction']}  "
           f"ratio {a['ratio']}  {a['code']}  ·  {len(payload['frames'])} telemetry frames")
