@@ -1,0 +1,203 @@
+{
+ "schema": "sentinelwipe.canon_vectors/1",
+ "reference": "RFC 8785, JSON Canonicalization Scheme (JCS), IETF, June 2020",
+ "numeric_policy": "Floats are refused, not formatted. RFC 8785 defers number serialisation to ECMAScript Number::toString, whose shortest-round-trip double formatting is the usual place two languages drift. Every quantity in this project that was a float is derived from integers that already exist upstream, so it is carried as Ratio{n,d} (exact) or Fixed6{v,scale} (quantised once, at the boundary). The consequence is that a conforming implementation needs no float formatter at all.",
+ "carriers": {
+  "Ratio": {
+   "json": {
+    "n": "int numerator",
+    "d": "int denominator > 0"
+   },
+   "rule": "stored reduced, so 1024/524288 and 1/512 are the same bytes"
+  },
+  "Decimal6": {
+   "json": "a JSON string with exactly six decimal places",
+   "rule": "copied verbatim from the engine's report; never reformatted, never re-rounded. Matches core/ledger/src/jcs.rs."
+  }
+ },
+ "must_reject": [
+  {
+   "why": "a float anywhere in the payload",
+   "python": "{'x': 1.5}"
+  },
+  {
+   "why": "a float nested in an array",
+   "python": "{'x': [1, 2.0]}"
+  },
+  {
+   "why": "integer beyond 2^53-1 (a double cannot hold it)",
+   "python": "{'x': 2**53}"
+  },
+  {
+   "why": "a non-string object key",
+   "python": "{1: 'a'}"
+  },
+  {
+   "why": "Ratio with denominator 0 or negative",
+   "python": "Ratio(1, 0)"
+  },
+  {
+   "why": "Decimal6 that is not exactly six decimal places",
+   "python": "Decimal6('7.06169')"
+  }
+ ],
+ "not_exercised": {
+  "lone_surrogate_in_key": "Python cannot hold an unpaired surrogate in a str without surrogatepass, and no SentinelWipe key contains one. UNVERIFIED in both implementations; if a key ever arrives from an external source this becomes reachable and must be tested first.",
+  "numbers_outside_i64": "No field in this project exceeds i64. The 2^53 ceiling binds first and is tested."
+ },
+ "cases": [
+  {
+   "name": "empty_object",
+   "canonical": "{}",
+   "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+   "bytes": 2,
+   "note": "the base case both implementations get wrong first"
+  },
+  {
+   "name": "empty_array",
+   "canonical": "{\"a\":[]}",
+   "sha256": "50e8660084976a10f0b3b9b3a6352d5881cbd219b5587a26224971a60ff2cc55",
+   "bytes": 8
+  },
+  {
+   "name": "null_true_false",
+   "canonical": "{\"a\":true,\"b\":false,\"c\":null}",
+   "sha256": "58ea9f23c715c4f8fee078efd41139485403f053775482d58b6f4f454b34ecf0",
+   "bytes": 29
+  },
+  {
+   "name": "key_order_ascii",
+   "canonical": "{\"\":4,\"A\":2,\"B\":5,\"a\":3,\"b\":1}",
+   "sha256": "0626a6c5f51c73a166162e718636d22d300f6dc5497d6384388937d26c3ecdb1",
+   "bytes": 30,
+   "note": "empty string sorts first; uppercase before lowercase"
+  },
+  {
+   "name": "key_order_utf16_astral",
+   "canonical": "{\"é\":3,\"😀\":1,\"�\":2}",
+   "sha256": "a136d3012baec1bcff3a81b931389086d2c674c93a8070d1aa3ff1be35011276",
+   "bytes": 25,
+   "note": "U+1F600 is the surrogate pair D83D DE00 and must sort BEFORE U+FFFD. Code-point ordering puts it after. This vector is the entire reason RFC 8785 3.2.3 specifies UTF-16 code unit rather than code point."
+  },
+  {
+   "name": "escapes_mandatory",
+   "canonical": "{\"s\":\"quote\\\" backslash\\\\ done\"}",
+   "sha256": "e7b369e2c4e1d9534879fb40fb111344eebf3be278a576a70921ee33fc684493",
+   "bytes": 32
+  },
+  {
+   "name": "escapes_shortforms",
+   "canonical": "{\"s\":\"b\\bt\\tn\\nf\\fr\\r\"}",
+   "sha256": "c2e28dd116555a67396ed8de4967a72601c2bd7e6957686bf874014a5303efdd",
+   "bytes": 23
+  },
+  {
+   "name": "escapes_control_u",
+   "canonical": "{\"s\":\"\\u0001\\u001f\"}",
+   "sha256": "38dc5e0128fedab8edba6b02f7f09663f16bfe0f1afb41a5774a29154732a6e0",
+   "bytes": 20,
+   "note": "below 0x20 with no short form -> \\u00xx, lowercase hex"
+  },
+  {
+   "name": "escapes_solidus_bare",
+   "canonical": "{\"s\":\"a/b\"}",
+   "sha256": "9c264114e98db725a30993f561fc16c317f85758d9919128ca9102281570bd83",
+   "bytes": 11,
+   "note": "the solidus is NOT escaped"
+  },
+  {
+   "name": "escapes_nonascii_bare",
+   "canonical": "{\"s\":\"éüñ漢字\"}",
+   "sha256": "07e0a93816b7daaa3dfd1123d61e5a61140dd073e5937971416e8d2857bfdfa8",
+   "bytes": 20,
+   "note": "non-ASCII is emitted as itself, never \\u"
+  },
+  {
+   "name": "int_negative_and_zero",
+   "canonical": "{\"a\":0,\"b\":-1}",
+   "sha256": "0e4259b1d3061a9601e77e661c797ef7d851e125c0fcfbfb84de8839649da683",
+   "bytes": 14
+  },
+  {
+   "name": "int_max_safe",
+   "canonical": "{\"a\":9007199254740991}",
+   "sha256": "a9af4cfcb37cc6c571d3b396a59af5f6e42c8ea43d06cafc89705e3fb495649d",
+   "bytes": 22,
+   "note": "2^53-1 is allowed; 2^53 must be REJECTED"
+  },
+  {
+   "name": "nested",
+   "canonical": "{\"a\":[[],[[]]],\"z\":{\"a\":null,\"b\":[1,{\"a\":2}]}}",
+   "sha256": "27bdeb385e1868cfff924f0db2e31b6f3373c7542a52d11eb7c78d708a9eb818",
+   "bytes": 46
+  },
+  {
+   "name": "ratio_reduces",
+   "canonical": "{\"coverage\":{\"d\":512,\"n\":1}}",
+   "sha256": "d0cd5092ff7e3a641c4bb1cfa5a68628e24fe5a791e76f5e4b96a5a26422a5ed",
+   "bytes": 28,
+   "note": "1024/524288 and 1/512 must produce identical bytes"
+  },
+  {
+   "name": "ratio_already_reduced",
+   "canonical": "{\"coverage\":{\"d\":512,\"n\":1}}",
+   "sha256": "d0cd5092ff7e3a641c4bb1cfa5a68628e24fe5a791e76f5e4b96a5a26422a5ed",
+   "bytes": 28
+  },
+  {
+   "name": "ratio_timing_lie",
+   "canonical": "{\"ratio\":{\"d\":215529729,\"n\":500}}",
+   "sha256": "b4636a70d24f90f38247a25498c4e57acc7dd4df42406833cf0380bbdcd966f2",
+   "bytes": 33,
+   "note": "the fake-sanitize ratio, exact - never 0.000002"
+  },
+  {
+   "name": "ratio_rate_bps",
+   "canonical": "{\"rate\":{\"d\":7133,\"n\":4194304000000}}",
+   "sha256": "ca3f89282f74d620480004846c14176aeed158f895fe5a577141968cd18f7dc2",
+   "bytes": 37,
+   "note": "bytes per second as bytes over nanoseconds, both integers upstream"
+  },
+  {
+   "name": "ratio_structural_headroom",
+   "canonical": "{\"headroom\":{\"d\":28,\"n\":1}}",
+   "sha256": "57be1dbc5c262900b2bb758abc2befe76170d016784bade7665f7bc4c810636b",
+   "bytes": 27,
+   "note": "(0.75-0.65)/0.35 is exactly 1/28. Carrying 0.035714 discarded the fact that it is exact and invited a rounding argument on stage."
+  },
+  {
+   "name": "ratio_breach_point",
+   "canonical": "{\"breach\":{\"d\":7,\"n\":2}}",
+   "sha256": "a5af612630c9ff148ad03e2bfbcc9bbd7e5afcb9b42c7dcfc98939690adda144",
+   "bytes": 24,
+   "note": "0.285714 is exactly 2/7"
+  },
+  {
+   "name": "decimal6_entropy_before",
+   "canonical": "{\"entropy\":\"7.061690\"}",
+   "sha256": "ce3669b9b7442f1fa1a9ca2df5256441a566a6ab130765398896371b323558bf",
+   "bytes": 22,
+   "note": "a measured continuous value, verbatim from the engine's report"
+  },
+  {
+   "name": "decimal6_entropy_after",
+   "canonical": "{\"entropy\":\"7.999999\"}",
+   "sha256": "f983a01e50c72d75265bdafa99fab70218f56c7f4ea442ec13732e6318a59854",
+   "bytes": 22
+  },
+  {
+   "name": "decimal6_is_a_json_string",
+   "canonical": "{\"e\":\"0.000000\",\"f\":\"-1.500000\"}",
+   "sha256": "b6314d4a7b76afe8b2b44a8383dc7e1eb40d058ce0599f2885babfe4186ed047",
+   "bytes": 32,
+   "note": "carried as a STRING, not a number. A scaled integer would need a rounding step, and Python rounds half-even while Rust rounds half-away-from-zero: they differ only on an exact .5 at the sixth decimal, which is exactly the kind of divergence that surfaces for the first time on a verifier's machine."
+  },
+  {
+   "name": "certificate_skeleton",
+   "canonical": "{\"deterministic_core\":{\"medium_unchanged\":true,\"medium_witness_after\":\"c82e10f3a7b94e5581d6c0fa2b3e97440d5a1c8e6f27b3049ac81de5b27fc9c6\",\"medium_witness_before\":\"c82e10f3a7b94e5581d6c0fa2b3e97440d5a1c8e6f27b3049ac81de5b27fc9c6\",\"method\":\"single-pass-random\",\"passed\":false,\"return_code_trusted\":false,\"run_id\":\"0f3a9c21-5d84-4b17-9a6e-2c8f77d10b43\",\"sectors_sampled\":256,\"target\":\"/tmp/copy.img\",\"verdicts\":[\"UNVERIFIED_TIMING\",\"NOT_A_SANITIZATION_CLAIM\"]},\"measurement_envelope\":{\"baseline_source\":\"observed_pass\",\"derived_floor_ns\":431059458,\"measured_rate\":{\"d\":7133,\"n\":4194304000000},\"observed_elapsed_ns\":1000,\"probe_bytes\":33554432,\"probe_elapsed_ns\":57064000,\"timing_ratio\":{\"d\":215529729,\"n\":500},\"work_bytes\":268435456},\"schema\":\"sentinelwipe.certificate/1\"}",
+   "sha256": "4a631a0f5b1794c8b3783f9a8502b266c7149d24a7de75f2c9809fb575538d28",
+   "bytes": 768,
+   "note": "the real shape. A conforming Rust implementation must produce these exact bytes."
+  }
+ ]
+}
