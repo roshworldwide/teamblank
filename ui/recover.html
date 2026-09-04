@@ -557,11 +557,20 @@ function loadVolumes(){
       note("No removable volume is mounted. Plug in a stick and press "+
            "<b>Start over</b>. Fixed disks are listed but this tool refuses to "+
            "image them.");
-    } else {
-      badge("ok","Ready", rem+" removable");
-      hero("—", true);
-      $("hero").textContent = "Choose a volume";
+      return;
     }
+    badge("ok","Ready", rem+" removable");
+    if(rem === 1){
+      /* One stick, one choice. Making the operator click it first is a step
+         that can only go wrong on stage, and picking it changes nothing:
+         everything before RECOVER is read-only. */
+      var only = null, all = document.querySelectorAll(".vol"), q;
+      for(q=0;q<all.length;q++) if(!all[q].disabled) only = all[q];
+      if(only) only.click();
+      return;
+    }
+    hero("—", true);
+    $("hero").textContent = "Choose a volume";
   })
   .catch(function(){
     badge("bad","No server","start ui/serve.py");
@@ -587,9 +596,10 @@ function pick(v, btn){
   PHASE="enrol"; step("enrol","now");
   $("mainBtn").disabled=false;
   $("mainLabel").textContent="Enrol the volume";
-  note("Hash every file on <b>"+esc(v.letter)+":</b> first. That is the ground "+
-       "truth the recovery is judged against, and it has to be taken "+
-       "<b>before</b> anything is deleted.");
+  note("<b>Step 1 of 3.</b> Press <b>Enrol the volume</b> to hash every file on "+
+       esc(v.letter)+": while they are still there. That is the ground truth the "+
+       "recovery is judged against, and it only means anything if it is taken "+
+       "<b>before</b> you delete.");
 }
 
 /* ---------- 1. enrol ---------------------------------------------------- */
