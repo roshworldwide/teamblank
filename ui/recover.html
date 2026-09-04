@@ -484,6 +484,7 @@ td.v{white-space:nowrap;font-weight:600}
     <button class="run" id="mainBtn" type="button" disabled>
       <span class="gl" aria-hidden="true">&#9654;</span><span id="mainLabel">Enrol the volume</span>
     </button>
+    <button class="ghost" id="putBackBtn" type="button" hidden>Put them back on the stick</button>
     <button class="ghost" id="resetBtn" type="button">Start over</button>
     <span class="barnote" id="barnote">Start <b>python ui/serve.py</b> and open
       127.0.0.1:8787/recover.html. This page needs the server: a page opened from
@@ -722,6 +723,8 @@ function doRecover(){
     step("recover","done");
     $("mainBtn").disabled=false;
     $("mainLabel").textContent="Run it again";
+    $("putBackBtn").hidden=false;
+    $("putBackBtn").disabled=false;
   });
   ES.addEventListener("failed", function(e){
     var m="the run failed";
@@ -800,11 +803,57 @@ $("mainBtn").addEventListener("click", function(){
   if(PHASE==="enrol") return doEnrol();
   if(PHASE==="delete" || PHASE==="done") return doRecover();
 });
+/* Put them back. The one write to the stick, and it happens only here --
+   after the image is taken, the carve is done, and every object is already on
+   local disk and hashed. Nothing is left to lose on the device by then, and the
+   copies are read BACK OFF it to prove they landed intact. */
+$("putBackBtn").addEventListener("click", function(){
+  if(!VOL) return;
+  $("putBackBtn").disabled=true;
+  badge("run","Restoring","writing to "+VOL.letter+":");
+  fetch("/api/usb/restore?letter="+encodeURIComponent(VOL.letter), {cache:"no-store"})
+  .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
+  .then(function(res){
+    if(!res.ok) throw new Error(res.j.error || "restore failed");
+    var d=res.j, i, rows=$("rows").querySelectorAll("tr"), byName={};
+    for(i=0;i<d.files.length;i++) byName[d.files[i].name]=d.files[i];
+    for(i=0;i<rows.length;i++){
+      if(!rows[i].getAttribute("data-sha")) continue;
+      var nm = rows[i].cells[0].textContent.trim().replace(/^\//,"");
+      var f = byName[nm];
+      if(f && f.matches_original){
+        rows[i].cells[4].className="v ok";
+        rows[i].cells[4].textContent="✓ back on "+d.volume+":";
+      }
+    }
+    badge("ok","Restored", d.verified+" of "+d.count+" on the volume");
+    hero(n(d.verified)+'<span class="of">of '+n(d.count)+
+         " written back to "+esc(d.volume)+": and re-read</span>");
+    $("saysub").innerHTML = "Copied to <b>"+esc(d.dir)+"</b>, then read back "+
+      "<b>off the stick</b> and hashed there. Copying is not the claim — the "+
+      "read-back is.";
+    $("outDir").hidden=false;
+    $("outDir").innerHTML = "<b>"+n(d.verified)+" of "+n(d.count)+
+      " verified on the volume itself</b><br>"+esc(d.dir)+"<br>"+
+      "<span class=\"q\">Safe now, and only now: the image is taken, the carve "+
+      "is done, and every object was already on local disk. The order is the "+
+      "safety property.</span>";
+    note("Open <b>"+esc(d.dir)+"</b> on the stick — the files are there, and "+
+         "their hashes still match what was enrolled before you deleted them.");
+  })
+  .catch(function(e){
+    badge("bad","Restore failed","");
+    note("<b>"+esc(e.message)+"</b>");
+    $("putBackBtn").disabled=false;
+  });
+});
+
 $("resetBtn").addEventListener("click", function(){
   if(ES){ ES.close(); ES=null; }
   VOL=null; ENROL=null; PHASE="pick";
   step("enrol",null); step("delete",null); step("recover",null);
   $("bars").hidden=true; $("scopeNote").hidden=true; $("outDir").hidden=true;
+  $("putBackBtn").hidden=true;
   $("rows").innerHTML='<tr><td colspan="5" style="color:var(--content-quaternary);'+
     'padding-top:var(--space-5)">No volume enrolled yet.</td></tr>';
   $("mainBtn").disabled=true; $("mainLabel").textContent="Enrol the volume";

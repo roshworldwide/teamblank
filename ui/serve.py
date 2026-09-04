@@ -321,6 +321,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._usb_enrol()
         if self.path.startswith("/api/usb/recover"):
             return self._sse_recover()
+        if self.path.startswith("/api/usb/restore"):
+            return self._usb_restore()
         return super().do_GET()
 
     # ---- removable media --------------------------------------------------
@@ -349,6 +351,25 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # the file list goes back so the page can name what will and will
             # not come back BEFORE anything is deleted
             return self._json(e)
+        except (ValueError, PermissionError, FileNotFoundError) as exc:
+            return self._json({"error": str(exc)}, 400)
+        except Exception as exc:
+            return self._json({"error": str(exc)}, 500)
+
+    def _usb_restore(self):
+        """Put the recovered files back on the stick. The one write path.
+
+        Safe because of the ORDER: this runs only after the volume has been
+        imaged, the image carved, and every object extracted and verified on
+        local disk. usb.restore() refuses if that extraction is not there.
+        """
+        letter = self._letter()
+        try:
+            import usb
+            enr = usb.WORK / "enrolment.json"
+            enrolment = json.loads(enr.read_bytes()) if enr.exists() else None
+            r = usb.restore(letter, usb.WORK / "recovered", enrolment)
+            return self._json(r)
         except (ValueError, PermissionError, FileNotFoundError) as exc:
             return self._json({"error": str(exc)}, 400)
         except Exception as exc:
