@@ -338,9 +338,10 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
   letter-spacing:.2em;text-transform:uppercase;color:var(--content-quaternary)}
 .track{flex:1 1 auto;height:6px;border-radius:3px;background:var(--fill-quiet);
   overflow:hidden;min-width:0}
-.track i{display:block;height:100%;width:0;background:var(--sig-caution);
+.track i{display:block;height:100%;width:0;background:var(--content-tertiary);
   transform-origin:left center}
-.bar-v{flex:0 0 auto;font-family:var(--font-mono);font-size:var(--size-overline);
+.bar-v{flex:0 0 40ch;text-align:right;
+  font-family:var(--font-mono);font-size:var(--size-overline);
   font-variant-numeric:tabular-nums lining-nums;color:var(--content-tertiary);
   white-space:nowrap}
 
@@ -348,7 +349,13 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
 .tw{flex:1 1 auto;min-height:0;overflow:auto;border-top:1px solid var(--stroke-hairline)}
 table{width:100%;border-collapse:collapse;font-family:var(--font-mono);
   font-size:var(--size-footnote);font-variant-numeric:tabular-nums lining-nums}
-thead th{position:sticky;top:0;background:#0B0B0B;text-align:left;
+/* z-index is load-bearing, not defensive. The returning rows carry a transform
+   animation, which promotes them into their own stacking context and lifts
+   them over an un-indexed sticky header -- so at a short viewport the evidence
+   scrolled straight THROUGH the column names. A positioned element with an
+   explicit index wins over a transformed one without. */
+thead th{position:sticky;top:0;z-index:2;background:var(--surface-canvas);
+  text-align:left;
   padding:var(--space-3) var(--space-4) var(--space-2) 0;
   font:600 var(--size-overline)/1 var(--font-text);letter-spacing:.2em;
   text-transform:uppercase;color:var(--content-quaternary);
@@ -454,6 +461,19 @@ td.v{white-space:nowrap;font-weight:600}
   text-shadow:0 0 42px rgba(227,192,137,.28);   /* --glow-accent, dark only */
 }
 
+/* THE CARVE HAS NO PROGRESS, SO THIS REPORTS NONE.
+   carve_image is one blocking call and the carver emits nothing until it is
+   finished, so there is no percentage to draw and none is drawn. A shuttling
+   segment is permitted exactly here -- no count exists -- and it is shaped so
+   it can never be misread as a position: it never rests, and the readout
+   beside it says in words why there is no number. Transform only. */
+.track[data-indet="1"] i{ width:26%; background:var(--content-quaternary);
+  animation:shuttle 1400ms var(--ease-standard) infinite; }
+@keyframes shuttle{
+  0%  { transform:translate3d(-100%,0,0); }
+  100%{ transform:translate3d(385%,0,0); }
+}
+
 /* Rows return in a cascade at the token stagger, transform+opacity only. */
 tr[data-back="1"]{ animation:back var(--dur-medium) var(--ease-enter) both; }
 @keyframes back{
@@ -468,6 +488,7 @@ td.h .pair b{ color:var(--sig-nominal); font-weight:400; }
 @media (prefers-reduced-motion:reduce){
   .hero.peak{ animation:none; }
   tr[data-back="1"]{ animation:none; }
+  .track[data-indet="1"] i{ animation:none; width:100%; opacity:.26; }
   #stage[data-peak="1"] .hero{ text-shadow:none; }
 }
 </style>
@@ -756,6 +777,7 @@ function doRecover(){
   PHASE="running";
   $("mainBtn").disabled=true;
   $("bars").hidden=false;
+  $("barCarve").parentNode.removeAttribute("data-indet");
   $("barImage").style.width="0%"; $("barCarve").style.width="0%";
   $("valImage").textContent="—"; $("valCarve").textContent="—";
   step("delete","done"); step("recover","now");
@@ -783,6 +805,9 @@ function doRecover(){
     MAP.imaged();
     badge("run","Carving","the image, not the device");
     $("hero").textContent="Carving";
+    $("barCarve").style.width="";
+    $("barCarve").parentNode.setAttribute("data-indet","1");
+    $("valCarve").textContent="scanning · no progress is reported";
     if(!d.whole_volume){
       $("scopeNote").hidden=false;
       $("scopeNote").textContent = "▲ " + d.scope;
@@ -792,6 +817,7 @@ function doRecover(){
   });
   ES.addEventListener("carve", function(e){
     var d=JSON.parse(e.data);
+    $("barCarve").parentNode.removeAttribute("data-indet");
     $("barCarve").style.width="100%";
     $("valCarve").textContent = n(d.counts.records)+" candidates · "+
       n(d.counts.admitted)+" admitted · "+n(d.elapsed_s)+" s";
@@ -873,6 +899,27 @@ function paintResult(d){
     "name, not by size. A recovered object is correct only if its bytes hash to "+
     "what was there before the deletion.";
 
+  /* The tail, composed now and shown at the peak. A summary printed while
+     the cascade is still running answers the question before the evidence
+     for it has arrived, and the answer is the last thing a judge should get,
+     not the first. */
+  var lines = [], over = 0;
+  for(i=0;i<d.hits.length;i++) if(d.hits[i].mode === "over-run") over++;
+  lines.push("<b>"+n(d.byte_exact_and_admitted)+"</b> of the "+
+             n(d.byte_exact_matches)+" also cleared the confidence gate.");
+  if(over) lines.push("<b>"+n(over)+"</b> was recovered intact but the carver "+
+                      "ended the candidate late — the bytes are right, the "+
+                      "boundary was not.");
+  var nosig = 0, other = 0;
+  for(i=0;i<d.not_recovered.length;i++){
+    if(d.not_recovered[i].carvable) other++; else nosig++;
+  }
+  if(nosig) lines.push("<b>"+n(nosig)+"</b> had no signature to scan for — "+
+                       "predicted before the run, not explained after it.");
+  if(other) lines.push("<b>"+n(other)+"</b> carvable and not matched.");
+
+  note("Joining "+n(d.hits.length)+" carved objects to the enrolment by hash.");
+
   /* THE JOIN. One file at a time: the map lights where the bytes actually sat
      on the stick, and the row it belongs to comes back with it. Peak-end --
      the count lands LAST, after the cascade, and it is the only gold on the
@@ -900,34 +947,26 @@ function paintResult(d){
       '<span class="pair"><b>recovered '+esc(h.sha256.slice(0,16))+'… ✓</b></span>';
     follow(row);
   }, function(){
-    /* Settle on the tail, not the head. The rows a judge must leave with are
-       the over-run and the two we did not recover: the claim is only worth
-       what the admitted failures cost it. */
-    var tw=document.querySelector(".tw");
-    if(tw) tw.scrollTo({top:tw.scrollHeight, behavior:REDUCED?"auto":"smooth"});
     badge(d.byte_exact_matches ? "ok" : "bad", "Recovered",
           d.byte_exact_matches+" of "+d.enrolled+" byte-exact");
     hero(n(d.byte_exact_matches)+'<span class="of">of '+n(d.enrolled)+
          " enrolled files, byte-exact</span>");
     $("hero").className="hero peak";
     $("stage").setAttribute("data-peak","1");
+    note(lines.join(" "));
+    /* Settle on the tail, not the head: the rows a judge must leave with are
+       the over-run and the two we did not recover, because the claim is only
+       worth what the admitted failures cost it.
+       After the note, and a frame later. The ledger above is several lines on
+       a short screen, which makes the control bar taller and the table
+       shorter -- a scroll computed against the layout that existed before it
+       was written lands past the bottom and hides the very rows it was
+       aiming at. */
+    requestAnimationFrame(function(){
+      var tw=document.querySelector(".tw");
+      if(tw) tw.scrollTo({top:tw.scrollHeight, behavior:REDUCED?"auto":"smooth"});
+    });
   });
-
-  var lines = [], over = 0;
-  for(i=0;i<d.hits.length;i++) if(d.hits[i].mode === "over-run") over++;
-  lines.push("<b>"+n(d.byte_exact_and_admitted)+"</b> of the "+
-             n(d.byte_exact_matches)+" also cleared the confidence gate.");
-  if(over) lines.push("<b>"+n(over)+"</b> was recovered intact but the carver "+
-                      "ended the candidate late — the bytes are right, the "+
-                      "boundary was not.");
-  var nosig = 0, other = 0;
-  for(i=0;i<d.not_recovered.length;i++){
-    if(d.not_recovered[i].carvable) other++; else nosig++;
-  }
-  if(nosig) lines.push("<b>"+n(nosig)+"</b> had no signature to scan for — "+
-                       "predicted before the run, not explained after it.");
-  if(other) lines.push("<b>"+n(other)+"</b> carvable and not matched.");
-  note(lines.join(" "));
 }
 
 

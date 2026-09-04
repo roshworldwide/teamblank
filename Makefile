@@ -3,7 +3,7 @@
 # reports success for work that has not been done.
 
 .DEFAULT_GOAL := help
-.PHONY: help fixtures clean-fixtures build test ui ui-serve ui-check app demo verify
+.PHONY: help fixtures clean-fixtures build test ui ui-serve ui-check ui-render app demo verify
 
 # The fixture is generated from a seed and never committed. OUT is gitignored
 # and is the ONLY path the Phase-0 write guard allows the builder to write to.
@@ -28,6 +28,7 @@ help:
 	@echo "ui              run the engine, rebuild the pages from THAT run, open them"
 	@echo "ui-serve        serve ui/ on http://localhost:8787 (no build step, no network)"
 	@echo "ui-check        token-drift check + payload freshness, no engine run"
+	@echo "ui-render       render ui/recover.html in a browser and measure it"
 	@echo "demo            the adversarial loop end to end, then open the instrument"
 	@echo "verify          the loop + signature + chain, clean passes and forged fails"
 	@echo ""
@@ -62,6 +63,21 @@ test:
 # detector: a page whose gold is one digit off from ui/tokens.css exits 4.
 ui-check:
 	uv run python ui/inline.py
+
+# Renders ui/recover.html in a real browser and measures it: the hero caption
+# is not truncated, the evidence panel does not paint over the control bar, the
+# cascade settles on the files we did NOT recover, and the map is painted in
+# ui/tokens.css's own values rather than forked literals.
+#
+# playwright is a browser and is deliberately NOT a project dependency, so this
+# is its own target and `make test` skips these. --no-project is required:
+# `uv run --with playwright pytest` resolves the console script inside the
+# project venv, which the overlay never reaches, so every test would skip and
+# pytest would still exit 0 -- a green run that checked nothing.
+ui-render:
+	uv run --no-project --with playwright python -m playwright install chromium
+	uv run --no-project --with playwright --with pytest python -m pytest \
+	    tests/test_recover_render.py -q
 
 # Runs the engine and rebuilds the pages from what it produced. The wipe targets
 # a COPY under $(OUT)/ui-run; out/fixture.img is never a target and its sha256 is
