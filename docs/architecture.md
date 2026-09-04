@@ -608,3 +608,103 @@ published and unreachable there, so a hard link from outside an allowlisted root
 **not** detected on Windows. Coverage is `tests/test_guard_windows.py` and the unit tests in
 `core/device/src/guard/windows.rs`; the POSIX suites skip on Windows and say what they are
 not covering rather than reporting green.
+
+---
+
+## D8 · What gets signed, what reproduces, and why no float ever enters either
+
+A signature over JSON proves nothing unless the bytes underneath it are reproducible. Two
+serialisers that disagree about key order, whitespace, or number formatting produce two
+different signatures over the same logical certificate — and the verifier then fails on a
+document that nobody tampered with. That failure is worse than no signature at all, because
+it teaches an operator that failed verification is normal.
+
+Canonicalisation is therefore a prerequisite for Phase 4, not a detail inside it.
+
+### The standard, and the one restriction taken against it
+
+**RFC 8785, JSON Canonicalization Scheme**, IETF, June 2020. It settles property order,
+whitespace and string escaping. It does not make numbers safe: §3.2.2.3 defers to
+ECMAScript `Number::toString`, whose shortest-round-trip double formatting is the usual
+place two independent implementations drift, because Rust and Python reach it by different
+routes and neither is obviously wrong.
+
+So the profile refuses floats rather than formatting them. `core/ledger/src/jcs.rs` has no
+float variant on its `Value` enum, which makes the restriction a compile error rather than a
+convention, and the difficult half of RFC 8785 becomes unreachable rather than merely
+unused.
+
+### Every float in the reports was already an integer pair
+
+This was the finding that made the restriction cheap. An inventory of `ui/payload.json` and
+`fixtures/sample_output.json` found **113 floating-point paths**, and almost none of them
+were measurements. They were *renderings* of measurements the engine already held as
+integers:
+
+| was carried as | is actually | carried now |
+|---|---|---|
+| `rate_bps` 622734175.107695 | bytes ÷ nanoseconds, both `u64` | `Ratio{n,d}` |
+| `ratio` 2e-06 | observed_ns ÷ floor_ns | `Ratio{n,d}` — exactly 500/215529729 |
+| `coverage_fraction` 0.001953 | 1,024 ÷ 524,288 sectors | `Ratio{n,d}` — exactly 1/512 |
+| `structural_headroom` 0.035714 | (0.75 − 0.65) ÷ 0.35 | `Ratio{n,d}` — exactly **1/28** |
+| `structural_breach_point` 0.285714 | as above | `Ratio{n,d}` — exactly **2/7** |
+| `duration_s` 0.433561 | elapsed nanoseconds | integer ns |
+| `entropy` 7.061690 | a log computation, genuinely irrational | six-decimal **string**, verbatim |
+
+The decimal rendering was a lossy display step that had no business happening before
+signing. `0.285714` is exactly two sevenths; printing it to six places threw that away and
+invited a rounding argument in front of a jury. It is now carried as `{"n":2,"d":7}` and
+anyone can check it.
+
+### Entropy is a string, and the reason is a hazard rather than a preference
+
+Entropy has no exact rational behind it, so it needs a fixed representation. The obvious
+choice — an integer scaled by 10⁶ — requires a rounding step at the boundary, and
+**Python's `round()` is half-even while Rust's `f64::round()` is half-away-from-zero.** The
+two agree on every value except an exact `.5` at the sixth decimal, where they would emit
+different bytes, different signatures, and a verification failure on a document nobody
+touched. Rare, non-reproducible, and first observed on somebody else's laptop.
+
+A six-decimal string copied verbatim from the engine's own report has no rounding step to
+disagree about. The engine decided the precision; nothing downstream re-decides it.
+
+### The two regions
+
+The certificate is split, and both halves are inside the signature:
+
+- **`deterministic_core`** — run id, target, method, both medium witnesses,
+  `medium_unchanged`, verdicts, pass/fail. Reproduces byte-identically from a fresh clone.
+- **`measurement_envelope`** — measured rate, derived floor, observed elapsed,
+  `baseline.source`, `probe_bytes`, `probe_elapsed_ns`. Physical observations of real
+  hardware. These cannot repeat exactly, and the certificate says so in one line rather
+  than apologising for it.
+
+Timing is **not** excluded from the hash to make reproducibility tidy. It is the field most
+worth forging, because it is the evidence that the drive lied, and an unsigned field is a
+tamperable one. What is scoped is the *reproducibility* claim, not the *integrity* claim,
+and the certificate names on its own face which fields carry which.
+
+This resolves the conflict logged as open in D5: **rule 6 now reads** — byte-identical
+`deterministic_core` from a fresh clone; signature validity over the whole certificate.
+
+### How the two implementations are held together
+
+`fixtures/canon_vectors.json` carries 23 cases with their canonical bytes and SHA-256, and
+both languages assert against the same file — the pattern already used for the write guard,
+for the same reason. Divergence is caught at build time rather than by a verifier.
+
+One vector exists solely to catch a plausible mistake: RFC 8785 §3.2.3 orders keys by
+UTF-16 **code unit**, not code point. `U+1F600` is the surrogate pair `D83D DE00` and must
+sort *before* `U+FFFD`; code-point ordering puts it after. An implementation that sorts by
+code point passes every other test.
+
+### Known limits of this measurement
+
+- A lone surrogate in a key is **not exercised**. Python cannot hold one in a `str` without
+  `surrogatepass`, and no SentinelWipe key contains one. Unverified in both implementations;
+  if a key ever arrives from an external source, this becomes reachable and must be tested
+  before it is trusted.
+- The 2⁵³−1 ceiling binds before `i64` does, and is the limit tested. No field in this
+  project approaches either.
+- The Python round-trip property is exercised over 10,000 generated payloads, which is
+  evidence, not proof.

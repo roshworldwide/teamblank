@@ -50,6 +50,44 @@ and the behavioural audit refuses the claim outright.
 
 ---
 
+## What a signature proves, and what it does not
+
+Phase 4 signs the certificate with Ed25519 over its RFC 8785 canonical bytes. Two claims
+get made about that signature and they are not the same claim, so the certificate carries
+both, separately:
+
+| property | status | what it means |
+|---|---|---|
+| **Integrity** | provided | The certificate has not been altered since it was signed. Any single flipped byte fails verification and the offending field is named. |
+| **Authority** | **not provided in this build** | Nothing here establishes *who* signed it. The key is generated locally on the operator's machine and attested by nobody. |
+
+The certificate prints this on its own face rather than in a footnote:
+
+```
+key custody          none - generated locally, unattested
+signature proves     integrity since signing, not authority of the signer
+production path      operator key enrolled against an organisational CA or an HSM,
+                     with the public half published through a channel the verifier
+                     already trusts
+```
+
+The distinction matters because it is the one an evaluator will probe. A locally generated
+key makes the document tamper-evident, which is a real and useful property: a forged
+certificate is detectable by anyone holding the public half. It does not make the document
+*attributable*, and a tool that quietly conflates the two is claiming a chain of custody it
+has not built.
+
+Anchoring in the Merkle chain adds a third, narrower property — **ordering**: a certificate
+included in the chain cannot later be back-dated or removed without changing the published
+head. That is also not authority.
+
+| our operation | standard | category | what we verified | what we could NOT verify |
+|---|---|---|---|---|
+| Ed25519 signature over the RFC 8785 canonical certificate | RFC 8032 (Ed25519) · RFC 8785 (JCS) | supports **documentation guidance** | Canonicalisation is fixed by a 23-case vector file asserted by both the Rust and Python implementations, so the bytes under the signature are reproducible across languages. | Whether the signing key belongs to the organisation named on the certificate. No CA, no HSM, no enrolment. The key is generated locally and the certificate says so. |
+| Append-only Merkle chain over evidence bundles | — (a signed hash chain, not a distributed ledger) | supports **documentation guidance** | A flipped byte in any stored bundle changes the head and fails the inclusion proof; the clean case still passes, so a verifier that rejects everything cannot pass the test. | That the published head reached any party outside this machine. Nothing is broadcast, timestamped by a third party, or notarised. It is tamper-evident locally and nowhere else. |
+
+---
+
 ## The rule this table exists to enforce
 
 CLAUDE.md rule 1: **the tool never claims more than it verified.** Where a category is
