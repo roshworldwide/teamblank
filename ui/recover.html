@@ -269,13 +269,17 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
 .src[data-mode="bad"]{color:var(--sig-abort);border-color:var(--sig-abort)}
 
 /* ---- STAGE ------------------------------------------------------------- */
-#stage{position:relative;z-index:2;flex:1 1 auto;min-height:0;
+/* The row is capped at the stage, never at its own content: the evidence
+   table grows by a row per enrolled file, and an uncapped row would push the
+   control bar off the bottom of the viewport mid-demo. */
+#stage{position:relative;z-index:2;flex:1 1 auto;min-height:0;overflow:hidden;
   padding:var(--space-3) var(--space-8) 0;
   display:grid;grid-template-columns:minmax(320px,.62fr) minmax(0,1.38fr);
+  grid-template-rows:minmax(0,1fr);
   gap:var(--space-8);align-items:start}
 @media (max-width:1100px){#stage{grid-template-columns:minmax(0,1fr)}}
 
-.col{display:flex;flex-direction:column;min-width:0}
+.col{display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto}
 .kicker{font:600 var(--size-overline)/var(--lh-overline) var(--font-text);
   letter-spacing:.42em;text-transform:uppercase;color:var(--content-tertiary);
   margin:0 0 var(--space-3)}
@@ -284,9 +288,11 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
   font-size:clamp(52px,7vw,104px);line-height:.92;letter-spacing:-.045em;
   color:var(--content-primary);white-space:nowrap;
   text-shadow:0 0 80px rgba(227,192,137,.14)}
+/* The caption wraps rather than truncates: "byte-exact" is the claim, and an
+   ellipsis would eat exactly the word the whole demo exists to say. */
 .hero .of{display:block;font-size:.22em;letter-spacing:.02em;font-weight:400;
-  color:var(--content-quaternary);margin:8px 0 0;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis}
+  color:var(--content-quaternary);margin:10px 0 0;
+  white-space:normal;line-height:1.3;text-wrap:balance;max-width:21ch}
 .hero.small{font-size:clamp(26px,3vw,40px);letter-spacing:-.02em;
   white-space:normal;line-height:1.15}
 .saysub{margin:var(--space-4) 0 0;max-width:38ch;
@@ -313,8 +319,9 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
   letter-spacing:.02em;color:var(--content-quaternary)}
 
 /* ---- RIGHT: the volume, then the evidence ------------------------------ */
-.panel{min-width:0;display:flex;flex-direction:column;gap:var(--space-4)}
-.vols{display:flex;gap:var(--space-3);flex-wrap:wrap}
+.panel{min-width:0;min-height:0;align-self:stretch;
+  display:flex;flex-direction:column;gap:var(--space-4)}
+.vols{flex:0 0 auto;display:flex;gap:var(--space-3);flex-wrap:wrap}
 .vol{display:flex;flex-direction:column;gap:3px;text-align:left;
   padding:var(--space-3) var(--space-5);border-radius:var(--radius-md);
   border:1px solid var(--stroke-rim);background:var(--fill-quiet);cursor:pointer;
@@ -325,7 +332,7 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
 .vol .m{font:400 var(--size-overline)/1.5 var(--font-mono);letter-spacing:.04em;
   color:var(--content-quaternary)}
 
-.bars{display:flex;flex-direction:column;gap:var(--space-2)}
+.bars{flex:0 0 auto;display:flex;flex-direction:column;gap:var(--space-2)}
 .bar-row{display:flex;align-items:center;gap:var(--space-4)}
 .bar-k{flex:0 0 96px;font:600 var(--size-overline)/1 var(--font-text);
   letter-spacing:.2em;text-transform:uppercase;color:var(--content-quaternary)}
@@ -395,6 +402,74 @@ td.v{white-space:nowrap;font-weight:600}
   .bar{padding:var(--space-2) var(--space-6) var(--space-3)}
   .hero{font-size:clamp(46px,5.6vw,80px)}
 }
+
+/* ==========================================================================
+   THE MEDIUM — the cinematic centre of the recovery demo.
+   A map of the stick's byte space. During imaging it fills at the REAL rate
+   the stream reports; at the join, every byte-exact recovery lights at its
+   TRUE offset. Nothing here is decorative and nothing is simulated: the fill
+   is `done/total` off the wire, the lights are `hits[].offset`.
+   Canvas, not DOM -- 16,384 cells could never be nodes inside 8.33 ms.
+   ========================================================================== */
+.medium{
+  flex:0 0 auto;                             /* the panel's gap does the spacing */
+  border:1px solid var(--stroke-hairline);
+  border-radius:var(--radius-md);
+  background:var(--surface-canvas);
+  padding:var(--space-3);
+  opacity:0; transform:translate3d(0,6px,0);
+  transition:opacity var(--dur-medium) var(--ease-enter),
+             transform var(--dur-medium) var(--ease-enter);
+}
+.medium[data-live="1"]{ opacity:1; transform:none; }
+.medium canvas{
+  display:block; width:100%; height:auto;
+  max-height:22vh;                           /* the evidence keeps the rest */
+  object-fit:contain;
+  image-rendering:pixelated;                 /* one cell = one block, exactly */
+  border-radius:var(--radius-sm);
+}
+.medium .mhead{
+  display:flex; justify-content:space-between; align-items:baseline;
+  gap:var(--space-4); margin-bottom:var(--space-3);
+}
+.medium .mfoot{
+  display:flex; justify-content:space-between; align-items:baseline;
+  gap:var(--space-4); margin-top:var(--space-3);
+  color:var(--content-quaternary);
+}
+.mkey{ display:flex; gap:var(--space-4); align-items:center; flex-wrap:wrap; }
+.mkey span{ display:inline-flex; align-items:center; gap:var(--space-2); }
+.mkey i{ width:9px; height:9px; border-radius:2px; display:inline-block; }
+
+/* The peak. AURUM: one ceremony per flow, and this is it -- the moment a file
+   a judge deleted comes back and its hash still matches. E5, once, 620 ms. */
+.hero.peak{ animation:peak var(--dur-morph) var(--ease-snap) 1; }
+@keyframes peak{
+  0%  { transform:scale(0.985); opacity:.72; }
+  100%{ transform:none;         opacity:1; }
+}
+.hero.peak .of{ color:var(--content-tertiary); }
+#stage[data-peak="1"] .hero{
+  text-shadow:0 0 42px rgba(227,192,137,.28);   /* --glow-accent, dark only */
+}
+
+/* Rows return in a cascade at the token stagger, transform+opacity only. */
+tr[data-back="1"]{ animation:back var(--dur-medium) var(--ease-enter) both; }
+@keyframes back{
+  0%  { opacity:.28; transform:translate3d(-4px,0,0); }
+  100%{ opacity:1;   transform:none; }
+}
+/* The hash pair: enrolled before deletion, recovered after. Same value is the
+   whole argument, so they are shown together rather than one replacing one. */
+td.h .pair{ display:block; color:var(--content-quaternary); }
+td.h .pair b{ color:var(--sig-nominal); font-weight:400; }
+
+@media (prefers-reduced-motion:reduce){
+  .hero.peak{ animation:none; }
+  tr[data-back="1"]{ animation:none; }
+  #stage[data-peak="1"] .hero{ text-shadow:none; }
+}
 </style>
 </head>
 <body>
@@ -448,6 +523,21 @@ td.v{white-space:nowrap;font-weight:600}
     <div class="panel">
       <div class="vols" id="vols"></div>
 
+      <div class="medium" id="medium">
+        <div class="mhead">
+          <span class="t-overline">The medium</span>
+          <span class="mono" id="mScale" style="color:var(--content-quaternary);font-size:var(--size-micro)">&#8212;</span>
+        </div>
+        <canvas id="mediumCv" aria-label="Byte-space map of the volume: read progress, and where each recovered file actually sat"></canvas>
+        <div class="mfoot">
+          <span class="mkey" style="font-size:var(--size-micro)">
+            <span><i style="background:var(--ti-80)"></i>read into the image</span>
+            <span><i style="background:var(--sig-nominal)"></i>&#10003; byte-exact recovery</span>
+            <span><i style="background:var(--sig-caution)"></i>&#9650; end over-run</span>
+          </span>
+          <span class="mono" style="font-size:var(--size-micro)">offsets are the carver&#39;s own</span>
+        </div>
+      </div>
       <div class="bars" id="bars" hidden>
         <div class="bar-row">
           <span class="bar-k">Imaging</span>
@@ -675,6 +765,8 @@ function doRecover(){
        "touches the device: it reads the copy, which is the order a forensic "+
        "examiner works in.");
 
+  MAP.init(VOL.capacity_bytes || 0);
+
   ES = new EventSource("/api/usb/recover?letter="+encodeURIComponent(VOL.letter));
 
   ES.addEventListener("imaging", function(e){
@@ -682,11 +774,13 @@ function doRecover(){
     $("barImage").style.width = pct.toFixed(2)+"%";
     $("valImage").textContent = n(d.done)+" B  ·  "+
       n(Math.round(d.bps||0))+" B/s";
+    MAP.progress(d.done, d.total);
   });
   ES.addEventListener("image", function(e){
     var d=JSON.parse(e.data);
     $("barImage").style.width="100%";
     $("valImage").textContent = n(d.bytes)+" B in "+n(d.elapsed_s)+" s";
+    MAP.imaged();
     badge("run","Carving","the image, not the device");
     $("hero").textContent="Carving";
     if(!d.whole_volume){
@@ -738,6 +832,23 @@ function doRecover(){
   });
 }
 
+var REDUCED = !!(window.matchMedia &&
+                 matchMedia("(prefers-reduced-motion: reduce)").matches);
+
+/* Keep the row that just came back inside the frame. The evidence list is
+   taller than the panel by design -- twelve files do not fit and should not be
+   made to -- so the list follows the cascade instead of the judge hunting for
+   it. Scrolls the container only; the page itself never moves. */
+function follow(row){
+  var tw=document.querySelector(".tw");
+  if(!tw) return;
+  var t=row.offsetTop, b=t+row.offsetHeight, head=38;
+  if(b > tw.scrollTop + tw.clientHeight)
+    tw.scrollTo({top:b - tw.clientHeight + 8, behavior:REDUCED?"auto":"smooth"});
+  else if(t < tw.scrollTop + head)
+    tw.scrollTo({top:Math.max(0,t-head), behavior:REDUCED?"auto":"smooth"});
+}
+
 function paintResult(d){
   var hits={}, i, h;
   for(i=0;i<d.hits.length;i++){ hits[d.hits[i].sha256]=d.hits[i]; }
@@ -746,40 +857,61 @@ function paintResult(d){
     misses[d.not_recovered[i].path]=d.not_recovered[i];
   }
 
-  var rows=$("rows").querySelectorAll("tr"), tr, sha, cell;
+  var rows=$("rows").querySelectorAll("tr"), tr, sha, byShaRow={};
   for(i=0;i<rows.length;i++){
     tr=rows[i]; sha=tr.getAttribute("data-sha");
     if(!sha) continue;
-    cell=tr.cells[4];
-    h=hits[sha];
-    if(h){
-      tr.setAttribute("data-hit","1");
-      if(h.mode === "over-run"){
-        /* The object is intact and starts where the carver said; the END
-           boundary ran past it. Recovered, and the imprecision is named
-           rather than folded into the clean figure. */
-        cell.className="v warn";
-        cell.textContent="✓ recovered · end over-run";
-        cell.title="the carver ended this candidate "+h.overrun_bytes+
-                   " bytes late; the file itself is byte-exact";
-      } else {
-        cell.className="v ok";
-        cell.textContent="✓ byte-exact"+(h.admitted?"":" (below gate)");
-      }
-    } else {
+    byShaRow[sha]=tr;
+    if(!hits[sha]){            /* the quiet truth, stated at once, never staged */
       tr.removeAttribute("data-hit");
-      cell.className="v no";
-      cell.textContent="∅ not recovered";
+      tr.cells[4].className="v no";
+      tr.cells[4].textContent="∅ not recovered";
     }
   }
 
-  badge(d.byte_exact_matches ? "ok" : "bad", "Recovered",
-        d.byte_exact_matches+" of "+d.enrolled+" byte-exact");
-  hero(n(d.byte_exact_matches)+'<span class="of">of '+n(d.enrolled)+
-       " enrolled files, byte-exact</span>");
   $("saysub").innerHTML = "Joined to the enrolment by <b>SHA-256</b> — not by "+
     "name, not by size. A recovered object is correct only if its bytes hash to "+
     "what was there before the deletion.";
+
+  /* THE JOIN. One file at a time: the map lights where the bytes actually sat
+     on the stick, and the row it belongs to comes back with it. Peak-end --
+     the count lands LAST, after the cascade, and it is the only gold on the
+     screen. Nothing is animated that is not a measurement arriving. */
+  MAP.reveal(d.hits, function(h){
+    var row=byShaRow[h.sha256];
+    if(!row) return;
+    row.setAttribute("data-hit","1");
+    row.setAttribute("data-back","1");
+    var c=row.cells[4];
+    if(h.mode === "over-run"){
+      c.className="v warn";
+      c.textContent="✓ recovered · end over-run";
+      c.title="the carver ended this candidate "+n(h.overrun_bytes)+
+              " bytes late; the file itself is byte-exact";
+    } else {
+      c.className="v ok";
+      c.textContent="✓ byte-exact"+(h.admitted?"":" (below gate)");
+    }
+    /* Both hashes together: the one enrolled BEFORE the deletion and the one
+       computed from the bytes just carved back out of free space. That they
+       are the same string is the entire argument, so both are shown. */
+    row.cells[3].innerHTML =
+      '<span class="pair">enrolled  '+esc(h.sha256.slice(0,16))+'…</span>'+
+      '<span class="pair"><b>recovered '+esc(h.sha256.slice(0,16))+'… ✓</b></span>';
+    follow(row);
+  }, function(){
+    /* Settle on the tail, not the head. The rows a judge must leave with are
+       the over-run and the two we did not recover: the claim is only worth
+       what the admitted failures cost it. */
+    var tw=document.querySelector(".tw");
+    if(tw) tw.scrollTo({top:tw.scrollHeight, behavior:REDUCED?"auto":"smooth"});
+    badge(d.byte_exact_matches ? "ok" : "bad", "Recovered",
+          d.byte_exact_matches+" of "+d.enrolled+" byte-exact");
+    hero(n(d.byte_exact_matches)+'<span class="of">of '+n(d.enrolled)+
+         " enrolled files, byte-exact</span>");
+    $("hero").className="hero peak";
+    $("stage").setAttribute("data-peak","1");
+  });
 
   var lines = [], over = 0;
   for(i=0;i<d.hits.length;i++) if(d.hits[i].mode === "over-run") over++;
@@ -797,6 +929,195 @@ function paintResult(d){
   if(other) lines.push("<b>"+n(other)+"</b> carvable and not matched.");
   note(lines.join(" "));
 }
+
+
+/* ---------- THE MEDIUM MAP ------------------------------------------------
+   A byte-space map of the volume. Every pixel of state on it comes off the
+   wire: the fill is the imaging stream's own done/total, the lights are the
+   true offsets the carver reported. There is no animation here that is not a
+   measurement arriving.
+
+   Cells are drawn through ImageData and scaled with image-rendering:pixelated
+   -- the same technique the instrument's sector map uses -- because 16,384
+   DOM nodes cannot be touched inside an 8.33 ms frame and a map that stutters
+   is worse than no map.                                                     */
+var MAP = (function(){
+  var COLS=256, ROWS=64, N=COLS*ROWS, SCALE=4, DPR=1;
+  var cv=null, ctx=null, off=null, octx=null, img=null;
+  var state=null, total=0, readCells=0, marks=[], pulses=[], raf=0, head=-1;
+  var RM = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* THE MAP'S FIVE COLOURS, READ FROM THE TOKENS AT RUN TIME.
+     A canvas paints pixels, not styled elements, so it cannot inherit; but it
+     must not fork either. These are looked up from :root by name, which means
+     ui/inline.py's drift detector still governs them -- change a ramp value in
+     ui/tokens.css and the map follows, or the check fails. Hardcoded triples
+     here would be a second source of truth that nothing audits. */
+  var C = {};
+  var TOKENS = {
+    unread : "--ti-100",       /* the medium not yet read: the canvas itself */
+    read   : "--ti-80",        /* read into the image                        */
+    head   : "--au-30",        /* the read head, while imaging               */
+    exact  : "--sig-nominal",  /* byte-exact recovery                        */
+    over   : "--sig-caution"   /* recovered, end over-run                    */
+  };
+  function hex2rgb(v){
+    v=(v||"").trim().replace("#","");
+    if(v.length===3) v=v[0]+v[0]+v[1]+v[1]+v[2]+v[2];
+    if(!/^[0-9a-fA-F]{6}$/.test(v)) return null;
+    return [parseInt(v.slice(0,2),16),parseInt(v.slice(2,4),16),parseInt(v.slice(4,6),16)];
+  }
+  function loadTokens(){
+    var cs=getComputedStyle(document.documentElement), miss=[];
+    for(var k in TOKENS){
+      var rgb=hex2rgb(cs.getPropertyValue(TOKENS[k]));
+      if(!rgb) miss.push(TOKENS[k]); else C[k]=rgb;
+    }
+    /* Loud, not silent: a map drawn in fallback colours would still look
+       plausible, and a plausible wrong picture is the failure mode this whole
+       project exists to refuse. */
+    if(miss.length) throw new Error("map: unresolved design tokens "+miss.join(", "));
+  }
+
+  function rgba(c,a){ return "rgba("+c[0]+","+c[1]+","+c[2]+","+a+")"; }
+
+  function put(i, rgb, a){
+    if(i<0 || i>=N) return;
+    var o=i*4, d=img.data;
+    d[o]=rgb[0]; d[o+1]=rgb[1]; d[o+2]=rgb[2]; d[o+3]=a===undefined?255:a;
+  }
+
+  /* THE TWO LAYERS, AND WHY THERE ARE TWO.
+     The lower layer is the medium itself: one pixel is one block, and a file
+     that occupies one block lights exactly one block. That is the truth and it
+     is never inflated -- a marker that spanned more cells than the file spanned
+     would be a drawn lie about extent.
+     The upper layer is annotation, at 4x, in vector: a ring AROUND the cell,
+     plainly a pin and not a footprint, so a 220 KB file on an 8 GB stick is
+     findable by a judge standing across a room. The ring's centre is the
+     carver's own offset; only its radius is ours, and a radius is not a claim. */
+  function paint(){
+    if(!ctx) return;
+    octx.putImageData(img,0,0);
+    ctx.imageSmoothingEnabled=false;
+    ctx.clearRect(0,0,cv.width,cv.height);
+    ctx.drawImage(off,0,0,cv.width,cv.height);
+    for(var k=0;k<marks.length;k++) ring(marks[k], 1);
+    if(head>=0 && head<N){
+      var hp=centreOf(head);
+      ctx.beginPath(); ctx.arc(hp.x,hp.y,5*DPR,0,6.283185307179586);
+      ctx.lineWidth=1.5*DPR; ctx.strokeStyle=rgba(C.head,0.92); ctx.stroke();
+      ctx.beginPath(); ctx.arc(hp.x,hp.y,9*DPR,0,6.283185307179586);
+      ctx.lineWidth=1*DPR; ctx.strokeStyle=rgba(C.head,0.20); ctx.stroke();
+    }
+    for(var k2=0;k2<pulses.length;k2++){
+      var p=pulses[k2];
+      ctx.beginPath();
+      ctx.arc(p.x,p.y,p.r,0,6.283185307179586);
+      ctx.lineWidth=1.5*DPR; ctx.strokeStyle=rgba(p.c,p.a); ctx.stroke();
+    }
+  }
+
+  function ring(m, a){
+    var r=7*DPR;
+    ctx.beginPath(); ctx.arc(m.x,m.y,r,0,6.283185307179586);
+    ctx.lineWidth=1.5*DPR; ctx.strokeStyle=rgba(m.c,0.95*a); ctx.stroke();
+    ctx.beginPath(); ctx.arc(m.x,m.y,r+3*DPR,0,6.283185307179586);
+    ctx.lineWidth=1*DPR; ctx.strokeStyle=rgba(m.c,0.22*a); ctx.stroke();
+  }
+
+  function centreOf(cellIndex){
+    var c=cellIndex%COLS, r=(cellIndex-c)/COLS;
+    return { x:(c+0.5)*SCALE, y:(r+0.5)*SCALE };
+  }
+
+  function tick(){
+    raf=0;
+    var alive=[];
+    for(var i=0;i<pulses.length;i++){
+      var p=pulses[i];
+      p.t += 1/24;                      /* ~400 ms == --dur-large at 60 Hz */
+      if(p.t<1){ p.r=p.r0+(p.r1-p.r0)*p.t; p.a=0.9*(1-p.t); alive.push(p); }
+    }
+    pulses=alive; paint();
+    if(pulses.length) raf=requestAnimationFrame(tick);
+  }
+
+  function init(totalBytes){
+    cv=document.getElementById("mediumCv");
+    if(!cv) return;
+    loadTokens();
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    var box = cv.getBoundingClientRect().width || (COLS*4);
+    SCALE = Math.max(2, Math.round(box*DPR/COLS));   /* device px per block */
+    cv.width=COLS*SCALE; cv.height=ROWS*SCALE;
+    ctx=cv.getContext("2d");
+    off=document.createElement("canvas"); off.width=COLS; off.height=ROWS;
+    octx=off.getContext("2d");
+    img=octx.createImageData(COLS,ROWS);
+    state=new Uint8Array(N);
+    total=totalBytes||0; readCells=0; marks=[]; pulses=[]; head=-1;
+    if(raf){ cancelAnimationFrame(raf); raf=0; }
+    for(var i=0;i<N;i++) put(i, C.unread);
+    paint();
+    document.getElementById("medium").setAttribute("data-live","1");
+    var per = total ? Math.max(1, Math.round(total/N)) : 0;
+    document.getElementById("mScale").textContent =
+      total ? (n(N)+" blocks · "+n(per)+" B each") : "—";
+  }
+
+  /* Real progress only. `done` and `total` are the stream's own integers. */
+  function progress(done, tot){
+    if(!ctx) return;
+    if(tot && tot!==total){ total=tot; }
+    if(!total) return;
+    var want=Math.min(N, Math.floor(N*done/total));
+    if(want<=readCells) return;
+    for(var i=readCells;i<want;i++){ state[i]=1; put(i, C.read); }
+    head = (want<N) ? want : -1;                  /* the head, one cell */
+    if(head>=0) put(head, C.head);
+    readCells=want;
+    paint();
+  }
+
+  function imaged(){
+    if(!ctx) return;
+    for(var i=0;i<N;i++){ if(state[i]!==2 && state[i]!==3){ state[i]=1; put(i,C.read); } }
+    readCells=N; head=-1; paint();
+  }
+
+  /* The join. Each byte-exact hit lights where it actually sat on the stick.
+     Staggered at the token cadence so the eye can follow one file at a time;
+     under reduced motion they land at once and nothing is lost. */
+  function reveal(hits, onEachRow, onDone){
+    if(!ctx){ if(onDone) onDone(); return; }
+    var bytesPer = total/N, step = RM ? 0 : 24;   /* --stagger */
+    var order = hits.slice().sort(function(a,b){ return a.offset-b.offset; });
+    var cap = order.length ? Math.max(step, Math.min(620/order.length, 90)) : 0;
+    var i=0;
+    function next(){
+      if(i>=order.length){ paint(); if(onDone) onDone(); return; }
+      var h=order[i], rgb = h.mode==="over-run" ? C.over : C.exact;
+      var a=Math.floor(h.offset/bytesPer);
+      var b=Math.floor((h.offset+(h.candidate_length||h.length||1))/bytesPer);
+      for(var c=a;c<=b && c<N;c++){ state[c] = (rgb===C.over?3:2); put(c, rgb); }
+      var mid=centreOf(Math.min(N-1, Math.floor((a+b)/2)));
+      marks.push({ x:mid.x, y:mid.y, c:rgb });
+      if(!RM){
+        pulses.push({ x:mid.x, y:mid.y, c:rgb, t:0, r:0,
+                      r0:2*DPR, r1:19*DPR, a:0.9 });
+        if(!raf) raf=requestAnimationFrame(tick);
+      }
+      paint();
+      if(onEachRow) onEachRow(h, i);
+      i++;
+      if(RM) next(); else setTimeout(next, cap);
+    }
+    next();
+  }
+
+  return { init:init, progress:progress, imaged:imaged, reveal:reveal };
+})();
 
 /* ---------- controls ---------------------------------------------------- */
 $("mainBtn").addEventListener("click", function(){
@@ -853,6 +1174,9 @@ $("resetBtn").addEventListener("click", function(){
   VOL=null; ENROL=null; PHASE="pick";
   step("enrol",null); step("delete",null); step("recover",null);
   $("bars").hidden=true; $("scopeNote").hidden=true; $("outDir").hidden=true;
+  $("stage").removeAttribute("data-peak");
+  $("hero").className="hero";
+  var md=$("medium"); if(md) md.removeAttribute("data-live");
   $("putBackBtn").hidden=true;
   $("rows").innerHTML='<tr><td colspan="5" style="color:var(--content-quaternary);'+
     'padding-top:var(--space-5)">No volume enrolled yet.</td></tr>';
@@ -868,6 +1192,12 @@ document.addEventListener("keydown", function(e){
   else if(k==="r" && !$("mainBtn").disabled){ e.preventDefault(); $("mainBtn").click(); }
 });
 
+/* Exposed for the headless render check only: the cinematic path has to be
+   drivable without a Windows box and a physical stick in the machine. Nothing
+   in the product reads this, and it injects no data of its own -- the checker
+   supplies a payload shaped exactly like usb.compare()'s return. */
+window.__rec={ setVol:function(v){ VOL=v; }, setEnrol:function(e){ ENROL=e; },
+               renderEnrolment:renderEnrolment, paintResult:paintResult, MAP:MAP };
 loadVolumes();
 
 })();
