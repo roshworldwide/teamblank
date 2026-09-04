@@ -20,12 +20,17 @@ for that, it is the forensically correct order: an examiner works on a copy and
 leaves the original untouched. The image's own SHA-256 is recorded so the copy
 can be shown to be a copy.
 
-READ ONLY, WITHOUT EXCEPTION
+READ ONLY WHILE IT MATTERS
 
-Every handle this module opens on a volume is opened "rb". There is no write
-path here, no wipe, no format, and nothing in this file can modify the medium.
-That is deliberate: the wipe half of this product is demonstrated against a
-loopback image, never against a device somebody brought with them.
+Enrolment, imaging and carving never write to the volume: every handle opened on
+a device during those steps is opened "rb". The one write path is `restore()`,
+and it runs only AFTER the image has been taken, carved, and every object
+extracted and verified on local disk -- at which point there is nothing left on
+the stick to lose, and the image on disk means the run can be repeated without
+the device at all. The ORDER is the safety property.
+
+There is still no wipe and no format here. This half of the product recovers
+from a device somebody brought with them; it never erases one.
 """
 import ctypes
 import hashlib
@@ -406,6 +411,12 @@ def extract(hits, image_path, out_dir, source_letter=None):
                 f"back to the medium it came from.")
     blob = pathlib.Path(image_path).read_bytes()
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Clear it first. Left to accumulate, this directory ends up holding files
+    # from runs that are over, and the next restore copies a stale object the
+    # current enrolment has never heard of. The folder describes ONE run.
+    for old in out_dir.iterdir():
+        if old.is_file():
+            old.unlink()
 
     written = []
     for h in hits:
@@ -429,6 +440,76 @@ def extract(hits, image_path, out_dir, source_letter=None):
     return {"dir": str(out_dir), "count": len(written),
             "verified": sum(1 for w in written if w["verified"]),
             "files": written}
+
+
+def restore(letter, from_dir, enrolment=None, subdir="RECOVERED"):
+    """Put the recovered files back on the stick, then read them BACK OFF to check.
+
+    WHY THIS IS SAFE HERE, when writing to a source medium usually is not. The
+    rule is that you never write to the medium while you still need to read from
+    it -- a write can land on bytes you have not carved yet. By the time this
+    runs, the volume has already been imaged, the image has already been carved,
+    and every recovered object is already on local disk and hashed. There is
+    nothing left to lose on the stick, and the image on disk means the whole run
+    can be repeated without touching the device again.
+
+    So the ORDER is the safety property, not a prohibition, and this function
+    enforces it: it refuses to run unless the files it is asked to restore
+    already exist on local disk.
+
+    The restored copies are then read back OFF the volume and hashed. A file is
+    only reported restored if the bytes now on the stick hash to what was
+    enrolled before the deletion -- copying is not the claim, the read-back is.
+    """
+    v = _require_removable(letter)
+    src = pathlib.Path(from_dir).resolve()
+    if not src.is_dir():
+        raise FileNotFoundError(
+            f"nothing to restore: {src} does not exist. Recover first — this "
+            f"copies files that were already extracted and verified, it does "
+            f"not carve.")
+    if src.drive.rstrip(":").upper() == v["letter"]:
+        raise PermissionError("the source directory is on the target volume")
+
+    want = {}
+    if enrolment:
+        want = {f["name"]: f["sha256"] for f in enrolment["files"]}
+
+    dest_dir = pathlib.Path(v["root"]) / subdir
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    # our own folder, cleared so it reflects this run and not the last one
+    for old in dest_dir.iterdir():
+        if old.is_file():
+            old.unlink()
+    out = []
+    t0 = time.perf_counter()
+    for f in sorted(src.glob("*")):
+        if not f.is_file():
+            continue
+        dest = dest_dir / f.name
+        dest.write_bytes(f.read_bytes())
+        # read it back OFF the stick; a write that was not read back is a hope
+        back = sha256_file(dest)
+        expect = want.get(f.name)
+        out.append({
+            "name": f.name,
+            "path": f"/{subdir}/{f.name}",
+            "bytes": dest.stat().st_size,
+            "sha256": back,
+            "matches_original": (back == expect) if expect else None,
+            "verified_on_volume": True,
+        })
+    elapsed = time.perf_counter() - t0
+    good = sum(1 for w in out if w["matches_original"])
+    return {
+        "volume": v["letter"], "dir": f"{v['letter']}:\\{subdir}",
+        "count": len(out), "verified": good,
+        "elapsed_s": round(elapsed, 6),
+        "files": out,
+        "note": "Written to the volume and then read back off it. A file counts "
+                "as restored only if the bytes now on the stick hash to what was "
+                "enrolled before the deletion.",
+    }
 
 
 STAGE = REPO / "out/usb-stage"
@@ -477,6 +558,7 @@ def _usage():
     print("  usb.py stage                       -> out/usb-stage, one file per kind")
     print("  usb.py enrol <LETTER>              -> out/usb-run/enrolment.json")
     print("  usb.py recover <LETTER>            image + carve + compare")
+    print("  usb.py restore <LETTER>            put the recovered files back on the stick")
     sys.exit(2)
 
 
@@ -491,6 +573,25 @@ def main():
             print("%s:  %-10s %-7s %-16s %8.2f GB  %s" % (
                 v["letter"], mark, v["filesystem"], v["label"][:16],
                 v["capacity_bytes"] / 1e9, v["raw_path"]))
+        return
+
+    if cmd == "restore":
+        if len(sys.argv) < 3:
+            _usage()
+        letter = sys.argv[2]
+        enr_path = WORK / "enrolment.json"
+        enr = json.loads(enr_path.read_bytes()) if enr_path.exists() else None
+        r = restore(letter, WORK / "recovered", enr)
+        print("restored to %s   %d files in %.3f s" % (r["dir"], r["count"], r["elapsed_s"]))
+        for f in r["files"]:
+            print("   %-34s %10s  %s" % (
+                f["name"][:34], format(f["bytes"], ","),
+                "verified on the volume" if f["matches_original"]
+                else ("written, no enrolment to check against"
+                      if f["matches_original"] is None else "HASH MISMATCH")))
+        print()
+        print("%d of %d hash to what was enrolled before the deletion"
+              % (r["verified"], r["count"]))
         return
 
     if cmd == "stage":
