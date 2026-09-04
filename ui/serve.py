@@ -405,11 +405,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 emit("carve", {"counts": report["counts"], "elapsed_s": secs,
                                "policy": report["policy"]})
 
-                res = usb.compare(enrolment, report, img)
-                (usb.WORK / "result.json").write_text(
-                    json.dumps({"image": img, "compare": res}, indent=2),
-                    encoding="utf-8")
+                res = usb.compare(enrolment, report, img,
+                                  usb.WORK / "evidence.img")
                 emit("compare", res)
+
+                # The recovered objects as real files. Never onto the volume
+                # they came from -- extract() refuses a destination on the
+                # source drive, because writing there can overwrite bytes not
+                # yet carved.
+                ex = usb.extract(res["hits"], usb.WORK / "evidence.img",
+                                 usb.WORK / "recovered", source_letter=letter)
+                emit("extracted", {k: ex[k] for k in ("dir", "count", "verified")})
+
+                (usb.WORK / "result.json").write_text(
+                    json.dumps({"image": img, "compare": res, "extracted": ex},
+                               indent=2), encoding="utf-8")
                 emit("done", {"artifacts": str(usb.WORK)})
             except BrokenPipeError:
                 pass

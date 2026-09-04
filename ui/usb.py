@@ -270,32 +270,75 @@ def carve_image(img_path, report_path, extra_argv=()):
     return report, round(elapsed, 6)
 
 
-def compare(enrolment, report, img=None):
+def compare(enrolment, report, img=None, image_path=None):
     """Join recovered records to enrolled files by SHA-256, and nothing else.
 
     Not by name, not by size, not by offset -- a recovered object is correct
     only if its bytes hash to what was enrolled before the deletion.
+
+    TWO KINDS OF HIT, and they are never merged into one figure.
+
+    `exact`     the candidate's own bytes hash to the enrolled value. The carver
+                found the object and ended it in the right place.
+    `over-run`  the enrolled value is the hash of the candidate's FIRST n bytes.
+                The object is intact and starts where the carver said, but the
+                end boundary ran past it -- two PDFs stored back to back will do
+                this, because the validator walks to the furthest %%EOF it can
+                still parse. The data was recovered; the boundary was wrong, and
+                saying so is the honest report.
+
+    The over-run check reads the enrolled SIZE, which is ground truth. That is
+    legitimate for VERIFYING a recovery and it is not how the carver works --
+    the carver never sees the manifest. It is labelled apart for exactly that
+    reason and never counted as an exact hit.
     """
     by_hash = {}
     for f in enrolment["files"]:
         by_hash.setdefault(f["sha256"], []).append(f)
+    # enrolled files indexed by size, for the over-run check
+    by_size = {}
+    for f in enrolment["files"]:
+        by_size.setdefault(f["size"], []).append(f)
+
+    blob = None
+    if image_path and pathlib.Path(image_path).exists():
+        blob = pathlib.Path(image_path).read_bytes()
 
     records = report.get("candidates", [])
-    hits, admitted_hits = [], 0
+    hits, admitted_hits, seen = [], 0, set()
     for r in records:
         match = by_hash.get(r["sha256"])
-        if not match:
+        mode = "exact"
+        if not match and blob is not None:
+            # the candidate over-ran its object: does an enrolled file sit at
+            # the front of it, byte for byte?
+            for size, cands in by_size.items():
+                if size >= r["length"]:
+                    continue
+                head = hashlib.sha256(
+                    blob[r["offset"]:r["offset"] + size]).hexdigest()
+                for f in cands:
+                    if f["sha256"] == head and f["sha256"] not in seen:
+                        match, mode = [f], "over-run"
+                        break
+                if match:
+                    break
+        if not match or match[0]["sha256"] in seen:
             continue
+        seen.add(match[0]["sha256"])
         hits.append({
             "path": match[0]["path"],
             "kind": r["kind"],
             "offset": r["offset"],
-            "length": r["length"],
-            "sha256": r["sha256"],
+            "length": match[0]["size"] if mode == "over-run" else r["length"],
+            "candidate_length": r["length"],
+            "sha256": match[0]["sha256"],
             "admitted": r["admitted"],
             "confidence": r["confidence"]["total"],
             "assembly": r.get("assembly", "contiguous"),
             "enrolled_size": match[0]["size"],
+            "mode": mode,
+            "overrun_bytes": (r["length"] - match[0]["size"]) if mode == "over-run" else 0,
         })
         if r["admitted"]:
             admitted_hits += 1
@@ -341,6 +384,53 @@ def compare(enrolment, report, img=None):
 # --------------------------------------------------------------------------
 # CLI -- so the whole path is testable without the browser
 # --------------------------------------------------------------------------
+def extract(hits, image_path, out_dir, source_letter=None):
+    """Write the recovered objects out as real files, and verify each one.
+
+    NEVER BACK TO THE SOURCE. Writing recovered data onto the medium you are
+    recovering from can overwrite the very bytes you have not carved yet; it is
+    the one mistake every recovery tool refuses to make. Output goes to the
+    local disk, and this asserts the destination is not on the volume that was
+    imaged before it writes anything.
+
+    Each file is re-hashed after writing, so "recovered" means the bytes on
+    disk were checked, not that a copy was attempted.
+    """
+    out_dir = pathlib.Path(out_dir).resolve()
+    if source_letter:
+        src = source_letter.strip().rstrip(":").upper()
+        if out_dir.drive.rstrip(":").upper() == src:
+            raise PermissionError(
+                f"REFUSED: the output directory {out_dir} is on {src}:, the "
+                f"volume that was just imaged. Recovered data is never written "
+                f"back to the medium it came from.")
+    blob = pathlib.Path(image_path).read_bytes()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    written = []
+    for h in hits:
+        name = pathlib.Path(h["path"]).name or f'{h["kind"]}_{h["offset"]}'
+        dest = out_dir / name
+        i = 1
+        while dest.exists():
+            dest = out_dir / f"{dest.stem}({i}){dest.suffix}"
+            i += 1
+        data = blob[h["offset"]:h["offset"] + h["length"]]
+        dest.write_bytes(data)
+        back = sha256_file(dest)
+        written.append({
+            "name": dest.name,
+            "path": str(dest),
+            "bytes": len(data),
+            "sha256": back,
+            "verified": back == h["sha256"],
+            "mode": h.get("mode", "exact"),
+        })
+    return {"dir": str(out_dir), "count": len(written),
+            "verified": sum(1 for w in written if w["verified"]),
+            "files": written}
+
+
 STAGE = REPO / "out/usb-stage"
 
 
@@ -465,16 +555,28 @@ def main():
             format(report["counts"]["records"], ","),
             format(report["counts"]["admitted"], ","), secs))
 
-        res = compare(enrolment, report, img)
+        res = compare(enrolment, report, img, WORK / "evidence.img")
+        ex = extract(res["hits"], WORK / "evidence.img", WORK / "recovered",
+                     source_letter=letter)
+        res["extracted"] = {k: ex[k] for k in ("dir", "count", "verified")}
         (WORK / "result.json").write_text(
             json.dumps({"image": img, "compare": res}, indent=2), encoding="utf-8")
         print()
         print("BYTE-EXACT RECOVERIES: %d of %d enrolled (%d carvable)" % (
             res["byte_exact_matches"], res["enrolled"], res["enrolled_carvable"]))
         for h in res["hits"]:
-            print("  %-34s %-6s @%-12s conf %.4f  %s" % (
+            print("  %-34s %-6s @%-12s conf %.4f  %-8s %s" % (
                 h["path"][:34], h["kind"], format(h["offset"], ","),
-                h["confidence"], "ADMITTED" if h["admitted"] else "rejected"))
+                h["confidence"], "ADMITTED" if h["admitted"] else "rejected",
+                "" if h["mode"] == "exact" else
+                "(end over-run by %s bytes)" % format(h["overrun_bytes"], ",")))
+        print()
+        print("WRITTEN TO %s" % ex["dir"])
+        print("  %d files, %d re-hashed and verified on disk" % (ex["count"], ex["verified"]))
+        for w in ex["files"]:
+            print("     %-34s %10s  %s" % (
+                w["name"][:34], format(w["bytes"], ","),
+                "verified" if w["verified"] else "HASH MISMATCH"))
         if res["not_recovered"]:
             print("\nNOT RECOVERED:")
             for f in res["not_recovered"]:

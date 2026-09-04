@@ -382,6 +382,12 @@ td.v{white-space:nowrap;font-weight:600}
 .barnote b{color:var(--content-secondary);font-family:var(--font-mono);font-weight:600}
 .scopenote{margin-top:var(--space-3);font:400 var(--size-overline)/1.6 var(--font-mono);
   letter-spacing:.02em;color:var(--sig-caution)}
+.outdir{margin-top:var(--space-4);padding-top:var(--space-3);
+  border-top:1px solid var(--stroke-hairline);
+  font:400 var(--size-overline)/1.7 var(--font-mono);letter-spacing:.02em;
+  color:var(--content-tertiary);word-break:break-all}
+.outdir b{color:var(--sig-nominal);font-weight:600}
+.outdir .q{color:var(--content-quaternary)}
 
 @media (max-height:800px){
   .rack{padding:var(--space-3) var(--space-6) var(--space-1)}
@@ -436,6 +442,7 @@ td.v{white-space:nowrap;font-weight:600}
       </div>
 
       <p class="scopenote" id="scopeNote" hidden></p>
+      <p class="outdir" id="outDir" hidden></p>
     </div>
 
     <div class="panel">
@@ -698,6 +705,17 @@ function doRecover(){
     var d=JSON.parse(e.data);
     paintResult(d);
   });
+  ES.addEventListener("extracted", function(e){
+    var d=JSON.parse(e.data);
+    $("outDir").hidden=false;
+    $("outDir").innerHTML =
+      "<b>"+n(d.count)+" files written and re-hashed on disk"+
+      (d.verified===d.count ? ", all verified" : ", "+n(d.verified)+" verified")+
+      "</b><br>"+esc(d.dir)+"<br>"+
+      "<span class=\"q\">Not back onto "+esc(VOL.letter)+": — writing recovered "+
+      "data onto the medium it came from can overwrite bytes that have not been "+
+      "carved yet. Recovery output never touches the source.</span>";
+  });
   ES.addEventListener("done", function(){
     ES.close(); ES=null;
     PHASE="done";
@@ -733,8 +751,18 @@ function paintResult(d){
     h=hits[sha];
     if(h){
       tr.setAttribute("data-hit","1");
-      cell.className="v ok";
-      cell.textContent="✓ byte-exact"+(h.admitted?"":" (below gate)");
+      if(h.mode === "over-run"){
+        /* The object is intact and starts where the carver said; the END
+           boundary ran past it. Recovered, and the imprecision is named
+           rather than folded into the clean figure. */
+        cell.className="v warn";
+        cell.textContent="✓ recovered · end over-run";
+        cell.title="the carver ended this candidate "+h.overrun_bytes+
+                   " bytes late; the file itself is byte-exact";
+      } else {
+        cell.className="v ok";
+        cell.textContent="✓ byte-exact"+(h.admitted?"":" (below gate)");
+      }
     } else {
       tr.removeAttribute("data-hit");
       cell.className="v no";
@@ -750,9 +778,13 @@ function paintResult(d){
     "name, not by size. A recovered object is correct only if its bytes hash to "+
     "what was there before the deletion.";
 
-  var lines = [];
+  var lines = [], over = 0;
+  for(i=0;i<d.hits.length;i++) if(d.hits[i].mode === "over-run") over++;
   lines.push("<b>"+n(d.byte_exact_and_admitted)+"</b> of the "+
              n(d.byte_exact_matches)+" also cleared the confidence gate.");
+  if(over) lines.push("<b>"+n(over)+"</b> was recovered intact but the carver "+
+                      "ended the candidate late — the bytes are right, the "+
+                      "boundary was not.");
   var nosig = 0, other = 0;
   for(i=0;i<d.not_recovered.length;i++){
     if(d.not_recovered[i].carvable) other++; else nosig++;
@@ -772,7 +804,7 @@ $("resetBtn").addEventListener("click", function(){
   if(ES){ ES.close(); ES=null; }
   VOL=null; ENROL=null; PHASE="pick";
   step("enrol",null); step("delete",null); step("recover",null);
-  $("bars").hidden=true; $("scopeNote").hidden=true;
+  $("bars").hidden=true; $("scopeNote").hidden=true; $("outDir").hidden=true;
   $("rows").innerHTML='<tr><td colspan="5" style="color:var(--content-quaternary);'+
     'padding-top:var(--space-5)">No volume enrolled yet.</td></tr>';
   $("mainBtn").disabled=true; $("mainLabel").textContent="Enrol the volume";
