@@ -545,10 +545,9 @@ canvas#flare{position:absolute;inset:0;width:100%;height:100%;
       <span class="gl" aria-hidden="true">&#9654;</span><span id="runLabel">Run the loop</span>
     </button>
     <a class="ghost" id="nextBtn" href="index.html">The evidence &#8594;</a>
-    <a class="ghost" id="usbBtn" href="recover.html">Recover from a USB &#8594;</a>
     <span class="barnote" id="barnote"></span>
     <span class="keys">
-      <span><kbd>R</kbd> run</span><span><kbd>E</kbd> evidence</span><span><kbd>U</kbd> usb</span>
+      <span><kbd>R</kbd> run</span><span><kbd>E</kbd> evidence</span>
     </span>
   </nav>
 
@@ -1270,11 +1269,11 @@ document.addEventListener("keydown", function(e){
     return;
   }
 
-  /* Armed. R runs the loop, E hands off to the evidence deck, U to the USB
-     recovery. There is nothing else on this surface to open. */
+  /* Armed. R runs the loop, E hands off to the evidence deck. Those are the
+     only two moves: the demo runs in one tab, in one direction, and the USB
+     recovery is reached from the END of the deck rather than from here. */
   if(k==="r"){ e.preventDefault(); $("runBtn").click(); }
   else if(k==="e"||k==="escape"){ e.preventDefault(); window.location.href="index.html"; }
-  else if(k==="u"){ e.preventDefault(); window.location.href="recover.html"; }
 });
 
 /* the grain, from the same measured bytes as everything else */
