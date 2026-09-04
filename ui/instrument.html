@@ -904,7 +904,7 @@ function startLive(){
   es.addEventListener("carve_pre", function(e){
     var d=JSON.parse(e.data);
     LIVE.counts.pre = d.counts;
-    phase("carve_pre","done", n(d.elapsed_s)+" s measured");
+    phase("carve_pre","done", n(d.elapsed_s)+" s "+(d.source||"measured"));
     setHero(n(d.counts.admitted)+'<span class="of">of '+n(d.counts.records)+" scanned</span>");
     $("saysub").innerHTML = "candidates admitted above the "+
       n6(P.carve.policy.min_confidence)+" confidence gate.";
@@ -929,25 +929,34 @@ function startLive(){
   es.addEventListener("wipe", function(e){
     var d=JSON.parse(e.data);
     LIVE.wipe = d;
-    phase("wipe","done", n(d.elapsed_s)+" s measured");
+    phase("wipe","done", n(d.elapsed_s)+" s "+(d.source||"measured"));
+    /* the engine's own figure, to the nanosecond it reported */
     read(4,"Telemetry frames", n(d.telemetry.events)+
          '<span class="u">@ '+n(Number(d.telemetry.achieved_hz).toFixed(3))+" Hz</span>", false);
   });
   es.addEventListener("carve_post", function(e){
     var d=JSON.parse(e.data);
     LIVE.counts.post = d.counts;
-    phase("carve_post","done", n(d.elapsed_s)+" s measured");
+    phase("carve_post","done", (d.elapsed_s!==undefined && d.elapsed_s!==null)
+      ? n(d.elapsed_s)+" s "+(d.source||"measured") : "not separately timed");
     setHero(n(d.counts.admitted)+'<span class="of">of '+n(d.counts.records)+" scanned</span>");
     $("saysub").innerHTML = "The randomised medium still raised <b>"+n(d.counts.records)+
       " signature hits</b>. A signature-only carver would have called every one a "+
       "recovered file. Structure validation admitted none.";
   });
+  es.addEventListener("ledger", function(e){
+    LIVE.ledger = JSON.parse(e.data);
+  });
   es.addEventListener("done", function(e){
-    JSON.parse(e.data);
+    var d = JSON.parse(e.data);
+    LIVE.done = d;
     es.close();
     finish();
   });
-  es.addEventListener("error", function(e){
+  /* "failed" is the engine reporting a problem. It is deliberately NOT called
+     "error": that is EventSource's own built-in event name, and a listener on
+     it cannot tell a server message from a dropped connection. */
+  es.addEventListener("failed", function(e){
     var msg = "the run failed";
     try { msg = JSON.parse(e.data).message; } catch(_){}
     es.close();
@@ -983,8 +992,22 @@ function finish(){
     $("runLabel").textContent = "Run it again";
   }
   buildWorking();
-  note("Every figure on this screen was measured in the last "+
-       (d ? n(d.run.elapsed_s) : "—")+" seconds. Press <b>W</b> for the working.");
+  if(LIVE && LIVE.done && LIVE.done.survivors){
+    badge("running","Survivors","an admitted candidate outlived the wipe");
+    note("<b>verify exited 7 — SURVIVORS.</b> At least one admitted candidate "+
+         "survived the wipe. The evidence is on this screen because that is what "+
+         "this screen is for; the claim did not hold.");
+    return;
+  }
+  /* the whole loop, not the wipe alone: d.run.elapsed_s is the engine's
+     figure for the wipe run and would understate what was just watched */
+  var loopS = (LIVE && LIVE.done && LIVE.done.elapsed_s !== undefined)
+                ? n(LIVE.done.elapsed_s) : "—";
+  note("Signed and chained. The whole loop took "+loopS+" s here, and the "+
+       "certificate in the "+
+       "working is this run’s. Audit it with <b>verify --audit "+
+       ((LIVE&&LIVE.done&&LIVE.done.bundle)||"out/live-run/bundle.json")+"</b>. "+
+       "Press <b>W</b> to see it.");
 }
 
 /* =========================================================================
@@ -1198,25 +1221,30 @@ function buildWorking(){
 
    Ported from the four-tab console's Phase-4 panel; the curve equation itself
    is still not checked here and the command that does check it is printed. */
-var TAMPER_LEDGER = (function(){
-  if(!P.ledger || !P.ledger.certificate_canonical) return null;
-  var CANON = P.ledger.certificate_canonical;
+function ledgerOf(src){
+  if(!src || !src.certificate_canonical) return null;
+  var CANON = src.certificate_canonical;
   var FIELD = '"whole_medium_claim":false';
   if(CANON.indexOf(FIELD) < 0) return null;
   return {
     canon: CANON,
     forged: CANON.replace(FIELD, '"whole_medium_claim":true'),
-    sig: P.ledger.signed_certificate ? P.ledger.signed_certificate.signature : null,
-    chain: P.ledger.chain || {},
+    sig: src.signed_certificate ? src.signed_certificate.signature : null,
+    chain: src.chain || {},
     signedDigest: sha256hex(CANON)
   };
-})();
+}
+/* the certificate on screen is the one belonging to the run on screen: the
+   live run's own if it produced one, the recorded run's otherwise. */
+function currentLedger(){
+  return ledgerOf((LIVE && LIVE.ledger) ? LIVE.ledger : P.ledger);
+}
 function shortHex(h){ return h ? h.slice(0,32)+"\u2026"+h.slice(-8) : "\u2014"; }
 
 function renderTamper(){
   var head = document.querySelector('#cardTamper .t-overline');
   var path = document.querySelector('#cardTamper .p');
-  var L = TAMPER_LEDGER;
+  var L = currentLedger();
 
   if(!L){
     if(head) head.textContent = "Tamper the record";
@@ -1245,7 +1273,8 @@ function renderTamper(){
   }
 
   if(head) head.textContent = "Signed certificate \u2014 Ed25519, chained";
-  if(path) path.textContent = "ledger.certificate_canonical";
+  if(path) path.textContent = (LIVE && LIVE.ledger)
+    ? "signed by the run you just watched" : "ledger.certificate_canonical";
   var shown = FORGED ? L.forged : L.canon;
   var d = sha256hex(shown);
   var CH = L.chain;

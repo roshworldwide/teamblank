@@ -49,6 +49,7 @@ UI = REPO / "ui"
 EXE = ".exe" if os.name == "nt" else ""
 CARVE = REPO / f"core/target/release/carve{EXE}"
 WIPE = REPO / f"core/target/release/wipe{EXE}"
+VERIFY = REPO / f"core/target/release/verify{EXE}"
 IMG = REPO / "out/fixture.img"
 MANIFEST = REPO / "out/fixture.manifest.json"
 WORK = REPO / "out/live-run"
@@ -72,7 +73,8 @@ def sha256(path: pathlib.Path) -> str:
 def readiness() -> dict:
     """Everything that has to be true before RUN can mean anything."""
     missing = []
-    for label, path in (("carve", CARVE), ("wipe", WIPE)):
+    for label, path in (("carve", CARVE), ("wipe", WIPE),
+                        ("verify", VERIFY)):
         if not path.exists():
             missing.append(f"{path.relative_to(REPO)} — build it: "
                            f"cd core && cargo build --release")
@@ -88,101 +90,31 @@ def readiness() -> dict:
 
 
 class Runner:
-    """Runs carve -> wipe -> carve and yields events as it goes.
+    """Drives `verify`, which is the whole loop in one process.
 
-    Every event carries only values the engine produced. The elapsed figures are
-    measured here with perf_counter and labelled as this server's measurement,
-    never as the engine's own.
+    Phase 4 replaced three binaries called by argv with one that carves, wipes,
+    carves again, signs the certificate and appends to the chain. Calling that
+    here rather than re-orchestrating the three is not a convenience: `verify`
+    enforces parameter identity between the two carves BY CONSTRUCTION, which
+    is the entire claim the second carve exists to support. Re-driving the
+    binaries separately would hand that guarantee back to this file, and this
+    file is not where it belongs.
+
+    Frames still reach the browser live, because the engine writes its trace as
+    it works and this tails the file while the process runs. The phase strip is
+    inferred from that trace -- no trace yet means the first carve is running,
+    a trace being appended to means the wipe is, frames stopping while the
+    process still lives means the second carve is -- and every elapsed figure
+    says which clock produced it.
     """
 
     def __init__(self, emit):
         self.emit = emit
 
-    def _run(self, argv, ok=(0,)):
-        t0 = time.perf_counter()
-        proc = subprocess.run([str(a) for a in argv], capture_output=True, text=True)
-        elapsed = time.perf_counter() - t0
-        if proc.returncode not in ok:
-            raise RuntimeError(
-                f"{pathlib.Path(argv[0]).name} exited {proc.returncode}: "
-                f"{proc.stderr.strip()[-400:]}")
-        return elapsed, proc.stdout
-
-    def _wipe_with_live_trace(self, target):
-        """Start the wipe, tail its trace file, forward frames as they land.
-
-        The engine writes one JSON object per line as it works. Reading that
-        file while the process runs is what makes the browser's numbers live
-        rather than a re-enactment: each frame reaches the page within a few
-        milliseconds of the sector range it describes being written.
-        """
-        trace = WORK / "telemetry.jsonl"
-        # The engine opens the trace with mode "x" and refuses a path that
-        # already exists — DENY_TARGET_ALREADY_EXISTS. So it must not be
-        # pre-created here; wait for the engine to make it, then tail it.
-        argv = [str(WIPE), "--target", str(target), "--allow-root", str(WORK),
-                "--i-understand", str(target), "--period-ms", "8",
-                "--trace", str(trace)]
-        # stdout goes to a FILE, never a pipe. The wipe report is ~90 KB and a
-        # pipe nobody drains fills its OS buffer, blocks the writer, and the
-        # process never exits — which deadlocks the tail loop below against a
-        # child that is waiting on us.
-        rep = WORK / "wipe.json"
-        errf = WORK / "wipe.stderr"
-        t0 = time.perf_counter()
-        with open(rep, "w", encoding="utf-8") as so, open(errf, "w", encoding="utf-8") as se:
-            proc = subprocess.Popen(argv, stdout=so, stderr=se, text=True)
-            while not trace.exists():
-                if proc.poll() is not None:
-                    break                              # it failed before writing
-                time.sleep(0.002)
-            sent = 0
-            if not trace.exists():
-                proc.wait()
-                raise RuntimeError(f"wipe exited {proc.returncode}: "
-                                   f"{errf.read_text(encoding='utf-8').strip()[-400:]}")
-            with open(trace, "r", encoding="utf-8") as fh:
-              while True:
-                line = fh.readline()
-                if line:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        ev = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue                      # a half-written line
-                    if ev.get("ev") == "progress":
-                        sent += 1
-                        self.emit("frame", ev)
-                    continue
-                if proc.poll() is not None:
-                    # drain whatever landed between the last read and exit
-                    rest = fh.read()
-                    for tail in rest.splitlines():
-                        tail = tail.strip()
-                        if not tail:
-                            continue
-                        try:
-                            ev = json.loads(tail)
-                        except json.JSONDecodeError:
-                            continue
-                        if ev.get("ev") == "progress":
-                            sent += 1
-                            self.emit("frame", ev)
-                    break
-                time.sleep(0.002)
-            proc.wait()
-        elapsed = time.perf_counter() - t0
-        if proc.returncode != 0:
-            raise RuntimeError(f"wipe exited {proc.returncode}: "
-                               f"{errf.read_text(encoding='utf-8').strip()[-400:]}")
-        return elapsed, rep.read_text(encoding="utf-8"), sent
-
     def go(self):
         ready = readiness()
         if not ready["ready"]:
-            self.emit("error", {"message": "the engine is not runnable here",
+            self.emit("failed", {"message": "the engine is not runnable here",
                                 "missing": ready["missing"]})
             return
 
@@ -190,7 +122,7 @@ class Runner:
         self.emit("start", {
             "fixture_sha256": before,
             "capacity_bytes": IMG.stat().st_size,
-            "note": "the wipe runs against a copy in out/live-run; "
+            "note": "the loop runs against a copy in out/live-run; "
                     "out/fixture.img is never a target",
         })
 
@@ -205,46 +137,135 @@ class Runner:
         self.emit("phase", {"name": "copy", "state": "end",
                             "elapsed_s": round(time.perf_counter() - t0, 6)})
 
+        trace = WORK / "telemetry.jsonl"
+        bundle_path = WORK / "bundle.json"
+        outf, errf = WORK / "verify.stdout", WORK / "verify.stderr"
+        argv = [str(VERIFY),
+                "--target", str(target), "--allow-root", str(WORK),
+                "--i-understand", str(target), "--manifest", str(MANIFEST),
+                "--chain", str(WORK / "chain.txt"),
+                "--key", str(WORK / "operator.key"),
+                "--trace", str(trace), "--period-ms", "8",
+                "--out", str(bundle_path)]
+
         self.emit("phase", {"name": "carve_pre", "state": "begin"})
-        el, out = self._run([CARVE, "--phase", "pre-wipe", "--manifest", MANIFEST,
-                             "--image-path", IMG, target])
-        pre = json.loads(out)
-        (WORK / "carve_pre.json").write_text(out)
-        self.emit("carve_pre", {"counts": pre["counts"], "elapsed_s": round(el, 6)})
+        t_run = time.perf_counter()
+        sent = 0
+        t_carve_pre = 0.0
+        # stdout to a FILE, never a pipe: an undrained pipe fills its OS buffer,
+        # blocks the child, and deadlocks the tail loop against a process that
+        # is itself waiting on us.
+        with open(outf, "w", encoding="utf-8") as so:
+            with open(errf, "w", encoding="utf-8") as se:
+                proc = subprocess.Popen(argv, stdout=so, stderr=se, text=True)
 
-        self.emit("phase", {"name": "wipe", "state": "begin"})
-        el, out, frames = self._wipe_with_live_trace(target)
-        wipe = json.loads(out)
+                # the first carve owns all the time before any trace exists
+                while not trace.exists() and proc.poll() is None:
+                    time.sleep(0.002)
+                t_carve_pre = time.perf_counter() - t_run
+
+                if trace.exists():
+                    self.emit("phase", {"name": "carve_pre", "state": "end",
+                                        "elapsed_s": round(t_carve_pre, 6),
+                                        "source": "server clock"})
+                    self.emit("phase", {"name": "wipe", "state": "begin"})
+                    t_wipe = time.perf_counter()
+                    with open(trace, "r", encoding="utf-8") as fh:
+                        while True:
+                            line = fh.readline()
+                            if line:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                try:
+                                    ev = json.loads(line)
+                                except json.JSONDecodeError:
+                                    continue          # a half-written line
+                                if ev.get("ev") == "progress":
+                                    sent += 1
+                                    self.emit("frame", ev)
+                                continue
+                            if proc.poll() is not None:
+                                for tail in fh.read().splitlines():
+                                    tail = tail.strip()
+                                    if not tail:
+                                        continue
+                                    try:
+                                        ev = json.loads(tail)
+                                    except json.JSONDecodeError:
+                                        continue
+                                    if ev.get("ev") == "progress":
+                                        sent += 1
+                                        self.emit("frame", ev)
+                                break
+                            time.sleep(0.002)
+                    # This window ends when the PROCESS ends, not when the
+                    # wipe does, so it silently contains the second carve. It
+                    # is not published as a duration; the engine reports the
+                    # wipe exactly and the remainder is attributed below.
+                    t_tail = time.perf_counter() - t_wipe
+                    self.emit("phase", {"name": "wipe", "state": "end"})
+                    self.emit("phase", {"name": "carve_post", "state": "begin"})
+                proc.wait()
+        rc = proc.returncode
+        elapsed = time.perf_counter() - t_run
+
+        # 0 is the claim holding. 7 is SURVIVORS: an admitted candidate outlived
+        # the wipe. The bundle is still written and the page still shows it,
+        # because evidence of a failure is still evidence -- but it is reported
+        # as a failure, never quietly.
+        if rc not in (0, 7) or not bundle_path.exists():
+            self.emit("failed", {
+                "message": "verify exited %d: %s" % (
+                    rc, errf.read_text(encoding="utf-8").strip()[-400:])})
+            return
+
+        bundle = json.loads(bundle_path.read_bytes())
+        wipe = bundle["wipe"]
+        self.emit("phase", {"name": "carve_post", "state": "end"})
+
+        self.emit("carve_pre", {"counts": bundle["carve_pre"]["counts"],
+                                "elapsed_s": round(t_carve_pre, 6),
+                                "source": "server clock"})
         self.emit("wipe", {
-            "elapsed_s": round(el, 6),
-            "frames_streamed": frames,
-            "device": wipe["device"],
-            "dispatch": wipe["dispatch"],
-            "overwrite": wipe["overwrite"],
-            "telemetry": wipe["telemetry"],
-            "audit": wipe["audit"],
-            "verification": wipe["verification"],
-            "outcome": wipe["outcome"],
-            "entropy": wipe["entropy_bits_per_byte"],
-            "limits": wipe["limits"],
-            "run": wipe["run"],
+            "elapsed_s": round(wipe["overwrite"]["duration_ns"] / 1e9, 9),
+            "source": "engine",
+            "frames_streamed": sent,
+            "device": wipe["device"], "dispatch": wipe["dispatch"],
+            "overwrite": wipe["overwrite"], "telemetry": wipe["telemetry"],
+            "audit": wipe["audit"], "verification": wipe["verification"],
+            "outcome": wipe["outcome"], "entropy": wipe["entropy_bits_per_byte"],
+            "limits": wipe["limits"], "run": wipe["run"],
             "authorization": wipe["authorization"],
-            "probe": wipe.get("calibration_probe"),
         })
+        # what is left after the first carve and the engine's own wipe figure
+        engine_wipe_s = wipe["overwrite"]["duration_ns"] / 1e9
+        remainder = elapsed - t_carve_pre - engine_wipe_s
+        self.emit("carve_post", {
+            "counts": bundle["carve_post"]["counts"],
+            "elapsed_s": round(remainder, 6) if remainder > 0 else None,
+            "source": "server clock, remainder"})
 
-        self.emit("phase", {"name": "carve_post", "state": "begin"})
-        # exit 1 from carve post-wipe means "no candidate reached the gate",
-        # which is the result this whole demo exists to produce, not a failure.
-        el, out = self._run([CARVE, "--phase", "post-wipe", "--manifest", MANIFEST,
-                             "--image-path", IMG, target], ok=(0, 1))
-        post = json.loads(out)
-        (WORK / "carve_post.json").write_text(out)
-        self.emit("carve_post", {"counts": post["counts"], "elapsed_s": round(el, 6)})
+        # The ledger, with the canonical bytes produced the same way
+        # ui/build_payload.py produces them, so the page hashes exactly what the
+        # engine signed. If that import fails the page is told it has no
+        # canonical bytes rather than shown something close to them.
+        ledger = {"signed_certificate": bundle["signed_certificate"],
+                  "chain": bundle["chain"]}
+        try:
+            sys.path.insert(0, str(REPO / "py"))
+            from sentinelwipe.canon import canonicalize
+            ledger["certificate_canonical"] = canonicalize(
+                bundle["signed_certificate"]["certificate"]).decode("utf-8")
+        except Exception as exc:
+            ledger["certificate_canonical"] = None
+            ledger["canonical_unavailable"] = str(exc)
+        self.emit("ledger", ledger)
 
         after = sha256(IMG)
         if after != before:
-            self.emit("error", {
-                "message": "THE FIXTURE CHANGED — a wipe reached out/fixture.img",
+            self.emit("failed", {
+                "message": "THE FIXTURE CHANGED - a wipe reached out/fixture.img",
                 "before": before, "after": after})
             print("serve: FIXTURE CHANGED. Stop and investigate.", file=sys.stderr)
             return
@@ -252,6 +273,10 @@ class Runner:
         self.emit("done", {
             "fixture_sha256_after": after,
             "fixture_unchanged": True,
+            "exit_code": rc,
+            "survivors": rc == 7,
+            "bundle": str(bundle_path.relative_to(REPO)),
+            "elapsed_s": round(elapsed, 6),
         })
 
 
@@ -308,7 +333,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 pass                                   # the tab went away
             except Exception as exc:                   # report, never a 500 page
                 try:
-                    emit("error", {"message": str(exc)})
+                    emit("failed", {"message": str(exc)})
                 except Exception:
                     pass
         finally:
