@@ -5,3 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# The two dependencies CLAUDE.md's stack table locks for this crate, arriving
+# at Phase 4 as planned: sha2 here for the vector digests and the Merkle chain,
+# ed25519-dalek in the signing step.
+sha2 = "0.10"
