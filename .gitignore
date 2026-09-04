@@ -14,3 +14,10 @@ __pycache__/
 fixtures/*.img
 fixtures/*.raw
 out/
+
+# design sources — 21 MB of PDF and HTML that every clone would otherwise download.
+# The tokens are already extracted into ui/tokens.css, so the build does not need them.
+# Kept alongside the repo at ../design-source/, referenced in docs/frontend_contract.md.
+*Design System.pdf
+*Design System.html
+design-source/
