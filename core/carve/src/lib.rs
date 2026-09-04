@@ -21,6 +21,7 @@
 //! keyed by it, and the fixture tests in both compare `as_str()` against the
 //! manifest's `kind` field.
 
+pub mod report;
 pub mod bifragment;
 pub mod carve;
 pub mod confidence;

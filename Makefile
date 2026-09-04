@@ -29,7 +29,7 @@ help:
 	@echo "ui-serve        serve ui/ on http://localhost:8787 (no build step, no network)"
 	@echo "ui-check        token-drift check + payload freshness, no engine run"
 	@echo "demo            the adversarial loop end to end, then open the instrument"
-	@echo "verify          the acceptance table                        [Phase 6]"
+	@echo "verify          the loop + signature + chain, clean passes and forged fails"
 	@echo ""
 	@echo "  make fixtures [SEED=... SIZE=256MiB OUT=out]"
 	@echo "  -> $(IMAGE)"
@@ -80,9 +80,11 @@ ui-serve:
 	@echo "sentinelwipe: http://localhost:8787/instrument.html  (ctrl-C to stop)"
 	@cd ui && uv run python -m http.server 8787 --bind 127.0.0.1
 
-# CLAUDE.md's six steps. Steps 1-4 run the real engine here. Step 5 is Phase 4:
-# core/ledger is a one-line stub, so there is no Ed25519 signature and no Merkle
-# root, and the instrument says so on its face rather than drawing one.
+# CLAUDE.md's six steps, all real: the loop runs through core/verify with
+# parameter identity by construction, the certificate is Ed25519-signed with
+# the custody statement inside the signed bytes, and the chain head is
+# published. The forge button edits the presented copy of the canonical
+# bytes and the divergence is shown by name.
 # The desktop shell: the two pages in a native window over the platform webview.
 # No Chromium bundle, no network, runs on an air-gapped machine with nothing
 # installed. Needs tauri-cli once: cargo install tauri-cli --locked
@@ -100,13 +102,37 @@ demo: build
 	@test -f "$(IMAGE)" || $(MAKE) --no-print-directory fixtures
 	@echo "── 2 · carve  ── 3 · wipe with telemetry  ── 4 · carve again, same parameters"
 	uv run python ui/refresh.py
-	@echo "── 5 · sign            NOT BUILT. core/ledger is a stub; no Ed25519, no Merkle."
-	@echo "        The instrument shows a SHA-256 it computes itself and labels it as"
-	@echo "        the page's own digest, attesting to nothing but the bytes on screen."
-	@echo "── 6 · tamper          open VERDICT and press 'Forge whole_medium_claim'."
+	@echo "── 5 · sign            Ed25519 over RFC 8785 canonical bytes; chained."
+	@echo "        Custody stated inside the signature: integrity since signing,"
+	@echo "        not authority of the signer. Audit: verify --audit <bundle>."
+	@echo "── 6 · tamper          open VERDICT, press 'Forge whole_medium_claim':"
+	@echo "        signature invalid, field named, both digests, ledger intact."
 	@echo ""
 	@open ui/instrument.html 2>/dev/null || xdg-open ui/instrument.html 2>/dev/null || \
 	 echo "open ui/instrument.html"
 
-verify:
-	@echo "sentinelwipe: 'verify' is implemented in Phase 6" >&2; exit 1
+# The acceptance loop: carve, wipe, carve again with identical parameters,
+# sign, chain — then audit the bundle from cold, twice: the clean bundle must
+# pass and a forged copy must fail, so a broken auditor cannot pass quietly.
+verify: build
+	@test -f "$(IMAGE)" || $(MAKE) --no-print-directory fixtures
+	@rm -rf $(OUT)/verify-run && mkdir -p $(OUT)/verify-run
+	@cp "$(IMAGE)" $(OUT)/verify-run/medium.img
+	./core/target/release/verify \
+	  --target $(OUT)/verify-run/medium.img \
+	  --allow-root $(OUT)/verify-run \
+	  --i-understand $(OUT)/verify-run/medium.img \
+	  --manifest "$(MANIFEST)" \
+	  --chain $(OUT)/verify-run/chain.txt \
+	  --key $(OUT)/verify-run/operator.key \
+	  --out $(OUT)/verify-run/bundle.json
+	./core/target/release/verify --audit $(OUT)/verify-run/bundle.json
+	@sed 's/"whole_medium_claim":false/"whole_medium_claim":true/' \
+	  $(OUT)/verify-run/bundle.json > $(OUT)/verify-run/bundle_forged.json
+	@if ./core/target/release/verify --audit $(OUT)/verify-run/bundle_forged.json \
+	    >/dev/null 2>&1; then \
+	  echo "sentinelwipe: FORGED BUNDLE PASSED THE AUDIT — the verifier is broken" >&2; \
+	  exit 1; \
+	else \
+	  echo "sentinelwipe: forged copy refused, clean bundle proved — verify PASS"; \
+	fi

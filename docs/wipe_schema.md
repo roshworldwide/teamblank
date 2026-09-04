@@ -25,9 +25,10 @@ lines returns zero hits for `device`, `telemetry`, `sanitize`, `medium_witness`,
 Those fields exist. They are here. Before this document they were emitted without a
 contract, which meant a UI binding to them was binding to an undocumented surface.
 
-**What this document does not do:** it does not promise an Ed25519 signature or a Merkle
-root, because neither exists yet. `core/ledger` is a one-line stub. Any UI element implying
-a signed certificate is rendering a cryptographic claim this engine has never made.
+**Signing is a separate schema.** This report is unsigned by design; the signed artifact
+is `sentinelwipe.certificate/1` — built by `core/verify` from this report's integers and
+six-decimal strings, canonicalized per RFC 8785, Ed25519-signed, chained (RFC 6962). A UI
+renders a signature only where a bundle provides one, and says whose digest it shows.
 
 ---
 

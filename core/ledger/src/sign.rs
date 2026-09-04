@@ -290,3 +290,7 @@ mod tests {
         assert_eq!(verify(&swapped), Err(SignError::Invalid));
     }
 }
+
+/// Re-exported so `core/verify` uses the exact key type this crate signs
+/// with — one dalek version in the tree, by construction.
+pub use ed25519_dalek::SigningKey as SigningKeyReexport;
