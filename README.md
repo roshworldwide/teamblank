@@ -161,7 +161,7 @@ Full table:
 | 1 · Reproducible fixture | **runs** — 256 MiB FAT32, 40 planted files, byte-identical from seed |
 | 2 · Carving engine | **runs** — 7 formats, published confidence, two-fragment reassembly |
 | 3 · Wipe engine + behavioural audit | **runs** — overwrite passes, sampled read-back, timing audit, 25 Hz telemetry |
-| 4 · Adversarial loop, Ed25519 ledger, certificate | **architected, not built** — `core/verify` and `core/ledger` are one-line stubs |
+| 4 · Adversarial loop, Ed25519 ledger, certificate | **runs** — `make verify`: carve, wipe, carve again with parameter identity by construction; RFC 8785 canonical certificate (no float ever signed), Ed25519 with the custody statement inside the signed bytes, RFC 6962 chain; a sed-forged bundle is refused while the clean one proves |
 | 5 · Tauri desktop shell | **partial** — `ui/instrument.html` runs the full sequence off recorded artifacts; the Tauri wrapper is not built |
 | 6 · Freeze and `make verify` | **not started** — `make test`, `make demo`, `make verify` exit 1 by design rather than reporting success for work not done |
 
@@ -267,7 +267,11 @@ whose gold is one digit off from the standard is exactly the defect nobody catch
 make test                              # cargo test --release + pytest
 ```
 
-485 cargo tests passed, 0 failed, 4 ignored. 260 pytest passed.
+**cargo 516 passed** — by scope: carve lib 252 · carve bin 19 · carve integration 5+12 ·
+device 42 · wipe lib 145 · wipe bin 10 · ledger 30 · verify loop 1. **pytest 409 passed,
+24 skipped** (the Windows guard backend, on macOS) — fixtures, both guards, both
+canonicalization vector files, carve recall, wipe residue, operator file, module
+declarations. Exit codes are read from `make` itself, never from a pipe.
 
 By scope: carve lib 252 · carve bin 19 · carve integration 5 + 12 · device lib 42 ·
 wipe lib 145 · wipe bin 10. Python: fixtures, guard, guard-conformance vectors, carve

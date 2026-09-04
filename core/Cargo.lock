@@ -225,6 +225,12 @@ dependencies = [
 [[package]]
 name = "sentinelwipe-verify"
 version = "0.0.0"
+dependencies = [
+ "sentinelwipe-carve",
+ "sentinelwipe-device",
+ "sentinelwipe-ledger",
+ "sentinelwipe-wipe",
+]
 
 [[package]]
 name = "sentinelwipe-wipe"

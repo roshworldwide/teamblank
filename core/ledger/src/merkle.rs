@@ -130,6 +130,24 @@ impl Chain {
     pub fn is_empty(&self) -> bool {
         self.leaves.is_empty()
     }
+    /// Rebuild a chain from persisted leaf hashes. The chain file stores ONLY
+    /// hashes — inclusion paths are computed over hashes, so the certificates
+    /// themselves never need re-reading, and a certificate the operator moved
+    /// or deleted still has its membership provable from the bundle's copy.
+    pub fn from_leaf_hashes(hashes: Vec<Hash>) -> Chain {
+        let mut c = Chain::new();
+        for h in hashes {
+            let prev = c.head();
+            let idx = c.leaves.len();
+            c.leaves.push(h);
+            c.entries.push(Entry { index: idx, leaf_sha: h, prev_head: prev });
+        }
+        c
+    }
+    pub fn leaf_hashes(&self) -> &[Hash] {
+        &self.leaves
+    }
+
     /// Append canonical certificate bytes; returns (index, new head).
     /// The head is PUBLISHED by the caller after every append — the whole
     /// point of a head is that other people are holding it.

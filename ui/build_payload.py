@@ -84,6 +84,15 @@ def main():
     pre   = load(live / "carve_pre.json")
     post  = load(live / "carve_post.json")
     tl    = [json.loads(l) for l in (live / "telemetry.jsonl").read_text().splitlines() if l.strip()]
+    ledger = load(live / "ledger.json") if (live / "ledger.json").exists() else None
+    if ledger is not None:
+        # The canonical bytes of the certificate, as a string, so the page can
+        # hash EXACTLY what was signed. Python's canonicalize is byte-identical
+        # to the Rust signer's output -- that is what fixtures/canon_vectors.json
+        # and fixtures/jcs_vectors.json exist to prove.
+        from sentinelwipe.canon import canonicalize
+        cert = ledger["signed_certificate"]["certificate"]
+        ledger["certificate_canonical"] = canonicalize(cert).decode("utf-8")
     frames = [e for e in tl if e.get("ev") == "progress"]
     if not frames: die("telemetry carries no progress frames")
 
@@ -154,6 +163,11 @@ def main():
         "frames": [{"t": e["t_ms"], "fs": e["first_sector"], "n": e["sector_count"],
                     "bd": e["bytes_done"], "bps": e["throughput_bps"], "en": e["entropy_sample"],
                     "hs": e["head_sector"], "hx": e["head_hex"]} for e in frames],
+
+        # The signed artifact, verbatim: certificate envelope + chain proof.
+        # None on a pre-Phase-4 artifact dir, and the page says so rather than
+        # drawing a signature that does not exist.
+        "ledger": ledger,
 
         "carve": {
             "policy": carve["policy"],

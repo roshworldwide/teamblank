@@ -4,4 +4,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "verify"
+path = "src/main.rs"
+
 [dependencies]
+sentinelwipe-carve = { path = "../carve" }
+sentinelwipe-wipe = { path = "../wipe" }
+sentinelwipe-device = { path = "../device" }
+sentinelwipe-ledger = { path = "../ledger" }
