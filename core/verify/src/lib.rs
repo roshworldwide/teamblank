@@ -1,25 +1,3 @@
-//! The adversarial loop: carve the wiped medium with the engine that found the
-//! data, and score what survived.
-//!
-//! Phase 4 step 5. What makes this crate different from the shell pipeline it
-//! replaces (`ui/refresh.py` drove the three binaries by argv):
-//!
-//! ONE BINDING, TWO SCANS. `carve()` is a pure function over bytes and a
-//! `CarveOpts`. Both scans in this loop receive the SAME `&CarveOpts` value,
-//! so parameter drift between them is not refused at runtime — it is
-//! unrepresentable at compile time. The runtime cross-check below still runs,
-//! over the two REPORTS' own policy blocks, because a belt is cheap once the
-//! braces are structural.
-//!
-//! THE SAME EMITTERS AS THE DEMO. The carve reports in the bundle come from
-//! `sentinelwipe_carve::report::emit`, the wipe report from
-//! `JobReport::to_json` — the code the binaries themselves run. A bundle whose
-//! reports came from a private serialiser would be a second truth.
-//!
-//! WHAT THE EXIT CODE MEANS. The loop exits non-zero if ANY admitted
-//! candidate survives the wipe. Zero admitted survivors is not decoration:
-//! it is the claim the whole project makes, measured by its own adversary.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -35,10 +13,6 @@ use sentinelwipe_wipe::audit::Verdict as TimingVerdict;
 use sentinelwipe_device::WriteAuthority;
 use sentinelwipe_wipe::{fmt6, run_job, Authorization, JobSpec, Outcome};
 
-/// Every timing verdict carries what was measured; not every one carries a
-/// floor (no baseline, not applicable). The certificate stores both integers;
-/// a missing floor is 0 and the Ratio denominator is clamped to 1 with the
-/// meaning carried by the timing_code string beside it.
 fn timing_ns(v: &TimingVerdict) -> (u128, u128) {
     match v {
         TimingVerdict::Verified { measured_ns, expected_min_ns }
@@ -54,22 +28,14 @@ fn timing_ns(v: &TimingVerdict) -> (u128, u128) {
 pub struct LoopSpec {
     pub target: PathBuf,
     pub allow_root: PathBuf,
-    /// The operator's typed confirmation — the guard checks it LAST, after
-    /// the allowlist has already said yes. It carries no authority alone.
     pub confirmation: String,
     pub manifest: Option<PathBuf>,
     pub carve_opts: CarveOpts,
     pub run_id: String,
-    /// The exact command that reproduces this loop, recorded in every report.
     pub command: String,
     pub chain_path: PathBuf,
     pub key_path: PathBuf,
-    /// Record the telemetry stream as JSON Lines. Opened through the SAME
-    /// guard as the target, with the exclusive-create precheck the wipe
-    /// binary uses: a recorder is a file this process creates, and one policy
-    /// with two behaviours is no policy.
     pub trace: Option<PathBuf>,
-    /// Telemetry period in milliseconds; None keeps the engine default.
     pub period_ms: Option<u64>,
 }
 
@@ -87,10 +53,6 @@ pub enum LoopError {
     Io(String),
     Refused(String),
     Wipe(String),
-    /// The two carve reports disagree about their own parameters. With one
-    /// CarveOpts binding this is unreachable; the check exists because a belt
-    /// is cheap once the braces are structural, and because a future caller
-    /// could construct two spec values and believe them equal.
     ParameterDrift { field: String },
     Ledger(String),
 }
@@ -99,8 +61,6 @@ fn io<E: std::fmt::Display>(e: E) -> LoopError {
     LoopError::Io(e.to_string())
 }
 
-/// The policy blocks of the two reports, compared field by field. Extracted
-/// with the same minimal JSON reader the carve binary uses on manifests.
 fn policy_drift(pre: &str, post: &str) -> Result<(), LoopError> {
     let a = Json::parse(pre.as_bytes());
     let b = Json::parse(post.as_bytes());
@@ -113,12 +73,8 @@ fn policy_drift(pre: &str, post: &str) -> Result<(), LoopError> {
 }
 
 pub fn run_loop(spec: &LoopSpec) -> Result<LoopOutcome, LoopError> {
-    let started = "1970-01-01T00:00:00Z"; // the certificate carries no wall time:
-    // a timestamp is the one field that would break deterministic_core, and the
-    // chain's append order already carries "when" in the only sense that is
-    // verifiable offline.
+    let started = "1970-01-01T00:00:00Z";
 
-    // ---- 1 · carve, before -------------------------------------------------
     let bytes_pre = fs::read(&spec.target).map_err(io)?;
     let image_sha_pre = sha256_hex(&bytes_pre);
     let pre = carve(&bytes_pre, &spec.carve_opts);
@@ -141,7 +97,6 @@ pub fn run_loop(spec: &LoopSpec) -> Result<LoopOutcome, LoopError> {
     let report_pre = emit(&meta_pre, &bytes_pre, &target_str, &image_sha_pre,
                           &pre, gt_pre.as_ref(), started, 0);
 
-    // ---- 2 · wipe, through the guard ---------------------------------------
     let mut pspec = guard::PolicySpec::with_roots(
         [spec.allow_root.to_string_lossy().to_string()].into_iter(),
     );
@@ -164,8 +119,6 @@ pub fn run_loop(spec: &LoopSpec) -> Result<LoopOutcome, LoopError> {
     jspec.target_named = target_str.clone();
     jspec.target_resolved = decision.resolved.clone();
     jspec.command = spec.command.clone();
-    // The report records WHO allowed this, exactly as the wipe binary does: a
-    // loop whose report says "authorization: null" ran outside its own story.
     jspec.authorization = Some(Authorization {
         decision_code: decision.code.to_string(),
         policy_digest,
@@ -208,7 +161,6 @@ pub fn run_loop(spec: &LoopSpec) -> Result<LoopOutcome, LoopError> {
     };
     let report_wipe = job.to_json();
 
-    // ---- 3 · carve, after — the SAME opts binding --------------------------
     let bytes_post = fs::read(&spec.target).map_err(io)?;
     let image_sha_post = sha256_hex(&bytes_post);
     let post = carve(&bytes_post, &spec.carve_opts);
@@ -221,7 +173,6 @@ pub fn run_loop(spec: &LoopSpec) -> Result<LoopOutcome, LoopError> {
 
     policy_drift(&report_pre, &report_post)?;
 
-    // ---- 4 · certificate, signature, chain ---------------------------------
     let audit = &job.overwrite_audit;
     let (measured_ns, expected_ns) = timing_ns(&audit.verdict);
     let cov = job
@@ -271,8 +222,6 @@ pub fn run_loop(spec: &LoopSpec) -> Result<LoopOutcome, LoopError> {
         timing_ratio: Ratio::new(measured_ns as i64, expected_ns.max(1) as i64)
             .map_err(|e| LoopError::Ledger(e.to_string()))?,
         timing_threshold: Ratio::new(1, 20).map_err(|e| LoopError::Ledger(e.to_string()))?,
-        // fmt6 is the SAME routine the wipe report writer uses: the string is
-        // verbatim-identical by construction, not by re-parsing.
         entropy_before: Dec6::new(&fmt6(job.entropy_before.unwrap_or(0.0)))
             .map_err(|e| LoopError::Ledger(e.to_string()))?,
         entropy_after: Dec6::new(&fmt6(job.entropy_after.unwrap_or(0.0)))
@@ -289,7 +238,6 @@ pub fn run_loop(spec: &LoopSpec) -> Result<LoopOutcome, LoopError> {
     save_chain(&spec.chain_path, &chain)?;
     let path = chain.inclusion_path(index).expect("just appended");
 
-    // ---- 5 · one bundle ----------------------------------------------------
     let signed_json = String::from_utf8(canonical(&signed).map_err(|e| LoopError::Ledger(e.to_string()))?)
         .expect("canonical is utf-8");
     let path_json: Vec<String> = path
@@ -326,7 +274,7 @@ pub fn run_loop(spec: &LoopSpec) -> Result<LoopOutcome, LoopError> {
         chain_index: index,
         certificate_sha_hex: {
             use sentinelwipe_ledger::merkle::hex as h2;
-            let _ = h2; // sha of leaf lives in chain entry; expose head instead
+            let _ = h2;
             merkle_hex(&head)
         },
     })
@@ -353,7 +301,6 @@ fn load_or_create_key(path: &Path) -> Result<ed25519_dalek_reexport::SigningKey,
     }
 }
 
-/// One leaf hash per line, hex. Only hashes: see Chain::from_leaf_hashes.
 fn load_chain(path: &Path) -> Result<Chain, LoopError> {
     match fs::read_to_string(path) {
         Ok(text) => {
@@ -390,17 +337,10 @@ fn save_chain(path: &Path, chain: &Chain) -> Result<(), LoopError> {
     fs::write(path, text).map_err(io)
 }
 
-/// The ledger already depends on ed25519-dalek; verify reuses that exact
-/// version through the ledger's re-export rather than declaring its own,
-/// so the two crates can never disagree about the key type.
 mod ed25519_dalek_reexport {
     pub use sentinelwipe_ledger::sign::SigningKeyReexport as SigningKey;
 }
 
-/// The auditor's move, with nothing but a bundle in hand: extract the signed
-/// certificate, verify the Ed25519 signature over its canonical bytes, then
-/// verify the inclusion path against the head the bundle itself published.
-/// Two independent checks; each can fail alone, and the message says which.
 pub fn audit_bundle(bundle: &str) -> Result<String, String> {
     let start = bundle
         .find("\"signed_certificate\": ")
@@ -432,7 +372,6 @@ pub fn audit_bundle(bundle: &str) -> Result<String, String> {
     let leaf = verify_signature(&envelope)
         .map_err(|e| format!("SIGNATURE INVALID: {e:?}"))?;
 
-    // chain block: head + inclusion path, parsed from the bundle's own JSON.
     let head_hex = field_after(bundle, "\"head\": \"").ok_or("bundle has no chain head")?;
     let mut head = [0u8; 32];
     parse_hash(&head_hex, &mut head).ok_or("chain head is not a sha256")?;
@@ -441,9 +380,6 @@ pub fn audit_bundle(bundle: &str) -> Result<String, String> {
     let path_end = chain_area.find(']').ok_or("inclusion_path never closes")?;
     let mut cursor = &chain_area[..path_end];
     loop {
-        // The writer emits {"left":"<hex>"} with no space; accept a space
-        // too, because an auditor may hand-pretty-print a bundle before
-        // checking it, and whitespace must never change a verdict.
         let find_key = |k: &str| -> Option<usize> {
             cursor.find(&format!("\"{k}\":\"")).map(|i| i + k.len() + 4)
                 .or_else(|| cursor.find(&format!("\"{k}\": \"")).map(|i| i + k.len() + 5))
@@ -485,14 +421,9 @@ fn parse_hash(hexs: &str, out: &mut [u8; 32]) -> Option<()> {
     Some(())
 }
 
-/// Sanity used by main: a bundle must parse as JSON somewhere honest. The
-/// strict jcs parser refuses the report floats BY DESIGN, so this check
-/// parses only the signed_certificate region, which is float-free.
 pub fn bundle_certificate_roundtrips(bundle: &str) -> bool {
     let Some(start) = bundle.find("\"signed_certificate\": ") else { return false };
     let rest = &bundle[start + "\"signed_certificate\": ".len()..];
-    // The canonical envelope is one JSON object; find its extent by brace depth
-    // OUTSIDE strings (the lesson of the emitter extraction, applied).
     let (mut depth, mut in_str, mut esc) = (0i64, false, false);
     for (i, c) in rest.char_indices() {
         match (in_str, esc, c) {

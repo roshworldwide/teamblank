@@ -1,18 +1,3 @@
-"""Adversarial suite for the write guard.
-
-Every ATTACK_* tries to get a descriptor on something the guard must refuse.
-Every ALLOW_* proves the guard is not merely refusing everything, which would
-pass an attack suite and fail the project.
-
-The red-team table at the end asserts on the DECISION, never on whether a
-descriptor came back. That distinction is the whole point: the measured defect
-in the previous prototype was a row that read "refused" because the process
-lacked root, while the guard had already returned ALLOW_DEVICE for the boot
-drive. A guard stopped by EPERM is not a guard.
-
-Run: uv run pytest -q tests/test_guard.py
-"""
-
 from __future__ import annotations
 
 import errno
@@ -26,26 +11,12 @@ from pathlib import Path
 
 import pytest
 
-# fixtures/ is a directory at the repo root, not on pythonpath (pyproject sets
-# pythonpath = ["py"]). Import it as a namespace package from the repo root.
 _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from fixtures import guard as G  # noqa: E402
 
-# Every clause below exercises the POSIX backend's attack surface: symlink
-# leaves, symlinked path components, hardlinks from outside a root, /dev/disk0
-# aliases, and the openat(O_NOFOLLOW) descent that defeats them. None of that is
-# reachable on Windows -- there is no O_NOFOLLOW, os.supports_dir_fd is empty,
-# st_nlink is always 1, and creating a symlink needs elevation -- so running
-# these here would report red for a platform difference rather than a defect.
-#
-# The Windows backend is NOT left untested by this skip: tests/test_guard_windows.py
-# covers it, and the difference in what the two backends guarantee is written down
-# in fixtures/guard/__init__.py and docs/architecture.md D7. The skip is loud and
-# names what it is not covering, because a silent skip in a guard suite prints
-# "ok" for work nobody did.
 pytestmark = pytest.mark.skipif(
     os.name == "nt",
     reason=(
@@ -56,17 +27,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-IMG = 4 * 1024 * 1024          # 4 MiB
+IMG = 4 * 1024 * 1024
 MIB = 1 << 20
-
-
-# --------------------------------------------------------------------- lab
 
 
 @pytest.fixture()
 def lab(tmp_path):
-    """A sandbox. <lab>/fixtures is the only allowed root; <lab>/outside holds
-    a victim file that no attack may reach."""
     root = tmp_path / "fixtures"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -93,12 +59,7 @@ def auth(pol, target, conf=None, **kw):
     return G.authorize(pol, str(target), conf, **kw)
 
 
-# ----------------------------------------------------------- interface shape
-
-
 def test_contract_signatures():
-    """The interface contract, asserted rather than assumed. Three prototypes
-    diverged last round; this test is why that cannot happen silently."""
     import inspect
     p = list(inspect.signature(G.Policy).parameters)
     assert p[0] == "roots"
@@ -111,8 +72,6 @@ def test_contract_signatures():
 
 
 def test_policy_accepts_a_plain_list(lab):
-    """The contract spells roots as list[str]. A list must work and must not
-    break the frozen dataclass."""
     pol = G.Policy(roots=[str(lab["root"])])
     assert pol.roots == (str(lab["root"]),)
     assert hash(pol) == hash(G.Policy(roots=[str(lab["root"])]))
@@ -128,9 +87,6 @@ def test_open_authorized_returns_an_int_fd(lab):
         os.close(fd)
 
 
-# ------------------------------------------------------------------ baseline
-
-
 def test_ALLOW_plain_image_in_root(lab):
     d = auth(lab["policy"], lab["img"])
     assert d.allowed, d.code
@@ -139,8 +95,6 @@ def test_ALLOW_plain_image_in_root(lab):
 
 
 def test_ALLOW_two_argument_form_is_usable(lab):
-    """authorize(policy, path) is how the contract spells it. If the default
-    policy could never allow through that form the contract would be a lie."""
     assert G.authorize(lab["policy"], str(lab["img"])).allowed
 
 
@@ -177,15 +131,10 @@ def test_ALLOW_read_mode_gives_a_read_only_fd(lab):
 
 
 def test_decision_is_deterministic(lab):
-    """No clock, no random, no host state in a Decision: two identical calls
-    are equal, so the audit line is reproducible beside the image."""
     a = auth(lab["policy"], lab["img"])
     b = auth(lab["policy"], lab["img"])
     assert a == b
     assert "ts" not in a.as_record() and "time" not in a.as_record()
-
-
-# ------------------------------------------------------- ATTACK: symlink out
 
 
 def test_ATTACK_symlink_leaf_to_outside_file(lab):
@@ -193,7 +142,6 @@ def test_ATTACK_symlink_leaf_to_outside_file(lab):
     os.symlink(str(lab["victim"]), str(link))
     d = auth(lab["confirming"], link, str(link))
     assert not d.allowed and d.code == G.DENY_NOT_ALLOWLISTED
-    # the confirmation the attacker would have to type is not the one they know
     assert d.resolved == os.path.realpath(str(lab["victim"]))
 
 
@@ -215,7 +163,6 @@ def test_ATTACK_symlink_leaf_to_rdisk0(lab):
 
 
 def test_ATTACK_symlinked_directory_component(lab):
-    """fixtures/sub -> /etc ; target fixtures/sub/hosts"""
     (lab["root"] / "sub").symlink_to("/etc")
     d = auth(lab["policy"], lab["root"] / "sub" / "hosts",
              os.path.realpath("/etc/hosts"))
@@ -223,16 +170,10 @@ def test_ATTACK_symlinked_directory_component(lab):
 
 
 def test_ATTACK_symlinked_root_itself(tmp_path):
-    """The allowed root is itself a symlink to somewhere dangerous. Policy
-    construction realpaths the root, so the inode recorded is /private/etc's,
-    which is on the forbidden list -- refused at construction, not at use."""
     r = tmp_path / "fixtures"
     r.symlink_to("/etc")
     with pytest.raises(G.PolicyError):
         G.Policy(roots=[str(r)])
-
-
-# ------------------------------------------------------ ATTACK: path escapes
 
 
 def test_ATTACK_dotdot_escape(lab):
@@ -242,8 +183,6 @@ def test_ATTACK_dotdot_escape(lab):
 
 
 def test_ATTACK_dotdot_that_returns_inside_is_allowed(lab):
-    """A '..' that lands back inside the root is legitimate. A guard that
-    string-matches '..' and refuses is wrong, not safe."""
     (lab["root"] / "sub").mkdir()
     t = str(lab["root"] / "sub" / ".." / "disk.img")
     d = auth(lab["policy"], t)
@@ -252,7 +191,6 @@ def test_ATTACK_dotdot_that_returns_inside_is_allowed(lab):
 
 
 def test_ATTACK_sibling_prefix_confusion(tmp_path):
-    """/x/fixtures is the root; /x/fixtures-evil must not pass a prefix test."""
     root = tmp_path / "fixtures"
     root.mkdir()
     evil = tmp_path / "fixtures-evil"
@@ -278,12 +216,7 @@ def test_ATTACK_empty_target(lab):
     assert G.authorize(lab["policy"], "").code == G.DENY_EMPTY
 
 
-# ---------------------------------------------------------- ATTACK: hardlink
-
-
 def test_ATTACK_hardlink_from_outside_into_root(lab):
-    """The escape realpath cannot see: the path is inside the root, every
-    component is real, but the inode lives outside."""
     link = lab["root"] / "planted.img"
     os.link(str(lab["victim"]), str(link))
     assert os.stat(str(link)).st_nlink == 2
@@ -300,12 +233,7 @@ def test_ATTACK_hardlink_also_refused_at_open(lab):
     assert lab["victim"].read_bytes()[:4] == b"\xaa\xaa\xaa\xaa"
 
 
-# -------------------------------------------------- ATTACK: macOS /tmp alias
-
-
 def test_ALLOW_tmp_alias_resolves():
-    """/tmp -> /private/tmp. A root spelled /tmp/... and a target spelled
-    /private/tmp/... are the same place and must agree."""
     if not os.path.islink("/tmp"):
         pytest.skip("/tmp is not a symlink on this host")
     base = tempfile.mkdtemp(dir="/tmp")
@@ -315,17 +243,15 @@ def test_ALLOW_tmp_alias_resolves():
         img = os.path.join(root, "d.img")
         with open(img, "wb") as fh:
             fh.write(b"\x00" * IMG)
-        pol = G.Policy(roots=[root])                       # spelled /tmp/...
+        pol = G.Policy(roots=[root])
         via_private = os.path.join(os.path.realpath(root), "d.img")
-        assert G.authorize(pol, via_private).allowed       # spelled /private/tmp/...
+        assert G.authorize(pol, via_private).allowed
         assert G.authorize(pol, img).allowed
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
 
 def test_tmp_and_private_tmp_roots_are_one_policy():
-    """Two teammates spell the same root differently; the digest must agree,
-    because it records realpaths."""
     if not os.path.islink("/tmp"):
         pytest.skip("/tmp is not a symlink")
     base = tempfile.mkdtemp(dir="/tmp")
@@ -338,22 +264,7 @@ def test_tmp_and_private_tmp_roots_are_one_policy():
         shutil.rmtree(base, ignore_errors=True)
 
 
-# ------------------------------------------- ATTACK: case-insensitive volume
-
-
 def test_case_variant_spelling_of_the_root_is_refused_by_the_decision_itself(lab):
-    """On a case-insensitive volume FIXTURES/ and fixtures/ are one directory,
-    so inode containment says yes -- and open_authorized's O_NOFOLLOW descent,
-    which re-identifies the root by STRING, then says no.
-
-    MEASURED DIVERGENCE, now closed: authorize() used to return ALLOW_FILE here
-    while the open returned DENY_NOT_ALLOWLISTED.  It failed closed, so it was
-    never a hole, but --plan and the certificate's authorization.decision_code
-    both read the DECISION, and both published ALLOW_FILE for a target the
-    engine would refuse.  authorize() now takes the descent's own predicate as
-    a final conjunct, so the two agree and the refusal is recorded once, at
-    decision time, under one code.
-    """
     upper = str(lab["root"]).replace("/fixtures", "/FIXTURES")
     if not os.path.exists(upper):
         pytest.skip("volume is case-sensitive")
@@ -364,8 +275,6 @@ def test_case_variant_spelling_of_the_root_is_refused_by_the_decision_itself(lab
         G.open_authorized(lab["policy"], target, "r+")
     assert ei.value.decision.code == d.code, (
         "the decision and the open must now give the SAME code for this target")
-    # And this is not a guard that refuses everything: the same file, spelled
-    # the way the root is spelled, is still allowed and still opens.
     ok = G.authorize(lab["policy"], str(lab["img"]))
     assert ok.allowed and ok.code == G.ALLOW_FILE, ok.code
     fd = G.open_authorized(lab["policy"], str(lab["img"]), "r+")
@@ -373,15 +282,11 @@ def test_case_variant_spelling_of_the_root_is_refused_by_the_decision_itself(lab
 
 
 def test_case_variant_is_not_a_widening(lab):
-    """Case folding must not let anything OUTSIDE in."""
     upper = str(lab["outside"]).replace("/outside", "/OUTSIDE")
     if not os.path.exists(upper):
         pytest.skip("volume is case-sensitive")
     d = G.authorize(lab["policy"], os.path.join(upper, "victim.img"))
     assert not d.allowed and d.code == G.DENY_NOT_ALLOWLISTED
-
-
-# ----------------------------------------------- macOS volfs, /.vol/<dev>/<ino>
 
 
 def _vol(path):
@@ -390,11 +295,6 @@ def _vol(path):
 
 
 def test_volfs_is_a_real_bypass_surface():
-    """The measurement the /.vol rule rests on, recorded rather than asserted
-    in prose. Unprivileged, on this host: /.vol/<st_dev>/<st_ino> reaches any
-    file on the volume, realpath leaves the string alone, stat reports the
-    underlying regular file, and a plain O_RDWR open succeeds. Every hygiene
-    clause the guard has -- S_ISREG, nlink, size -- passes on it."""
     if sys.platform != "darwin" or not os.path.isdir("/.vol"):
         pytest.skip("no /.vol on this host")
     d = tempfile.mkdtemp(dir="/private/tmp")
@@ -408,7 +308,7 @@ def test_volfs_is_a_real_bypass_surface():
         st2 = os.stat(v)
         assert (st2.st_dev, st2.st_ino) == (st.st_dev, st.st_ino)
         assert st2.st_nlink == 1 and st2.st_size == 4096
-        fd = os.open(v, os.O_RDWR)      # succeeds without privilege
+        fd = os.open(v, os.O_RDWR)
         os.close(fd)
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -423,12 +323,6 @@ def test_ATTACK_volfs_reaches_a_file_outside_the_root(lab):
 
 
 def test_ATTACK_volfs_composed_under_the_allowed_root(lab):
-    """The sharp case. /.vol/<dev>/<inode-of-the-root>/disk.img walks up onto
-    the allowed root's own inode, so containment MATCHES -- correctly, it is
-    that file. Measured before the rule was added: authorize() returned
-    ALLOW_FILE while open_authorized() refused with DENY_NOT_ALLOWLISTED, and
-    the confirmation string offered to the operator was an inode number.
-    Refused whole now, and the two halves must agree."""
     if sys.platform != "darwin" or not os.path.isdir("/.vol"):
         pytest.skip("no /.vol on this host")
     t = _vol(lab["root"]) + "/disk.img"
@@ -455,10 +349,6 @@ def test_ATTACK_volfs_as_a_policy_root():
 
 
 def test_ATTACK_depth_one_root_refused():
-    """MIN_ROOT_DEPTH, pinned against a real directory. The forbidden-name
-    list does not cover every top-level directory a host may carry, so the
-    depth floor is the clause that stops the ones it misses -- /.vol among
-    them, which would hand out the whole volume by inode number."""
     import fixtures.guard as _g
     cands = [n for n in sorted(os.listdir("/"))
              if os.path.isdir("/" + n) and "/" + n not in _g.FORBIDDEN_ROOTS
@@ -472,14 +362,7 @@ def test_ATTACK_depth_one_root_refused():
         assert any(k in msg for k in ("shallow", "system", "HOME")), msg
 
 
-# ---------------------------------------------------- macOS firmlink reality
-
-
 def test_firmlink_two_strings_one_inode():
-    """Measured on the dev machine: /Users and /System/Volumes/Data/Users are
-    the same inode and realpath collapses neither. This is the fact that
-    forces inode containment; the test records it rather than asserting it in
-    prose."""
     a, b = "/Users", "/System/Volumes/Data/Users"
     if not (os.path.isdir(a) and os.path.isdir(b)):
         pytest.skip("no firmlink on this host")
@@ -487,9 +370,6 @@ def test_firmlink_two_strings_one_inode():
     assert (sa.st_dev, sa.st_ino) == (sb.st_dev, sb.st_ino)
     assert os.path.realpath(a) != os.path.realpath(b)
     assert G.contained_by_inode(b, [(sa.st_dev, sa.st_ino)]) is not None
-
-
-# ------------------------------------------------------------ ATTACK: devices
 
 
 def test_ATTACK_dev_disk0_direct(lab):
@@ -507,8 +387,6 @@ def test_ATTACK_dev_rdisk0_direct(lab):
 def test_ATTACK_dev_stdout(lab):
     d = G.authorize(lab["policy"], "/dev/stdout", "/dev/stdout")
     assert not d.allowed
-    # whatever /dev/stdout happens to resolve to on this host, the refusal is
-    # a containment or device refusal, never an incidental hygiene one
     assert d.code in (G.DENY_DEVICE_PLATFORM, G.DENY_DEVICE_MODE_OFF,
                       G.DENY_NOT_ALLOWLISTED, G.DENY_MISSING), d.code
 
@@ -519,13 +397,6 @@ def test_ATTACK_dev_null(lab):
 
 
 def test_ATTACK_dev_fd_reference_to_outside_file(lab):
-    """Open the victim, then name it as /dev/fd/N.
-
-    Measured on macOS 26.6.2: realpath does NOT rewrite /dev/fd/N to the
-    underlying path -- it stays "/dev/fd/3" -- while stat() DOES report the
-    underlying regular file. Type, nlink and size all pass, so containment is
-    the only thing between this and a write. It holds, because the string
-    /dev/fd/N can never sit under an allowed root."""
     fd = os.open(str(lab["victim"]), os.O_RDONLY)
     try:
         t = f"/dev/fd/{fd}"
@@ -556,18 +427,6 @@ def test_ATTACK_device_allowlisted_but_env_off(lab):
 
 
 def test_ATTACK_the_measured_defect_disk0_fully_armed(lab):
-    """THE regression test for the defect this round exists to not repeat.
-
-    Previous prototype, red-team row "/dev/disk0 allowlisted + env set":
-    result "refused", clause "OSERROR/1". EPERM. The guard had returned
-    ALLOW_DEVICE for the internal boot drive and only the absence of root
-    privilege stopped the write. That is CLAUDE.md rule 4's disqualifying
-    defect reached through the documented escape hatch.
-
-    Here the refusal must come from POLICY: authorize() says no, with a DENY_
-    code, and open_authorized raises GuardError rather than OSError. Asserted
-    on the decision, because a decision is what a guard produces; an errno is
-    what the kernel produces after the guard has already failed."""
     if not os.path.exists("/dev/disk0"):
         pytest.skip("/dev/disk0 absent on this host")
     pol = G.Policy(roots=[str(lab["root"])], devices=["/dev/disk0"],
@@ -585,10 +444,6 @@ def test_ATTACK_the_measured_defect_disk0_fully_armed(lab):
 
 
 def test_ATTACK_boot_disk_refused_even_when_fully_allowlisted(lab):
-    """Three factors present and the device explicitly listed -- still
-    refused, because it is the disk the running system boots from. This is
-    the clause that makes 'wipe the demo laptop' unreachable by
-    misconfiguration."""
     rootdev = G.root_backing_device()
     if rootdev is None:
         pytest.skip("cannot identify the root-backing device")
@@ -614,8 +469,6 @@ def test_ATTACK_whole_disk_of_boot_volume_refused(lab):
 
 
 def test_ATTACK_device_reached_through_an_alias(lab):
-    """/dev/./disk0 must not satisfy a literal allowlist entry by being
-    normalised into it."""
     pol = G.Policy(roots=[str(lab["root"])], devices=["/dev/disk0"],
                    allow_device_targets=True, require_confirmation=True)
     d = G.authorize(pol, "/dev/./disk0", "/dev/disk0",
@@ -625,27 +478,9 @@ def test_ATTACK_device_reached_through_an_alias(lab):
 
 
 def test_arming_devices_without_confirmation_is_a_policy_error(lab):
-    """A device policy that does not demand the typed confirmation is not a
-    weaker policy, it is an unsafe one. Refused at construction."""
     with pytest.raises(G.PolicyError):
         G.Policy(roots=[str(lab["root"])], devices=["/dev/disk9"],
                  allow_device_targets=True)
-
-
-# ------------------------------- the device clauses BEHIND the macOS blanket
-#
-# MEASURED gap this section closes: 10 of the 48 red-team attack rows are
-# settled by clause D0 alone -- macOS refuses every device target before the
-# allowlist, the environment factor, the alias rule, the root-backing-disk
-# rule or the typed confirmation is consulted. All ten return
-# DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM, including the row labelled
-# THE MEASURED DEFECT. So on this host the entire allowlist + confirmation
-# path that CLAUDE.md rule 4 calls a disqualifying defect area had no test
-# that could fail, and Phase 3's wipe depends on exactly that path.
-#
-# authorize(..., _platform="linux") bypasses D0 and ONLY D0. Each test below
-# names the clause it reaches and asserts its specific code, so a clause that
-# silently stops firing fails here instead of hiding behind the blanket.
 
 
 def _armed(root, devices):
@@ -658,9 +493,6 @@ DEV_ON = {"SENTINELWIPE_DEVICE_MODE": "1"}
 
 
 def test_the_seam_only_bypasses_D0(lab):
-    """The control for every test in this section: the same call is refused by
-    D0 on the real platform and reaches a LATER clause through the seam. If
-    this stops being true the section is measuring nothing."""
     if sys.platform != "darwin":
         pytest.skip("D0 is the macOS clause")
     pol = G.Policy(roots=[str(lab["root"])])
@@ -669,17 +501,12 @@ def test_the_seam_only_bypasses_D0(lab):
 
 
 def test_D1_devices_disabled_in_the_policy(lab):
-    """The default. allow_device_targets is False, so a device is refused
-    before the allowlist is even read."""
     pol = G.Policy(roots=[str(lab["root"])])
     d = G.authorize(pol, "/dev/null", "/dev/null", env=DEV_ON, **LINUX)
     assert not d.allowed and d.code == G.DENY_DEVICE_MODE_OFF
 
 
 def test_D2_environment_factor_absent(lab):
-    """Armed policy, correct confirmation, allowlisted device -- and still
-    refused, because SENTINELWIPE_DEVICE_MODE is not set. The second of the
-    three factors, tested on its own."""
     pol = _armed(lab["root"], ["/dev/null"])
     d = G.authorize(pol, "/dev/null", "/dev/null", env={}, **LINUX)
     assert not d.allowed and d.code == G.DENY_DEVICE_ENV_OFF
@@ -692,7 +519,6 @@ def test_D2_environment_factor_absent(lab):
 
 
 def test_D3_device_not_on_the_allowlist(lab):
-    """Both other factors present; the target is simply not listed."""
     if not os.path.exists("/dev/zero"):
         pytest.skip("/dev/zero absent")
     pol = _armed(lab["root"], ["/dev/null"])
@@ -701,18 +527,12 @@ def test_D3_device_not_on_the_allowlist(lab):
 
 
 def test_D4_an_allowlisted_alias_is_still_an_alias(lab):
-    """The allowlist entry itself is the alias spelling, so D3 passes and D4
-    is the clause that refuses: the name must be compared literally AND equal
-    its own realpath, or a listed '/dev/./null' would authorise '/dev/null'."""
     pol = _armed(lab["root"], ["/dev/./null"])
     d = G.authorize(pol, "/dev/./null", "/dev/null", env=DEV_ON, **LINUX)
     assert not d.allowed and d.code == G.DENY_DEVICE_ALIAS
 
 
 def test_D5_the_running_systems_disk_is_refused_with_all_factors_present(lab):
-    """The clause that makes 'wipe the demo laptop' unreachable by
-    misconfiguration, reached for the first time on this host: policy armed,
-    env set, device explicitly allowlisted, confirmation correct."""
     rootdev = G.root_backing_device()
     if rootdev is None:
         pytest.skip("cannot identify the root-backing device")
@@ -722,7 +542,6 @@ def test_D5_the_running_systems_disk_is_refused_with_all_factors_present(lab):
 
 
 def test_D5_covers_the_whole_disk_and_its_slices(lab):
-    """Not only the exact slice: any device on the same whole disk."""
     rootdev = G.root_backing_device()
     if rootdev is None:
         pytest.skip("cannot identify the root-backing device")
@@ -735,9 +554,6 @@ def test_D5_covers_the_whole_disk_and_its_slices(lab):
 
 
 def test_D6_confirmation_is_unconditional_for_devices(lab):
-    """Every factor satisfied and the device is NOT the system disk -- the
-    only path that reaches the confirmation clause at all. Absent, wrong and
-    prefix confirmations are each refused with their own code."""
     pol = _armed(lab["root"], ["/dev/null"])
     d = G.authorize(pol, "/dev/null", None, env=DEV_ON, **LINUX)
     assert not d.allowed and d.code == G.DENY_CONFIRMATION_ABSENT
@@ -748,12 +564,6 @@ def test_D6_confirmation_is_unconditional_for_devices(lab):
 
 
 def test_the_device_path_can_actually_say_yes(lab):
-    """The positive control. Without it every assertion above could be passing
-    because the device path refuses everything unconditionally, which is what
-    D0 already does and what this section exists to look behind.
-
-    A DECISION only: no descriptor is opened, and /dev/null is chosen because
-    it is a character device that is not on any disk."""
     pol = _armed(lab["root"], ["/dev/null"])
     d = G.authorize(pol, "/dev/null", "/dev/null", env=DEV_ON, **LINUX)
     assert d.allowed is True
@@ -763,35 +573,22 @@ def test_the_device_path_can_actually_say_yes(lab):
 
 
 def test_the_seam_does_not_reach_the_file_rules(lab):
-    """_platform bypasses D0 and nothing else. The macOS-specific FILE rule --
-    the /.vol inode namespace -- still keys on the real sys.platform, so the
-    seam cannot be used to widen anything but the device clause it names."""
     if sys.platform != "darwin":
         pytest.skip("/.vol is macOS")
     st = os.stat(str(lab["img"]))
     volpath = f"/.vol/{st.st_dev}/{st.st_ino}"
     d = G.authorize(lab["policy"], volpath, **LINUX)
     assert not d.allowed and d.code == G.DENY_SYNTHETIC
-    # And a plain outside-the-root file is refused identically with the seam.
     assert G.authorize(lab["policy"], str(lab["victim"]), **LINUX).allowed is False
 
 
 def test_the_seam_defaults_to_the_real_platform(lab):
-    """Nothing in the fixture build path passes _platform, so the default must
-    be sys.platform. Asserted rather than assumed."""
     a = G.authorize(lab["policy"], "/dev/null")
     b = G.authorize(lab["policy"], "/dev/null", _platform=sys.platform)
     assert a.code == b.code
 
 
-# ------------------------------------------------- ATTACK: confirmation abuse
-
-
 def test_no_confirmation_clause_for_a_refused_target(lab):
-    """A refused target must never reach the confirmation clause, so the tool
-    never teaches an operator that typing harder gets them through. The policy
-    here DOES require confirmation and none was supplied; the refusal is still
-    the containment code."""
     d = auth(lab["confirming"], lab["victim"], None)
     assert d.code == G.DENY_NOT_ALLOWLISTED
     assert d.code != G.DENY_CONFIRMATION_ABSENT
@@ -805,8 +602,6 @@ def test_no_confirmation_clause_for_a_refused_hardlink(lab):
 
 
 def test_ATTACK_confirmation_cannot_add_to_allowlist(lab):
-    """--i-understand naming an off-allowlist target must not admit it. The
-    confirmation is a conjunct evaluated after the allowlist, never a grant."""
     v = str(lab["victim"])
     d = G.authorize(lab["confirming"], v, os.path.realpath(v))
     assert not d.allowed and d.code == G.DENY_NOT_ALLOWLISTED
@@ -828,9 +623,6 @@ def test_ATTACK_confirmation_prefix_denies(lab):
 
 
 def test_ATTACK_confirmation_matching_the_arg_not_the_resolved(lab):
-    """The operator types the pre-resolution spelling. Must fail: the value
-    compared is the guard's own resolution, so the human sees what will
-    actually be written, not what they typed."""
     (lab["root"] / "sub").mkdir()
     t = str(lab["root"] / "sub" / ".." / "disk.img")
     d = G.authorize(lab["confirming"], t, t)
@@ -854,9 +646,6 @@ def test_flag_value_is_used_verbatim():
                                   stdin_isatty=False) == "/x/y.img"
 
 
-# ------------------------------------------------------- ATTACK: wrong shapes
-
-
 def test_ATTACK_directory_target(lab):
     d = auth(lab["policy"], lab["root"])
     assert not d.allowed and d.code == G.DENY_NOT_REGULAR
@@ -878,7 +667,7 @@ def test_ATTACK_undersized_file_refused(lab):
 
 def test_ATTACK_oversized_file_refused(lab):
     big = lab["root"] / "huge.img"
-    with open(big, "wb") as fh:          # sparse; no bytes actually written
+    with open(big, "wb") as fh:
         fh.truncate(16 * (1 << 30))
     d = auth(lab["sized"], big)
     assert not d.allowed and d.code == G.DENY_SIZE
@@ -895,12 +684,7 @@ def test_ATTACK_unsupported_mode(lab):
     assert auth(lab["policy"], lab["img"], mode=None).code == G.DENY_MODE
 
 
-# ------------------------------------------------------ ATTACK: create modes
-
-
 def test_ATTACK_create_through_a_dangling_symlink_out_of_the_root(lab):
-    """The create path's version of the symlink escape: the leaf is a dangling
-    symlink pointing OUTSIDE the root, so the file would be created outside."""
     link = lab["root"] / "new.img"
     os.symlink(str(lab["outside"] / "planted.img"), str(link))
     d = auth(lab["policy"], link, mode="x")
@@ -934,9 +718,6 @@ def test_ATTACK_x_mode_refuses_to_replace(lab):
 
 
 def test_create_uses_O_EXCL_so_a_planted_leaf_cannot_be_followed(lab):
-    """Direct proof of the primitive open_authorized() uses for a create: even
-    holding a descriptor on the root, an O_CREAT|O_EXCL|O_NOFOLLOW create fails
-    with EEXIST when the leaf name has become a symlink."""
     os.symlink(str(lab["victim"]), str(lab["root"] / "n.img"))
     d0 = os.open(str(lab["root"]), os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -947,9 +728,6 @@ def test_create_uses_O_EXCL_so_a_planted_leaf_cannot_be_followed(lab):
     finally:
         os.close(d0)
     assert lab["victim"].read_bytes()[:4] == b"\xaa\xaa\xaa\xaa"
-
-
-# ------------------------------------------------------------- ATTACK: policy
 
 
 @pytest.mark.parametrize("bad", ["/", "/dev", "/Volumes", "/tmp", "/etc",
@@ -978,15 +756,11 @@ def test_ATTACK_relative_root_refused():
 
 
 def test_ATTACK_nonexistent_root_refused(tmp_path):
-    """Policy() refuses a root that is not there, so callers mkdir -p first.
-    A guard that creates its own allowed root has no allowlist."""
     with pytest.raises(G.PolicyError):
         G.Policy(roots=[str(tmp_path / "not-created-yet")])
 
 
 def test_ATTACK_root_given_as_a_bare_string_refused(tmp_path):
-    """Policy(roots="/a/b") would iterate the characters of the string. Refuse
-    rather than silently build a policy allowing '/', 'a' and 'b'."""
     r = tmp_path / "fixtures"
     r.mkdir()
     with pytest.raises(G.PolicyError):
@@ -1004,13 +778,11 @@ def test_ATTACK_nonsensical_size_bounds(lab):
 
 
 def test_ATTACK_root_deleted_and_recreated_after_policy(lab):
-    """The policy caches the root inode. Replace the root directory with a
-    different one at the same path and every target under it stops matching."""
     root = str(lab["root"])
     pol = lab["policy"]
     assert auth(pol, lab["img"]).allowed
     shutil.rmtree(root)
-    os.mkdir(root)                       # same path, new inode
+    os.mkdir(root)
     newimg = os.path.join(root, "disk.img")
     with open(newimg, "wb") as fh:
         fh.write(b"\x00" * IMG)
@@ -1035,9 +807,6 @@ def test_policy_digest_is_stable_and_binding(lab):
     assert p3.digest() != p1.digest()
     assert auth(p1, lab["img"]).policy_digest == p1.digest()
 
-    # The digest is quoted in the certificate as "the policy that was in
-    # force". A digest that does not change when the ALLOWLIST changes would
-    # make that line worthless, so every field is exercised, not just devices.
     other = lab["tmp"] / "second-root"
     other.mkdir()
     assert G.Policy(roots=[str(other)]).digest() != p1.digest()
@@ -1048,12 +817,8 @@ def test_policy_digest_is_stable_and_binding(lab):
                     min_file_bytes=1).digest() != p1.digest()
     assert G.Policy(roots=[str(lab["root"])],
                     max_file_bytes=1 << 40).digest() != p1.digest()
-    # order of the roots must not change it: it is a set of places, not a list
     assert G.Policy(roots=[str(lab["root"]), str(other)]).digest() == \
         G.Policy(roots=[str(other), str(lab["root"])]).digest()
-
-
-# ----------------------------------------------------- ATTACK: path syntax fuzz
 
 
 @pytest.mark.parametrize("mangle", [
@@ -1065,8 +830,6 @@ def test_policy_digest_is_stable_and_binding(lab):
     lambda p: p.replace("/fixtures/", "/fixtures/sub/../"),
 ])
 def test_syntax_variants_of_a_legitimate_target(lab, mangle):
-    """Mangled spellings of an ALLOWED file must reach the same decision. A
-    guard that refuses these is unusable; one that mishandles them is unsafe."""
     (lab["root"] / "sub").mkdir(exist_ok=True)
     t = mangle(str(lab["img"]))
     d = G.authorize(lab["policy"], t)
@@ -1087,27 +850,18 @@ def test_syntax_variants_that_escape_are_all_refused(lab, mangle):
     assert d.code == G.DENY_NOT_ALLOWLISTED
 
 
-# --------------------------------------------- ATTACK: unicode normalization
-
-
 def test_unicode_nfc_nfd_spellings_agree(lab):
-    """A filename with a combining accent has two spellings. Whatever the
-    volume does with them, the guard must be self-consistent: the confirmation
-    that works is the guard's resolution, never the string passed in."""
     nfc = unicodedata.normalize("NFC", "café.img")
     nfd = unicodedata.normalize("NFD", "café.img")
     (lab["root"] / nfc).write_bytes(b"\x00" * IMG)
     for spelling in (nfc, nfd):
         t = os.path.join(str(lab["root"]), spelling)
         if not os.path.exists(t):
-            continue                     # normalization-sensitive volume
+            continue
         d = G.authorize(lab["confirming"], t, os.path.realpath(t))
         assert d.allowed, f"{spelling!r}: {d.code}"
         d2 = G.authorize(lab["confirming"], t, t)
         assert d2.allowed or d2.code == G.DENY_CONFIRMATION
-
-
-# ------------------------------------------------------- ATTACK: symlink loops
 
 
 def test_ATTACK_symlink_cycle(lab):
@@ -1130,12 +884,7 @@ def test_ATTACK_deep_nesting_terminates(lab):
     os.close(fd)
 
 
-# --------------------------------------------------------------- ATTACK: race
-
-
 def test_ATTACK_swap_leaf_for_symlink_after_decision(lab):
-    """TOCTOU, forced deterministically: authorize() says yes, then the leaf
-    is replaced by a symlink to the victim before the open."""
     assert auth(lab["policy"], lab["img"]).allowed
     os.unlink(str(lab["img"]))
     os.symlink(str(lab["victim"]), str(lab["img"]))
@@ -1148,8 +897,6 @@ def test_ATTACK_swap_leaf_for_symlink_after_decision(lab):
 
 
 def test_ATTACK_swap_intermediate_dir_for_symlink(lab):
-    """Descent is O_NOFOLLOW at every component, so an intermediate directory
-    turned into a symlink fails rather than escaping."""
     sub = lab["root"] / "sub"
     sub.mkdir()
     img = sub / "d.img"
@@ -1168,13 +915,6 @@ def test_ATTACK_swap_intermediate_dir_for_symlink(lab):
 
 
 def _racing_authorize(swap):
-    """Turn the TOCTOU window into a deterministic event.
-
-    open_authorized() re-runs authorize() and then opens by descriptor. This
-    wrapper performs the swap in exactly the window between those two, which
-    is the window a real attacker has to hit by luck. Everything after the
-    decision is what is under test.
-    """
     real = G.authorize
 
     def racing(policy, path, confirmation=None, *, mode="r+", env=None):
@@ -1186,10 +926,6 @@ def _racing_authorize(swap):
 
 
 def test_ATTACK_true_race_leaf_swapped_inside_the_window(lab, monkeypatch):
-    """The decision is already made and correct; the leaf becomes a symlink to
-    the victim before the open. Only O_NOFOLLOW on the leaf stands here, and
-    the refusal must name it -- DENY_RACE would mean the guard opened the
-    victim first and noticed afterwards."""
     def swap():
         os.unlink(str(lab["img"]))
         os.symlink(str(lab["victim"]), str(lab["img"]))
@@ -1201,10 +937,6 @@ def test_ATTACK_true_race_leaf_swapped_inside_the_window(lab, monkeypatch):
 
 
 def test_ATTACK_true_race_on_w_would_truncate_the_victim(lab, monkeypatch):
-    """The same race with mode "w". This is the one that costs data: O_TRUNC
-    fires at open, before any identity re-check could run, so if the leaf open
-    followed the symlink the victim would already be zero bytes. The victim's
-    4 MiB is the assertion."""
     def swap():
         os.unlink(str(lab["img"]))
         os.symlink(str(lab["victim"]), str(lab["img"]))
@@ -1217,9 +949,6 @@ def test_ATTACK_true_race_on_w_would_truncate_the_victim(lab, monkeypatch):
 
 
 def test_ATTACK_true_race_leaf_replaced_by_another_regular_file(lab, monkeypatch):
-    """No symlink this time: the leaf is replaced by a different real file
-    inside the root. O_NOFOLLOW cannot see this; the fd identity re-check is
-    what catches it."""
     other = lab["root"] / "other.img"
     other.write_bytes(b"\xbb" * IMG)
 
@@ -1235,8 +964,6 @@ def test_ATTACK_true_race_leaf_replaced_by_another_regular_file(lab, monkeypatch
 
 
 def test_ATTACK_true_race_intermediate_dir_swapped_inside_the_window(lab, monkeypatch):
-    """Same window, one level up: an intermediate directory becomes a symlink
-    out of the root. The descent is O_NOFOLLOW|O_DIRECTORY at every component."""
     sub = lab["root"] / "sub"
     sub.mkdir()
     img = sub / "d.img"
@@ -1256,8 +983,6 @@ def test_ATTACK_true_race_intermediate_dir_swapped_inside_the_window(lab, monkey
 
 
 def test_ATTACK_true_race_target_appears_before_a_create(lab, monkeypatch):
-    """ALLOW_CREATE was granted for a name that did not exist; the name is
-    taken before the open. O_CREAT|O_EXCL refuses rather than replacing it."""
     new = lab["root"] / "fresh.img"
 
     def swap():
@@ -1270,8 +995,6 @@ def test_ATTACK_true_race_target_appears_before_a_create(lab, monkeypatch):
 
 
 def test_open_authorized_uses_nofollow_at_the_leaf(lab):
-    """Direct proof that the leaf open refuses a symlink even when a decision
-    was somehow made on the same path."""
     os.symlink(str(lab["victim"]), str(lab["root"] / "l.img"))
     d0 = os.open(str(lab["root"]), os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -1280,9 +1003,6 @@ def test_open_authorized_uses_nofollow_at_the_leaf(lab):
         assert ei.value.errno == errno.ELOOP
     finally:
         os.close(d0)
-
-
-# ----------------------------------------------------------------- audit trail
 
 
 def test_every_decision_is_auditable(lab, tmp_path):
@@ -1297,8 +1017,6 @@ def test_every_decision_is_auditable(lab, tmp_path):
 
 
 def test_audit_log_is_byte_identical_across_runs(lab, tmp_path):
-    """No clock in the record unless the caller supplies one, so a rebuild
-    produces the same audit bytes as the build it is compared against."""
     import hashlib
     hashes = []
     for i in range(2):
@@ -1308,40 +1026,16 @@ def test_audit_log_is_byte_identical_across_runs(lab, tmp_path):
     assert hashes[0] == hashes[1]
 
 
-# ------------------------------------------------------ the guard-of-the-guard
-
-
-# A write mode spelled as a literal on the same line as open().
 _WRITE_MODE_LITERALS = ('"w', "'w", '"a', "'a", '"x', "'x", '"r+', "'r+",
                         "O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND")
 
-# Calls that obtain a writable handle or replace a target outright, flagged
-# unconditionally. os.open is on this list because os.open(path, flags) with a
-# computed flags variable is invisible to any same-line mode test -- which is
-# exactly how open_authorized itself opens, so the narrow rule would have
-# missed the very shape it is meant to police. A watched module has no reason
-# to call os.open at all.
 _WRITE_CALLS = ("os.open(", "os.fdopen(", "io.open(", "mmap.mmap(",
                 "os.replace(", "os.rename(", "os.truncate(",
                 "shutil.copy", "shutil.move")
 
-# KNOWN LIMITATION, stated rather than hidden: this is a line-oriented source
-# scan, not dataflow. A writable descriptor smuggled in through an alias
-# (`_o = os.open`), a helper in a third module, or a C extension would not be
-# seen. It catches the shapes a hurried teammate actually writes.
-
-# Modules that produce the image or the manifest. A raw writable open here is
-# a defect with no exemption: these are the fixture targets the guard exists
-# for, and every byte of them must arrive through a descriptor it issued.
 _IMAGE_PATH_MODULES = ("fixtures/build_image.py", "fixtures/fat32.py",
                        "fixtures/plan.py", "py/sentinelwipe")
 
-# Declared exemptions, by file, with the reason. The guard's contract is
-# "nothing opens a writable handle ON A FIXTURE OR WIPE TARGET outside
-# open_authorized"; a developer utility writing its own scratch output is
-# outside that contract, and is recorded here rather than silently passed.
-# Any file NOT in this mapping fails immediately. Shrinking the mapping is
-# always allowed; growing it is a review.
 _DECLARED_UNGUARDED = {
     "fixtures/corpus.py":
         "_main() dumps the generated corpus to an operator-supplied directory "
@@ -1351,10 +1045,6 @@ _DECLARED_UNGUARDED = {
 
 
 def _raw_writes(paths, exempt=("posix.py", "windows.py")):
-    """Every line in the given .py files that obtains a writable handle
-    without going through open_authorized. The two guard backends are exempt:
-    each IS the gate on its platform,
-    and audit_append's log is an append-only operator record, not a target."""
     found = []
     for p in paths:
         if p.name in exempt:
@@ -1383,8 +1073,6 @@ def _watched(*rels):
 
 
 def test_no_raw_writable_open_on_the_image_path():
-    """The hard control. If the image or the manifest is written by anything
-    other than a descriptor from open_authorized, the guard is decorative."""
     bad = _raw_writes(_watched(*_IMAGE_PATH_MODULES))
     assert not bad, (
         "writable open on the image path. Obtain the descriptor from "
@@ -1393,8 +1081,6 @@ def test_no_raw_writable_open_on_the_image_path():
 
 
 def test_unguarded_writes_elsewhere_are_declared():
-    """The ratchet over the rest of the fixture tree. A new unguarded write
-    fails; an existing one has to carry a written reason."""
     bad = _raw_writes(_watched("fixtures", "py/sentinelwipe"))
     undeclared = [(f, i, t) for f, i, t in bad if f not in _DECLARED_UNGUARDED]
     assert not undeclared, (
@@ -1404,11 +1090,6 @@ def test_unguarded_writes_elsewhere_are_declared():
 
 
 def test_the_write_detector_is_not_vacuous():
-    """A grep control that matches nothing is indistinguishable from one that
-    does not work. The POSIX backend is an exempt module precisely because it
-    DOES open descriptors for writing, so running the detector over it with the
-    exemption lifted must fire. If this goes quiet, the two tests above are
-    passing for the wrong reason."""
     hits = _raw_writes([_REPO / "fixtures" / "guard" / "posix.py"], exempt=())
     assert hits, "the detector found no writable open in guard/posix.py itself"
     assert any("os.open(" in t for _, _, t in hits), \
@@ -1417,14 +1098,7 @@ def test_the_write_detector_is_not_vacuous():
         "the detector cannot see a string write mode"
 
 
-# ------------------------------------------------------------- red-team table
-
-
 def _redteam_rows(tmp: str):
-    """Every attack, run once, as a table. Each row records the DECISION and
-    whether a descriptor was obtained. A row is ok only when the decision was
-    a policy refusal AND no descriptor came back; a refusal that arrives as an
-    OSError is a FAIL, because it means the guard said yes."""
     rows = []
     root = os.path.join(tmp, "fixtures")
     os.mkdir(root)
@@ -1451,7 +1125,7 @@ def _redteam_rows(tmp: str):
                             env=env if env is not None else {})
             code = d.code
             allowed = d.allowed
-        except Exception as e:                      # authorize must not raise
+        except Exception as e:
             code, allowed = f"RAISED/{type(e).__name__}", True
         try:
             fd = G.open_authorized(p, target, mode, conf,
@@ -1470,13 +1144,11 @@ def _redteam_rows(tmp: str):
         rows.append((label, "FD OBTAINED" if got_fd else "refused",
                      errno_code or code, ok))
 
-    # control: the legitimate target must work, or the guard is just "no"
     attempt("CONTROL legitimate fixture image", img, pol, None, expect_deny=False)
     attempt("CONTROL create a new file in the root",
             os.path.join(root, "created.img"), pol, None, mode="x",
             expect_deny=False)
 
-    # symlinks
     l1 = os.path.join(root, "s_victim.img"); os.symlink(vic, l1)
     attempt("symlink under root -> file outside root", l1, pol, real(l1))
     l2 = os.path.join(root, "s_disk0.img"); os.symlink("/dev/disk0", l2)
@@ -1491,11 +1163,9 @@ def _redteam_rows(tmp: str):
     attempt("CREATE through a dangling symlink out of the root", l4, pol,
             None, mode="x")
 
-    # hardlink
     h = os.path.join(root, "h_victim.img"); os.link(vic, h)
     attempt("hardlink under root, inode outside root", h, pol, real(h))
 
-    # path escapes
     attempt("dotdot escape", os.path.join(root, "..", "outside", "victim.img"),
             pol, real(vic))
     os.makedirs(root + "-evil", exist_ok=True)
@@ -1510,7 +1180,6 @@ def _redteam_rows(tmp: str):
     attempt("create with a missing parent",
             os.path.join(root, "nodir", "new.img"), pol, None, mode="x")
 
-    # devices, escalating privilege
     attempt("raw /dev/disk0, default policy", "/dev/disk0", pol, "/dev/disk0")
     attempt("raw /dev/rdisk0, default policy", "/dev/rdisk0", pol, "/dev/rdisk0")
     attempt("/dev/stdout", "/dev/stdout", pol, "/dev/stdout")
@@ -1548,7 +1217,6 @@ def _redteam_rows(tmp: str):
             attempt(f"WHOLE BOOT DISK {whole}, allowlisted",
                     whole, pol_w, whole, env={"SENTINELWIPE_DEVICE_MODE": "1"})
 
-    # confirmation abuse
     attempt("no confirmation at all", img, conf_pol, None)
     attempt("empty confirmation", img, conf_pol, "")
     attempt("confirmation naming an off-allowlist file", vic, conf_pol, real(vic))
@@ -1556,7 +1224,6 @@ def _redteam_rows(tmp: str):
     attempt("confirmation for a DIFFERENT allowed file", img, conf_pol,
             real(img) + ".other")
 
-    # shapes
     attempt("target is a directory", root, pol, real(root))
     fifo = os.path.join(root, "p"); os.mkfifo(fifo)
     attempt("target is a FIFO", fifo, pol, real(fifo))
@@ -1567,7 +1234,6 @@ def _redteam_rows(tmp: str):
     attempt("mode 'x' over an existing file", img, pol, None, mode="x")
     attempt("unsupported mode 'a'", img, pol, None, mode="a")
 
-    # TOCTOU
     assert G.authorize(pol, img).allowed
     os.unlink(img); os.symlink(vic, img)
     attempt("leaf swapped for a symlink AFTER the decision", img, pol, real(img))
@@ -1587,7 +1253,6 @@ def _redteam_rows(tmp: str):
     attempt("intermediate dir swapped for a symlink after the decision",
             simg, pol, real(simg))
 
-    # policy misconfiguration
     for bad in ("/", "/dev", "/Volumes", "/tmp", "/etc", os.path.expanduser("~"),
                 "/System", "/private", "/usr", "/var", "/.vol",
                 os.path.join(tmp, "does-not-exist")):
@@ -1610,12 +1275,7 @@ def _redteam_rows(tmp: str):
     return rows, unchanged
 
 
-# ------------------------------------------------- ATTACK: a REAL racing thread
-
-
 def _race_lab(tmp_path, tag):
-    """A lab shaped for a racing attacker: a fixed allowed root, a target under
-    it, and a small victim OUTSIDE it whose bytes are checked every iteration."""
     base = tmp_path / tag
     (base / "fixtures" / "sub").mkdir(parents=True)
     (base / "outside" / "sub").mkdir(parents=True)
@@ -1627,35 +1287,6 @@ def _race_lab(tmp_path, tag):
 
 
 def test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim(tmp_path):
-    """The clause the shared conformance table cannot reach, reached.
-
-    fixtures/guard_vectors.json is a static table of (target, policy, expected
-    code) rows.  It proves the two implementations AGREE; it cannot express
-    "and now another thread renames this directory", so it excused
-    DENY_RACE_DETECTED_AT_OPEN and DENY_SYMLINK_COMPONENT_AT_OPEN as
-    inexpressible -- and that excuse is what hid a real escape.  All 85 rows
-    passed in both languages while both guards would truncate a file outside
-    every allowed root under a racing rename, because the allowed root's own
-    open omitted O_NOFOLLOW and O_TRUNC rode in the openat that established
-    identity, before the (dev,ino) re-check could fire.
-
-    This needs no table.  A thread flips the allowed root between the real
-    directory and a symlink pointing outside it while this loop calls
-    open_authorized in mode "w" -- the mode that truncates, and the mode
-    ``wipe --trace`` and fixtures/build_image.py use.  Three assertions:
-
-      1. SAFETY.  The victim outside every allowed root is byte-identical
-         afterwards and its inode never changed.  A refusal that costs data is
-         not a refusal.
-      2. REACHABILITY.  DENY_RACE_DETECTED_AT_OPEN appears in the census, so
-         the clause is known to be executed rather than merely present.
-      3. TOTALITY.  No iteration exits with a bare OSError.  open_authorized
-         promises a Decision on every refusal; a guard stopped by the kernel is
-         not a guard, and an errno carries no audit line.
-
-    The Rust twin is core/device/src/guard/unix.rs::guard::unix::race::
-    racing_the_allowed_root_never_truncates_a_file_outside_it.
-    """
     import threading
     import time
 
@@ -1666,8 +1297,6 @@ def test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim(t
     victim_ids = os.stat(victim).st_ino, os.stat(victim).st_dev
     victim_before = victim.read_bytes()
 
-    # The policy is fixed BEFORE the race starts.  An allowlist chosen while the
-    # attacker holds the directory entry names whatever the attacker wants.
     policy = G.Policy(roots=[str(root)])
     conf = os.path.realpath(str(target))
 
@@ -1701,8 +1330,6 @@ def test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim(t
             except OSError as e:
                 kernel_errors.append(e.errno)
                 census["OSERROR:%s" % e.errno] = census.get("OSERROR:%s" % e.errno, 0) + 1
-            # Checked on EVERY iteration: a truncate followed by a restore would
-            # otherwise go unseen.
             if victim.exists():
                 assert victim.stat().st_size == 4096, (
                     "THE GUARD TRUNCATED A FILE OUTSIDE EVERY ALLOWED ROOT on "
@@ -1712,7 +1339,6 @@ def test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim(t
     finally:
         stop.set()
         t.join(timeout=5)
-        # Put the root back so tmp_path teardown can run.
         if os.path.islink(str(root)):
             os.unlink(str(root))
         if hidden.exists() and not root.exists():
@@ -1734,13 +1360,6 @@ def test_ATTACK_a_racing_thread_flipping_the_allowed_root_never_costs_a_victim(t
 def test_ATTACK_a_racing_thread_swapping_a_mid_path_component_hits_the_symlink_clause(
     tmp_path,
 ):
-    """The same window one level down, and the clause that was always correct.
-
-    A component BELOW the allowed root is swapped for a symlink pointing
-    outside; the O_NOFOLLOW|O_DIRECTORY descent must fail ELOOP and become
-    DENY_SYMLINK_COMPONENT_AT_OPEN rather than escaping.  This is the control
-    that shows the root's own open was a single hole rather than a general one.
-    """
     import threading
     import time
 
@@ -1807,7 +1426,6 @@ def test_ATTACK_a_racing_thread_swapping_a_mid_path_component_hits_the_symlink_c
 
 
 def test_redteam_table(capsys, tmp_path):
-    """The evidence, not the tests. Printed with -s; asserted always."""
     tmp = str(tmp_path / "redteam")
     os.mkdir(tmp)
     rows, unchanged = _redteam_rows(tmp)

@@ -1,36 +1,3 @@
-"""The recovery surface, rendered and measured.
-
-Every other test in this suite asserts something about bytes. This one asserts
-something about the page a judge actually looks at, because the live USB demo
-is argued visually and a finish defect there costs exactly as much as a wrong
-number: a hero line that clips the words "byte-exact", or an evidence panel
-that paints over the control bar, is not cosmetic when it is the thing being
-presented.
-
-The page is driven through `window.__rec`, the seam ui/recover.html exposes for
-this file alone. Nothing here reaches the network and nothing here starts the
-server: the fixture below is a hand-built `compare()` result in the exact shape
-ui/usb.py returns, so the assertions are about rendering, never about carving.
-
-Requires playwright, which is NOT a declared dependency of this project -- it
-is a browser, and this suite must stay runnable on a machine that has no
-browser to install. The tests skip when it is absent, so `make test` is
-unaffected. To run them:
-
-    make ui-render
-
-or by hand:
-
-    uv run --no-project --with playwright python -m playwright install chromium
-    uv run --no-project --with playwright --with pytest python -m pytest \
-        tests/test_recover_render.py
-
-Use `python -m pytest`, not `pytest`. `uv run --with playwright pytest` resolves
-the console script inside the project venv, which the --with overlay never
-reaches, so playwright is missing, every test skips, and pytest exits 0 -- a
-green run that checked nothing, which is worse than a red one.
-"""
-
 import pathlib
 
 import pytest
@@ -43,16 +10,10 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 PAGE = REPO / "ui" / "recover.html"
 GB = 8 * 10**9
 
-# Two viewports: the projector a demo usually lands on, and the smaller laptop
-# panel it gets rehearsed on. The overlap defect this file was written for was
-# 341 px at the first and 497 px at the second -- it got worse as the screen
-# got shorter, which is the direction a live demo actually moves.
 VIEWPORTS = [(1600, 1000), (1440, 780)]
 
 
 def _fixture():
-    """A compare() result in ui/usb.py's own shape. Ten byte-exact, one
-    over-run, two not recovered -- the same mix the demo is built to admit."""
     hits = [
         {
             "path": "/photo_%02d.jpg" % i, "kind": "JPEG",
@@ -187,7 +148,6 @@ def browser():
 
 @pytest.fixture(scope="module", params=VIEWPORTS, ids=lambda v: "%dx%d" % v)
 def rendered(request, browser):
-    """Drive the page through a whole recovery and return what it measured."""
     enrolment, compare = _fixture()
     w, h = request.param
     page = browser.new_page(viewport={"width": w, "height": h})
@@ -201,13 +161,13 @@ def rendered(request, browser):
                     __rec.setEnrol(d); __rec.renderEnrolment(); __rec.MAP.init(8e9); }""",
         enrolment,
     )
-    for f in (0.18, 0.46, 0.78):          # imaging, at the stream's own fractions
+    for f in (0.18, 0.46, 0.78):
         page.evaluate("(f) => __rec.MAP.progress(Math.floor(8e9*f), 8e9)", f)
         page.wait_for_timeout(60)
     page.evaluate("() => __rec.MAP.imaged()")
 
     page.evaluate("(d) => __rec.paintResult(d)", compare)
-    page.wait_for_timeout(2400)           # the cascade, then the peak
+    page.wait_for_timeout(2400)
     result = page.evaluate(PROBE)
     result["errors"] = errors
     result["viewport"] = (w, h)
@@ -220,22 +180,17 @@ def test_no_page_errors(rendered):
 
 
 def test_hero_caption_is_not_truncated(rendered):
-    """The defect this file was written for: the caption was clipped with an
-    ellipsis that ate "byte-exact"."""
     assert rendered["ofClipW"] <= 0, "caption clipped horizontally"
     assert rendered["ofClipH"] <= 0, "caption clipped vertically"
     assert "byte-exact" in rendered["ofText"]
 
 
 def test_panel_does_not_paint_over_the_control_bar(rendered):
-    """It overran by 341 px and 497 px before the grid row was capped."""
     assert rendered["panelOverBar"] <= 0
     assert rendered["twScrolls"], "the table grew instead of scrolling"
 
 
 def test_rows_do_not_scroll_through_the_column_headers(rendered):
-    """Regression: at 1440x780 the returning rows painted over the header,
-    because a transform animation outranks an un-indexed sticky element."""
     assert rendered["headerOccludes"]
 
 
@@ -245,7 +200,6 @@ def test_page_itself_never_scrolls(rendered):
 
 
 def test_cascade_settles_on_the_admitted_failures(rendered):
-    """Peak-end: the last rows a judge sees are the ones that cost us."""
     assert rendered["atTail"]
     assert rendered["lastRowVisible"]
     assert rendered["tailVerdict"] == "∅ not recovered"
@@ -258,7 +212,6 @@ def test_the_peak_lands_last(rendered):
 
 
 def test_every_hit_returns_with_both_hashes(rendered):
-    """Enrolled-before and recovered-after, shown together, one pair per hit."""
     assert rendered["back"] == 10
     assert rendered["pairs"] == 20
 
@@ -268,8 +221,6 @@ def test_verdicts_match_the_fixture(rendered):
 
 
 def test_the_map_is_painted_in_the_design_tokens(rendered):
-    """Not in forked literals: a second source of truth for colour is one that
-    ui/inline.py's drift detector cannot see."""
     assert rendered["tokenCells"] > 0
 
 
@@ -282,9 +233,6 @@ def test_progress_tracks_do_not_reflow(rendered):
 
 
 def test_the_carve_never_draws_a_percentage_it_does_not_have(browser):
-    """usb.carve_image is one blocking call and emits nothing until it returns,
-    so there is no progress to draw. The page must say so in words and show an
-    indicator that cannot be misread as a position."""
     page = browser.new_page(viewport={"width": 1600, "height": 1000})
     page.goto(PAGE.as_uri())
     page.wait_for_timeout(400)
@@ -305,8 +253,6 @@ def test_the_carve_never_draws_a_percentage_it_does_not_have(browser):
 
 
 def test_the_page_exposes_exactly_the_seam_this_file_uses(browser):
-    """A test seam that quietly grows into a second API is how a page starts
-    being driven by something other than its own stream."""
     page = browser.new_page()
     page.goto(PAGE.as_uri())
     page.wait_for_timeout(300)

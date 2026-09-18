@@ -1,540 +1,46 @@
-//! Bifragment gap carving: recover an object whose bytes are split across two
-//! non-adjacent extents, by searching a bounded two-dimensional lattice of
-//! (first-fragment length, gap length) and asking the structure validator which
-//! splice makes the object whole.
-//!
-//! # The problem
-//!
-//! Sequential carving reads from a header until the format says "done". That
-//! fails the moment the filesystem allocator had to jump: everything after the
-//! jump is another file's data or residue, and the object either never
-//! terminates or terminates on foreign bytes. Bifragment gap carving is the
-//! standard answer (Garfinkel, *Carving contiguous and fragmented files with
-//! fast object validation*, DFRWS 2007): keep the header, cut the tail at a
-//! candidate point, resume at a candidate point further on, and let the
-//! validator decide.
-//!
-//! # The search space, and the bound on it
-//!
-//! Two free variables, both quantised to the **cluster grid**:
-//!
-//! * `hl` — the first fragment's length in bytes. Split points are the cluster
-//!   boundaries strictly after `header_at`, so `hl` runs
-//!   `first_boundary - header_at`, `+cluster`, `+2*cluster`, …
-//! * `g` — the gap, in whole clusters, `1..=gaps`.
-//!
-//! The bounds, all of them published rather than implied:
-//!
-//! | dimension | bound | source |
-//! |---|---|---|
-//! | gap | `g * cluster <= max_gap_bytes`, **inclusive** | `CarveOpts::max_gap_bytes`, never hardcoded |
-//! | gap floor | `g >= 1` | a gap of zero clusters is a contiguous object; sequential carving owns it |
-//! | first fragment | `hl <= MAX_FIRST_FRAGMENT_CLUSTERS * cluster` | this module, [`MAX_FIRST_FRAGMENT_CLUSTERS`] |
-//! | object total | `end <= min(max_len(kind), MAX_OBJECT_BYTES, data.len() - header_at)` | `signature::SIGNATURES` and [`MAX_OBJECT_BYTES`] |
-//! | lattice | split and resume points are multiples of `cluster` | filesystem allocation granularity |
-//!
-//! **Inclusivity is observable, not academic.** The fixture publishes
-//! `max_gap_clusters = 128`, `max_gap_is_inclusive = true`, and plants
-//! `disposal_certificate.pdf` at a gap of exactly 128 clusters. The test is
-//! `gap_bytes <= max_gap_bytes`, so `gaps = max_gap_bytes / cluster` and
-//! `g = gaps` is searched. An exclusive bound loses that file, and
-//! [`tests::gap_bound_is_inclusive_at_the_boundary`] pins the difference.
-//!
-//! **Why the cluster grid.** A byte-granular search over the same byte-space
-//! costs `cluster^2` times as many validations — 4 194 304x at 2048 B/cluster —
-//! and buys nothing, because a fragment that begins mid-cluster cannot be
-//! produced by a cluster allocator. The ratio is measured, not asserted, by
-//! [`tests::cluster_grid_versus_byte_grid_is_measured`] (both searches run to
-//! completion on a miniature) and by
-//! [`tests::fixture_byte_grid_control_does_not_finish`] (the byte grid runs on
-//! the real fixture under a validation budget and does not reach the solution).
-//!
-//! # Search order and cost
-//!
-//! Outer loop: `hl` ascending. Inner loop: `g` ascending. The first splice that
-//! validates *and is determined* (below) wins.
-//!
-//! That order makes cost interpretable. Ignoring the sequential probe and the
-//! determinacy neighbours:
-//!
-//! ```text
-//! validations(success) = (hl_true / cluster - 1) * gaps + g_true      (aligned header)
-//! validations(failure) = MAX_FIRST_FRAGMENT_CLUSTERS * gaps
-//! ```
-//!
-//! Cost is the honest counterweight to the capability, so [`Reassembly`]
-//! carries the count and the caller is expected to print it.
-//!
-//! # Determinacy — why a validating splice is not yet a recovery
-//!
-//! A splice that validates is not necessarily the right splice. `validate` sees
-//! only the assembled bytes, and a format whose validator does not cover every
-//! byte of the object will accept an assembly in which residue has been
-//! substituted for real content: same length, same structure, different file,
-//! different SHA-256.
-//!
-//! MEASURED on `out/fixture.img` (sha256 d85612b2…) against `structure/` **as
-//! shipped in this crate**, by walking every one of the 32 768 lattice cells for
-//! all seven fragmented plants with no early exit, and comparing each accepted
-//! assembly byte for byte against the planted file read out of the image at the
-//! manifest's own extents. Reproduce with:
-//!
-//! ```text
-//! cargo test --release -p sentinelwipe-carve --lib \
-//!     bifragment::tests::fixture_lattice_enumeration -- --ignored --nocapture
-//! ```
-//!
-//! ```text
-//! plant                       cells  accepting  content-correct  determined
-//! imaging_transcript.txt.gz   32768          1                1           1
-//! entropy_heatmap.png         32768          1                1           1
-//! disposal_certificate.pdf    32768         10                1           0
-//! sealing_procedure.mov       32768       6660                1           0
-//! handover_briefing.mov       32768       4096                1           0
-//! media_inventory.docx        32768          0                0           0   (planted)
-//! evidence_bag_seal.jpg       32768          0                0           0   (planted)
-//! ```
-//!
-//! Read the middle two columns together and the problem is stated exactly:
-//! `sealing_procedure.mov` has 6 660 assemblies the validator calls perfect and
-//! 6 659 of them are a different file. Returning the first would be the silent
-//! wrong-but-validating answer this module exists to prevent, and the fixture is
-//! built so that it is the answer a naive search reaches first.
-//!
-//! So an accepted splice must also be **determined**: with everything else held
-//! fixed, moving the split point one cluster either way, and moving the resume
-//! point one cluster either way, must all fail to validate. Four extra
-//! validations. A candidate that survives is pinned in both dimensions; one that
-//! does not is skipped, and if the lattice ends with acceptances but no
-//! determined one the search returns `None` and reports [`Stop::Ambiguous`].
-//!
-//! **A neighbour that cannot be tested does not pin anything.** The first
-//! version of this rule skipped an untestable neighbour on the reasoning that it
-//! "cannot disagree, so it cannot disqualify", which quietly reported a splice
-//! pinned on three sides as pinned on four. It is now `Required` or `Exempt` per
-//! neighbour — [`is_determined`] carries the table and the one exemption — and a
-//! required neighbour that cannot be spliced makes the candidate
-//! indeterminate. The measured effect is in [`tests::FABRICATED_OF_SAMPLE`].
-//!
-//! **And a second extent must be material.** A tail below
-//! [`MIN_SECOND_EXTENT_CLUSTERS`] is not stated as an object, because the
-//! neighbour probes move by a whole cluster and therefore never test a shorter
-//! tail's content against a shifted version of itself.
-//!
-//! The rightmost column is what licenses the early exit. `search` stops at the
-//! first determined hit, which is only sound if a determined hit is never wrong.
-//! That is not argued here, it is asserted on the real image: across all seven
-//! plants, **every determined splice is content-correct, and no plant has more
-//! than one**. `fixture_lattice_enumeration_measures_ambiguity` fails if that
-//! ever stops being true, which is the standing check behind the early exit.
-//! The rule costs 4 validations on each recovery and changes nothing else.
-//!
-//! **Say what that licence is and is not.** The guarantee the engine enforces at
-//! run time is *"the first determined splice, with determinacy tested against
-//! four lattice neighbours"*. `search` returns on the first determined hit and
-//! never asks whether a second determined splice exists elsewhere in the 32 768
-//! cells; a wrong splice somewhere else cannot contradict it. That "every
-//! determined splice is content-correct" is a measured property **of
-//! `out/fixture.img`**, established offline by the `#[ignore]`d enumeration, not
-//! an invariant of the algorithm. On both recovered plants the returned splice
-//! is the only splice the whole lattice accepts — 1 accepting, 1
-//! content-correct, 1 determined, each — so the early exit gives up nothing
-//! there. Elsewhere it is thinner than that: `sealing_procedure.mov` has 6 660
-//! accepting splices and `handover_briefing.mov` 4 096, each with exactly one
-//! content-correct, and both are saved by determinacy returning zero rather than
-//! by the count. **Point this search at a second image and run the enumeration
-//! on it before quoting the never-wrong claim.**
-//!
-//! # Why the three refusals, and what each one costs the demo
-//!
-//! Neither the search nor its bounds are the reason three of the five solvable
-//! plants are refused. In all three cases the true splice is inside the lattice
-//! and IS accepted; the validator simply cannot tell it from the others.
-//!
-//! * **disposal_certificate.pdf — 10 accepting, 1 correct.** All ten sit at gap
-//!   = 128 clusters, the true gap, and differ only in the split point:
-//!   `hl` = 1..10 clusters. That interval is object 2's ~21 kB FlateDecode
-//!   stream body, and `structure::pdf` resolves `startxref` and verifies 34 of
-//!   34 xref offsets without ever decoding a stream, so every byte in the
-//!   interval is unread. Since exactly one of the ten assemblies carries the
-//!   planted bytes, and adding a check can only remove acceptances, a validator
-//!   that inflated each `/FlateDecode` stream and checked its zlib Adler-32
-//!   would leave exactly one — and the file would be recovered. **This is a gap
-//!   in `structure/pdf.rs`, not in the search.**
-//! * **sealing_procedure.mov / handover_briefing.mov — 6 660 and 4 096
-//!   accepting, 1 correct each.** `mdat` declares its own length inside
-//!   fragment 1, so the object's total length is fixed by the head alone and any
-//!   tail of the right length tiles perfectly. QuickTime carries no checksum
-//!   over sample data, so there is no byte in the format that separates the
-//!   6 660. This is a limit of the container, not of `structure/mp4.rs`, and it
-//!   is not repairable by any structure validator.
-//! * `handover_briefing.mov` is worse than ambiguous: `structure::mp4` accepts
-//!   the **contiguous** read at its header, so `search` refuses after one
-//!   validation with [`Stop::Contiguous`] and never enters the lattice. The
-//!   contiguous read is 66 689 bytes with the wrong SHA-256. Bifragment is right
-//!   to stand down — sequential carving owns that case — but whoever owns
-//!   `carve.rs` must know that sequential carving will emit a wrong object here
-//!   unless it applies its own content test.
-//!
-//! Recovered on the fixture, therefore: **2 of the 5 solvable fragmented plants,
-//! 0 of the 2 planted unsolvable, and 0 wrong.** That is a finding about
-//! `structure/`, reported rather than hidden, and it is printed by name on every
-//! run of `fixture_solvable_fragments_are_recovered_or_refused_never_wrong`.
-//!
-//! # What the fixture measurements cost to run
-//!
-//! MEASURED on this machine, Darwin arm64, whole-image `out/fixture.img` read
-//! into memory once per test:
-//!
-//! ```text
-//!   filter                                        threads  release
-//!   bifragment::tests::fixture                          1   29.2 s
-//!   reassembly_does_not_lift_…  (both populations)      1   66.5 s
-//!     of which residue, 57 searches, 1 867 833 vals          37.6 s
-//!     of which plants,   6 searches,   146 490 vals          28.0 s
-//!   a_real_header_prefix_over_free_space_…              1   14.6 s
-//!   (whole crate, `cargo test --release -p sentinelwipe-carve`)  67.1 s
-//!   fixture_lattice_enumeration  -- --ignored           1   76.2 s
-//!   span_ceiling_cost            -- --ignored           1  198.7 s
-//! ```
-//!
-//! The four refusals each walk the whole 32 768-cell lattice, which is the cost
-//! the module is supposed to have; a debug build multiplies it by roughly ten.
-//! **Run this crate's fixture tests with `--release`.** The two enumeration
-//! measurements are `#[ignore]`d because they refuse to stop early by design;
-//! everything load-bearing — the two planted failures, the two recoveries, the
-//! never-wrong assertion — runs by default.
-//!
-//! # Buffer construction — why this is not `cluster^2` memcpy
-//!
-//! A naive implementation rebuilds `head ++ tail` per candidate and copies the
-//! whole object every validation. Instead one working buffer `x` holds
-//! `data[header_at .. header_at + window]`, and for candidate `(hl, g)` the head
-//! is written *into* `x` at offset `g * cluster`; the bytes after it are already
-//! `data[header_at + g*cluster + hl ..]`, which is exactly the wanted
-//! continuation. The validator is handed `&x[g*cluster ..]`. Because `g`
-//! ascends, each write lands strictly after the region any later `g` reads, and
-//! the buffer is restored from `data` once per `hl`. Cost per validation is
-//! `hl` bytes, independent of object size.
-//! [`tests::sliding_head_buffer_equals_a_naive_splice`] checks the fast buffer
-//! byte-for-byte against a naive splice across the whole lattice.
-//!
-//! # The false-positive surface this opens, measured
-//!
-//! Reassembly is the one change in this project that can make residue *more*
-//! dangerous rather than less. Sequential carving gives a decoy one chance to
-//! validate; the lattice gives it up to 32 768. The number that binds is
-//! `confidence::STRUCTURAL_BREACH_POINT` = 0.285714 — the structural credit at
-//! which a candidate already holding full marks on signature, entropy and size
-//! crosses the 0.7500 gate. It is read from `confidence.rs`, never restated.
-//!
-//! ## Population 1 — residue: the 57 candidates `carve.rs` will hand over
-//!
-//! MEASURED on `out/fixture.img` by
-//! [`tests::reassembly_does_not_lift_a_residue_candidate_past_its_contiguous_credit`],
-//! over every one of the shipped scanner's 92 candidates whose object does not
-//! validate contiguously, minus the seven planted fragmented headers — which is
-//! exactly the set `carve.rs` will hand to this module, `suppress_nested`
-//! included, since `carve.rs` does not apply it:
-//!
-//! ```text
-//!   kind  searched  validations  at/over breach contiguously
-//!   GZIP        13       425997   0
-//!   JPEG        14       458766   0
-//!   ZIP         30       983070  28
-//!   total       57      1867833  28        37.6 s, release, Darwin arm64
-//!
-//!   assemblies accepted by structure::validate ............ 0 of 1 867 833
-//!   reassemblies returned ................................ 0
-//!   population structural ceiling, contiguous ............ 0.300000  ZIP@1228603
-//!   population structural ceiling, after reassembly ...... 0.300000  (unchanged)
-//! ```
-//!
-//! **Not one assembly validated.** The refusal does not rest on the determinacy
-//! rule for residue; the validator rejects every splice outright, and the
-//! population's structural ceiling is exactly where sequential carving left it.
-//! The 28 ZIP candidates already at or over the breach point are not this
-//! module's doing: they are nested local-file headers inside the planted
-//! archives plus `ZIP@1228603`, the run's known false positive at 0.3000
-//! structural credit and 0.7550 total. Zero JPEG and zero GZIP candidates reach
-//! the breach point, which is the same result `residue_separation.rs` measures
-//! contiguously for the manifest's 21 decoys.
-//!
-//! ## Population 2 — the seven planted fragmented headers, and the real ceiling
-//!
-//! Earlier build reports quoted **0.300000 at `ZIP@1069434`** as the highest
-//! structural credit reachable on a rejected assembly. That figure was the
-//! residue population with the plants filtered out of it, and it understates the
-//! image by 3.2x. The plants are now walked by the same test, into their own
-//! population with its own printed ceiling:
-//!
-//! ```text
-//!   28.0 s, release, Darwin arm64, 146 490 validations
-//!   plant                       kind  contiguous  rejected-assembly ceiling
-//!   media_inventory.docx        ZIP     0.020000  0.957143   <- widest lift
-//!   entropy_heatmap.png         PNG     0.826923  0.989286   <- population ceiling
-//!   sealing_procedure.mov       MP4     0.900000  0.900000
-//!   imaging_transcript.txt.gz   GZIP    0.600000  0.600000
-//!   disposal_certificate.pdf    PDF     0.200000  0.982353
-//!   evidence_bag_seal.jpg       JPEG    0.800000  0.800000
-//!   handover_briefing.mov       MP4        —      never reaches the lattice: its
-//!                                                 contiguous read validates
-//! ```
-//!
-//! Both figures are asserted, in [`tests::PLANT_REJECTED_CEILING`] and
-//! [`tests::PLANT_TRIFRAGMENT_REJECTED_CEILING`], so they move only by being
-//! republished. Read them with the arithmetic attached:
-//!
-//! * `entropy_heatmap.png` at **0.989286** is a near miss of a file this engine
-//!   recovers correctly — one cluster off the true splice, 27 of 28 chunks
-//!   CRC-verified and one IDAT mismatched. Scored, it would be admitted at
-//!   0.9963 carrying the wrong bytes.
-//! * `media_inventory.docx` at **0.957143** is the dangerous one: the
-//!   tri-fragment plant the demo names on stage as unrecoverable by design, whose
-//!   contiguous read earns 0.020000 and whose best rejected assembly resolves the
-//!   docx's true total length — 79 397 bytes — to the byte
-//!   (`ooxml entries=7 xcheck=7/7 payload=6/7 cd@78930 end=79397`). Scored, it
-//!   would be **admitted at 0.9850, as itself.**
-//!
-//! None of it is a live defect: [`search`] returns a splice only when
-//! `Validation::valid`, and `carve.rs` scores only what `search` returns, so a
-//! rejected assembly is never emitted and never scored. That single sentence —
-//! *if a rejected assembly were ever scored, the tri-fragment DOCX would be
-//! admitted at 0.9850 as itself* — is the argument for the rule, and it is the
-//! number to quote for it.
-//!
-//! ## What reassembly does manufacture, measured
-//!
-//! Both populations above are **bare** signature decoys: three bytes of `FF D8
-//! FF` over noise. A partially overwritten photograph leaves something stronger
-//! behind — a complete marker prefix — and that input was never in the
-//! measurement. It is now, in
-//! [`tests::a_real_header_prefix_over_free_space_does_not_manufacture_an_object`]:
-//! one real 2 048-byte JPEG header prefix written onto a free cluster of an
-//! in-memory copy of the image, nothing else changed.
-//!
-//! ```text
-//!   rule set                                             fabricated
-//!   as first shipped                                     13 of 100 free offsets
-//!   + a required neighbour that cannot be tested does      6 of 100
-//!     not pin anything
-//!   + MIN_SECOND_EXTENT_CLUSTERS                           2 of 100
-//! ```
-//!
-//! The case that started it — `[(253691904, 2048), (253763584, 139)]`, an
-//! ADMITTED record at confidence 1.0000 for an object that is not in the image,
-//! 139 bytes of unrelated free space 71 680 bytes downstream — is refused now,
-//! and that offset falls back to the same `signature-span` record at 0.9241 the
-//! contiguous engine already emitted for it. Widening the determinacy probe
-//! instead was measured and rejected: over the two surviving fabrications, all
-//! 24 probes at 2..6 clusters out in both dimensions fail to validate exactly as
-//! the 1-cluster probes do, so distance is not the axis that separates them.
-//!
-//! **The residual is 2 of 100 and it is published, not closed.** Both survivors
-//! are the same 59 927-byte tail reached from two heads, both score 0.8000
-//! structurally and 0.9300 in total, and the reason they survive is
-//! `structure::jpeg`: a length-bearing marker inside the entropy-coded scan is
-//! treated as an anomaly to report rather than a fatal error, which lets a scan
-//! step over residue until it lands on an `FF D9`. Making that fatal is the fix
-//! and it belongs to `structure/`, because it changes what the CONTIGUOUS engine
-//! validates and those numbers are already published. Until then:
-//!
-//! * do not say "reassembly returns nothing wrong" or "it did not enlarge the
-//!   false-positive surface" without naming the population — over this fixture's
-//!   57 residue candidates, all of them bare decoys, both are true; over real
-//!   header prefixes on free space, the rate is 2 in 100;
-//! * `--reassemble` stays **off by default**. That default was taken for cost.
-//!   It is also what keeps this residual off the demo path, which makes it a
-//!   safety property and not only a cost decision.
-//!
-//! # What this deliberately does not do
-//!
-//! * **It does not search backwards.** A physically reversed object
-//!   (`evidence_bag_seal.jpg`, gap −77 clusters) is not solvable by a forward
-//!   search and is reported as a failure.
-//! * **It does not search three fragments.** A tri-fragment object
-//!   (`media_inventory.docx`, gaps 11 then 29) is not solvable by a two-fragment
-//!   search and is reported as a failure.
-//!
-//! Both are planted in the fixture to defeat this algorithm. Extending the
-//! search to solve them would make the recovery figure a statement about the
-//! fixture rather than about the carver.
-//!
-//! **The two are not equally well demonstrated, and the difference is measured.**
-//! The tri-fragment refusal is: the same real OOXML bytes
-//! (`/incident_summary.docx`) laid out FORWARD in benign filler are recovered
-//! byte-exactly at two fragments and refused at three
-//! ([`tests::a_real_docx_recovers_at_two_fragments_and_refuses_at_three`]), so
-//! the refusal is a property of the fragment count and not of the kind. The
-//! reversal is not: this engine reassembles no two-fragment JPEG in any
-//! direction — `evidence_bag_seal.jpg`'s own bytes, re-planted forward, are
-//! recovered in 0 of 24 split × gap layouts while PNG and GZIP controls of the
-//! same shape recover in 24 of 24 (measured in
-//! `core/carve/tests/structure_media_fixture.rs`, claim (e)). The cause is
-//! determinacy, not direction: JPEG carries no checksum over entropy-coded data,
-//! so the neighbouring splice validates too. Reversal is therefore *sufficient*
-//! to explain that non-recovery and is not shown to be *necessary*. If a judge
-//! asks "would you have recovered it laid out forward?", the measured answer is
-//! **no, 0 of 24**.
-//!
-//! # Precondition, enforced here
-//!
-//! Bifragment carving applies only when the object does *not* validate
-//! contiguously. The first thing [`bifragment`] does is one sequential probe;
-//! if the object is whole in place it returns `None` rather than manufacturing
-//! a two-extent answer. This is what stops a length-declaring format — MP4
-//! declares `mdat`'s size in the first fragment — from being "reassembled" out
-//! of the first candidate the lattice offers.
-
 use crate::structure::{validate, Validation};
 use crate::Kind;
 
-/// A two-extent reassembly: `(byte_offset, byte_length)` per extent, in object
-/// order, plus the number of structure validations the search spent.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reassembly {
     pub extents: Vec<(u64, u64)>,
     pub validations: u64,
 }
 
-/// Ceiling on the first fragment, in clusters.
-///
-/// Derivation, measured against `out/fixture.img`: the longest true first
-/// fragment among the seven fragmented plants is 44 clusters
-/// (`sealing_procedure.mov`), so 256 carries 5.8x headroom. At 2048 B/cluster
-/// that is a 512 KiB first fragment.
-///
-/// The bound is what makes a *failed* search terminate in bounded time: an
-/// exhausted search costs `MAX_FIRST_FRAGMENT_CLUSTERS * gaps` validations,
-/// 32 768 at the fixture's 128-cluster gap bound. Without it the ceiling would
-/// be the format's `max_len` and a failure would cost thousands of times more —
-/// which matters, because every residue signature hit that survives to this
-/// point pays the failure cost.
-///
-/// Consequence, stated rather than hidden: an object whose first fragment
-/// exceeds 512 KiB is not recovered. That is a bound, not a success.
 pub const MAX_FIRST_FRAGMENT_CLUSTERS: u64 = 256;
 
-/// Object-size ceiling for the two-fragment search, in bytes.
-///
-/// This is the length of the slice handed to `validate` on every candidate, so
-/// it sets the cost of a validation as directly as the lattice sets their
-/// number. `SIGNATURES` carries `max_len` values of 32 to 256 MiB, which are
-/// the right bounds for a *sequential* scan and ruinous here, because a
-/// footer-scanning validator reads the whole slice on every candidate.
-///
-/// MEASURED, one exhausted `disposal_certificate.pdf` search against the
-/// shipped `structure/` module, release build, Darwin arm64. 32 779 validations
-/// in every row — the lattice is identical and only the slice changes.
-/// Reproduce with `bifragment::tests::span_ceiling_cost_is_measured`
-/// (`-- --ignored --nocapture`):
-///
-/// ```text
-///   span ceiling                    elapsed
-///   64 MiB (SIGNATURES max_len)     169.96 s
-///    4 MiB                           18.57 s
-///    1 MiB                           10.10 s
-/// ```
-///
-/// So this constant is the one knob trading recoverable object size against
-/// search time. The trade is not linear below a few MiB — the shipped PDF
-/// validator does work proportional to the xref table as well as to the slice —
-/// which is why the three rows above are measurements and not a formula.
-/// 1 MiB is 4x the largest planted file (260 595 bytes, `seizure_photo_a.png`).
-///
-/// The consequence, stated rather than hidden: **an object longer than 1 MiB is
-/// not reassembled by this module.** Sequential carving is unaffected — it uses
-/// `SIGNATURES::max_len`; this bound applies only to the two-fragment search.
-/// The working buffer is at most `MAX_OBJECT_BYTES + max_gap_bytes`.
-///
-/// The way to lift it without paying for it is to bound the slice by the
-/// object's own footer instead of by a constant: `SIGNATURES` already carries
-/// `footer` for JPEG, PNG, PDF and ZIP, so one linear scan for footer
-/// occurrences would size each candidate's slice to the object rather than to
-/// the ceiling. Not built here; named so it is not rediscovered.
 pub const MAX_OBJECT_BYTES: u64 = 1024 * 1024;
 
-/// Object-size ceiling used when `signature::SIGNATURES` carries no `max_len`
-/// for the kind (or carries zero).
 pub const DEFAULT_MAX_OBJECT_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Materiality floor on the **second** extent, in clusters.
-///
-/// A splice the validator accepts states two things: a first fragment, which is
-/// where the signature was found, and a second fragment, which is the whole of
-/// the new claim. This bound says the new claim must be at least one allocation
-/// unit of evidence.
-///
-/// It is a policy bound and not a law of allocation — FAT32 will happily end a
-/// file 139 bytes into its last cluster — so it is stated with its cost: **an
-/// object whose second fragment is shorter than one cluster is not
-/// reassembled.** What it buys is measured, on the fixture's own free space, in
-/// [`tests::a_real_header_prefix_over_free_space_does_not_manufacture_an_object`]:
-/// of 100 cluster-aligned free offsets carrying one real 2 048-byte JPEG header
-/// prefix and nothing else, 13 produced a determined two-extent answer under the
-/// original rules; 6 survive the two-sided determinacy rule, and 2 survive this
-/// one. The four it removes had second extents of 3, 17, 139 and 476 bytes.
-///
-/// The reason a sub-cluster tail is worth so little is mechanical: the
-/// determinacy probe moves the resume point by one whole cluster, so when the
-/// tail is shorter than a cluster the neighbouring assemblies share *no bytes*
-/// with it. The probe is then comparing this tail against unrelated bytes rather
-/// than against a shifted version of itself, and a contradiction from it says
-/// nothing about the tail's content.
 pub const MIN_SECOND_EXTENT_CLUSTERS: u64 = 1;
 
-/// Why a search stopped. Diagnostics; the public entry point collapses this to
-/// `Option<Reassembly>`.
-///
-/// INTEGRATOR NOTE: making this and [`search`] `pub` is a one-word change, and
-/// worth making if the demo wants to print *why* an object was refused —
-/// `Ambiguous` and `Contiguous` are different sentences on the slide. It is
-/// `pub(crate)` only because the Phase 2 interface contract does not name it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
 pub(crate) enum Stop {
-    /// A splice validated.
     Solved,
-    /// The object validates contiguously — sequential carving owns it.
     Contiguous,
-    /// The whole bounded lattice was searched and nothing validated.
     Exhausted,
-    /// Splices validated, but none could be stated as an object: either no
-    /// splice had a determined split and resume point, or the ones that did
-    /// carried a second extent below [`MIN_SECOND_EXTENT_CLUSTERS`]. A refusal,
-    /// never a guess.
     Ambiguous,
-    /// The validation budget ran out before the lattice did (measurement only).
     Budget,
-    /// The inputs do not describe a searchable lattice.
     Degenerate,
 }
 
-/// The bounded lattice, resolved from the caller's options before any work.
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
 pub(crate) struct Plan {
-    /// Absolute offset of the header in `data`.
     pub header_at: u64,
-    /// Lattice step in bytes. `cluster` in production; 1 for the byte-grid control.
     pub grid: u64,
-    /// Number of gap steps searched: `g` runs `1..=gaps`.
     pub gaps: u64,
-    /// Length of the shortest candidate first fragment.
     pub first_head: u64,
-    /// Largest candidate first fragment, in bytes.
     pub max_head: u64,
-    /// Ceiling on the total object length, in bytes.
     pub span: u64,
-    /// Working-buffer length, relative to `header_at`.
     pub window: u64,
-    /// Validation ceiling. `u64::MAX` in production.
     pub budget: u64,
 }
 
 #[allow(dead_code)]
 impl Plan {
-    /// Resolve the lattice, or `None` if the inputs cannot describe one.
     pub(crate) fn new(
         data_len: u64,
         span: u64,
@@ -548,16 +54,13 @@ impl Plan {
         }
         let avail = data_len - header_at;
         let span = span.min(avail);
-        // A two-extent object needs at least one byte in each extent.
         if span < 2 {
             return None;
         }
-        // Gap bound is INCLUSIVE: g * grid <= max_gap_bytes.
         let gaps = max_gap_bytes / grid;
         if gaps == 0 {
             return None;
         }
-        // First split point: the first lattice boundary strictly after the header.
         let first_head = ((header_at / grid) + 1) * grid - header_at;
         let max_head = max_head_bytes.min(span - 1);
         if first_head > max_head {
@@ -576,34 +79,24 @@ impl Plan {
         })
     }
 
-    /// Number of candidate first-fragment lengths.
     pub(crate) fn splits(&self) -> u64 {
         (self.max_head - self.first_head) / self.grid + 1
     }
 
-    /// Size of the lattice: the worst-case validation count of a failed search.
     pub(crate) fn lattice(&self) -> u64 {
         self.splits().saturating_mul(self.gaps)
     }
 }
 
-/// The result of one bounded search, including the cost of a failure.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub(crate) struct Outcome {
     pub found: Option<Reassembly>,
     pub validations: u64,
     pub stop: Stop,
-    /// How many splices the validator accepted. `Ambiguous` with `accepted`
-    /// large is a different sentence on the slide from `Exhausted` with
-    /// `accepted` zero: the first says the validator cannot separate thousands
-    /// of structurally perfect assemblies, the second says the object is not
-    /// there in two forward fragments at all.
     pub accepted: u64,
 }
 
-/// Object-size ceiling for a kind, taken from the published signature table so
-/// the number lives in exactly one file.
 fn span_ceiling(kind: Kind, avail: u64) -> u64 {
     let want = kind.as_str();
     let mut max_len = DEFAULT_MAX_OBJECT_BYTES;
@@ -618,20 +111,6 @@ fn span_ceiling(kind: Kind, avail: u64) -> u64 {
     max_len.min(MAX_OBJECT_BYTES).min(avail)
 }
 
-/// Search forward from a header for a second fragment that completes the object.
-///
-/// `data` is the whole image; `header_at` is an absolute offset into it.
-/// `max_gap_bytes` comes from `CarveOpts` and is applied inclusively:
-/// a gap of exactly `max_gap_bytes` is searched. `cluster` is the allocation
-/// granularity, and both the split point and the resume point are constrained
-/// to it.
-///
-/// Returns `None` — never a guess — when the object validates contiguously,
-/// when the lattice is exhausted, when the inputs are degenerate, and when
-/// splices validated but none could be stated as an object: not pinned on every
-/// side the rule requires, or a second extent below
-/// [`MIN_SECOND_EXTENT_CLUSTERS`]. The returned [`Reassembly::validations`] is
-/// the measured cost of the recovery, including the one sequential probe.
 pub fn bifragment(
     data: &[u8],
     kind: Kind,
@@ -655,9 +134,6 @@ pub fn bifragment(
     search(data, &plan, |buf| validate(kind, buf)).found
 }
 
-/// The counted search. Separated from [`bifragment`] so tests can inject a stub
-/// validator, drive the byte-grid control, and read the cost of a *failure* —
-/// which the public `Option` return necessarily discards.
 pub(crate) fn search<F>(data: &[u8], plan: &Plan, mut check: F) -> Outcome
 where
     F: FnMut(&[u8]) -> Validation,
@@ -671,9 +147,6 @@ where
 
     let mut validations: u64 = 0;
 
-    // Precondition probe. Bifragment carving applies only where sequential
-    // carving has already failed; if the object is whole in place, say so and
-    // return nothing rather than inventing a second extent.
     {
         let seq_len = (plan.span as usize).min(window);
         let v = check(&data[h..h + seq_len]);
@@ -686,8 +159,6 @@ where
         }
     }
 
-    // Working buffer. `x[i]` mirrors `data[h + i]` except where a candidate head
-    // has been written over it.
     let mut x = data[h..h + window].to_vec();
     let head_src = &data[h..];
 
@@ -702,13 +173,12 @@ where
 
         for g in 1..=plan.gaps {
             let goff = (g as usize).saturating_mul(grid);
-            // Slice handed to the validator: head ++ continuation.
             if goff + hl >= window {
-                break; // no room for the head, let alone a second fragment
+                break;
             }
             let len = (plan.span as usize).min(window - goff);
             if len <= hl {
-                break; // second extent would be empty; larger g only shrinks it
+                break;
             }
 
             x[goff..goff + hl].copy_from_slice(&head_src[..hl]);
@@ -721,9 +191,6 @@ where
                 if let Some(end) = v.end {
                     let end = end as usize;
                     if end <= hl {
-                        // The head alone contains a whole object: contiguous
-                        // after all, and independent of g. Do not manufacture a
-                        // second extent.
                         return Outcome {
                             found: None,
                             validations,
@@ -736,10 +203,6 @@ where
                         let resume = plan.header_at + hl as u64 + goff as u64;
                         if resume + second_len <= data.len() as u64 {
                             accepted += 1;
-                            // Materiality first, because it is free. A second
-                            // extent below the floor is not a fragment this
-                            // search will state; see MIN_SECOND_EXTENT_CLUSTERS
-                            // for what that costs and what it buys.
                             if second_len
                                 < MIN_SECOND_EXTENT_CLUSTERS.saturating_mul(plan.grid)
                             {
@@ -754,10 +217,6 @@ where
                                 }
                                 continue;
                             }
-                            // A validating splice is a candidate, not an answer.
-                            // Both the split point and the resume point must be
-                            // pinned, or the validator is not covering the bytes
-                            // that distinguish this assembly from a wrong one.
                             let (determined, spent) =
                                 is_determined(data, plan, hl, g, &mut scratch, &mut check);
                             validations += spent;
@@ -776,13 +235,9 @@ where
                                 };
                             }
                             indeterminate += 1;
-                            // The neighbour probes wrote into their own scratch
-                            // buffer, but `x` still holds this candidate's head.
                         }
                     }
                 }
-                // valid with no usable end: no extents can be stated, so this is
-                // not a recovery. Keep searching rather than guessing a length.
             }
 
             if validations >= plan.budget {
@@ -790,8 +245,6 @@ where
             }
         }
 
-        // Restore everything a head was written over, so the next hl sees clean
-        // image bytes. x[0..grid] is never written.
         let lo = grid.min(window);
         let hi = dirty_to.min(window);
         if hi > lo {
@@ -805,12 +258,6 @@ where
     Outcome { found: None, validations, stop, accepted }
 }
 
-/// Assemble `head ++ continuation` for one candidate into `scratch`, the plain
-/// way. Used only by the determinacy probe, which runs at most four times per
-/// accepted candidate, so it does not need the sliding-head buffer.
-///
-/// `gap_clusters` may sit one step outside the searched lattice: the claim being
-/// tested is about the image, not about where the search chose to stop.
 fn splice(
     data: &[u8],
     plan: &Plan,
@@ -845,55 +292,6 @@ fn splice(
     true
 }
 
-/// The four one-cluster neighbours of `(hl, gap)`. If any of them also
-/// validates, the validator is blind to the bytes that separate this assembly
-/// from that one, and neither can be stated as the object.
-///
-/// # A neighbour that cannot be tested does not pin anything
-///
-/// The first version of this rule skipped any neighbour that fell outside the
-/// image — "it cannot disagree, so it cannot disqualify" — and that reasoning is
-/// wrong in the one place it is load-bearing. A neighbour that was never
-/// validated is not a contradiction; it is a missing measurement, and treating
-/// it as a pass means the splice was pinned on fewer than four sides while the
-/// code reported it as pinned on four.
-///
-/// MEASURED, and this is why the rule changed: one real 2 048-byte JPEG header
-/// prefix (lifted from `/seizure_photo_b.jpg` at 200 210 432) written onto a
-/// free cluster of an in-memory copy of `out/fixture.img`, nothing else changed,
-/// produced an ADMITTED reassembled record at confidence 1.0000 for an object
-/// that does not exist — `[(253691904, 2048), (253763584, 139)]`, 139 bytes of
-/// unrelated free space 71 680 bytes downstream. Repeated over 100 cluster-
-/// aligned free offsets from 240 MiB on, **13 of 100** produced such an answer.
-/// Every one of them had `hl` at the lattice's smallest head, where
-/// `hl - grid == 0`: the shrink-side probe was skipped, and three sides were
-/// being reported as four.
-///
-/// So each neighbour is now `Required` or `Exempt`, and a `Required` neighbour
-/// that cannot be spliced makes the candidate **indeterminate**:
-///
-/// | neighbour | status | why |
-/// |---|---|---|
-/// | `hl - grid` | Required | a head at the lattice floor has nothing below it to contradict it, so its split point is pinned on one side only |
-/// | `hl + grid` | Required | — |
-/// | `gap - 1` | Exempt **only** when `gap == 1` | that neighbour *is* the contiguous read, which the precondition probe already validated and rejected before the lattice was entered. The contradiction exists; it was measured one layer up. |
-/// | `gap + 1` | Required | — |
-///
-/// `entropy_heatmap.png` is the plant the exemption applies to: its true gap is
-/// one cluster, so it is pinned by three lattice neighbours plus the sequential
-/// probe. Both recovered plants are pinned on the shrink side by a real
-/// validation (`hl - grid` rejects for both), so the stricter rule costs neither
-/// of them — measured, not assumed, by
-/// [`tests::fixture_solvable_fragments_are_recovered_or_refused_never_wrong`].
-///
-/// Widening the probe instead — testing `k` clusters out rather than one — was
-/// measured and does nothing: over both fabricated JPEGs above, all 24 probes at
-/// `k = 2..=6` in both dimensions fail to validate, exactly as `k = 1` does. The
-/// fabrication is not a near-miss of a neighbouring splice; it is an isolated
-/// point that the validator alone cannot see through. Distance is not the axis
-/// that separates it, so this rule does not spend validations on distance.
-///
-/// Returns `(determined, validations spent)`.
 fn is_determined<F>(
     data: &[u8],
     plan: &Plan,
@@ -906,9 +304,6 @@ where
     F: FnMut(&[u8]) -> Validation,
 {
     let grid = plan.grid as usize;
-    // (hl, gap, required). Required means: this neighbour must be spliceable AND
-    // must fail to validate. Exempt means: its contradiction was established
-    // elsewhere, and the table above says where.
     let neighbours: [(usize, u64, bool); 4] = [
         (hl.saturating_sub(grid), gap, true),
         (hl + grid, gap, true),
@@ -922,9 +317,6 @@ where
         }
         if !splice(data, plan, nhl, ngap, scratch) {
             if required {
-                // Never validated, therefore never contradicted. The candidate
-                // is pinned on fewer sides than the rule claims, so it is not
-                // determined.
                 return (false, spent);
             }
             continue;
@@ -944,12 +336,6 @@ mod tests {
     use crate::structure::Validation;
     use std::time::Instant;
 
-    // ------------------------------------------------------------------
-    // Stub validators. structure.rs is another agent's file; the search
-    // mechanics are tested against validators defined here so that the
-    // lattice, the bounds and the buffer are checked independently of it.
-    // ------------------------------------------------------------------
-
     fn ok(end: u64, detail: &str) -> Validation {
         Validation { valid: true, end: Some(end), score: 1.0, detail: detail.into() }
     }
@@ -957,11 +343,6 @@ mod tests {
         Validation { valid: false, end: None, score: 0.0, detail: detail.into() }
     }
 
-    /// A validator for a synthetic format: `MAGIC` then a 4-byte big-endian
-    /// total length, then that many bytes of a payload whose byte at index `i`
-    /// is `(i * 31 + 7) as u8`. It is exact — it accepts only the true bytes —
-    /// which is what an honest structure validator does and what makes the
-    /// planted-failure assertions mean something.
     const MAGIC: &[u8] = b"SWOBJ";
 
     fn synth_object(total: usize) -> Vec<u8> {
@@ -993,10 +374,7 @@ mod tests {
         ok(total as u64, "synthetic object complete")
     }
 
-    /// Lay a synthetic object into a canvas at the given extents.
     fn plant(canvas_len: usize, obj: &[u8], extents: &[(usize, usize)]) -> Vec<u8> {
-        // Filler is a deterministic non-matching pattern; it must never equal
-        // the object's payload, or the test would be measuring luck.
         let mut c: Vec<u8> = (0..canvas_len).map(|i| (i % 251) as u8 ^ 0xA5).collect();
         let mut cursor = 0usize;
         for &(off, len) in extents {
@@ -1025,19 +403,12 @@ mod tests {
         .expect("plan")
     }
 
-    // ------------------------------------------------------------------
-    // 1 · the lattice: bound, inclusivity, granularity
-    // ------------------------------------------------------------------
-
-    /// The property `disposal_certificate.pdf` was planted to expose: a gap of
-    /// exactly `max_gap_bytes` is inside the search, and one cluster more is not.
     #[test]
     fn gap_bound_is_inclusive_at_the_boundary() {
         let cluster = 64u64;
         let max_gap_clusters = 8u64;
         let max_gap_bytes = max_gap_clusters * cluster;
 
-        // first fragment 3 clusters, gap exactly 8 clusters, remainder after.
         let obj = synth_object(300);
         let f1 = 3 * cluster as usize;
         let at_bound = plant(
@@ -1057,7 +428,6 @@ mod tests {
             ]
         );
 
-        // one cluster past the bound: the same object must NOT be found.
         let past = plant(
             2048,
             &obj,
@@ -1068,7 +438,6 @@ mod tests {
         assert!(out.found.is_none());
     }
 
-    /// `max_gap_bytes` is the caller's, not the module's.
     #[test]
     fn gap_bound_comes_from_the_caller() {
         let cluster = 64u64;
@@ -1088,35 +457,24 @@ mod tests {
         assert_eq!(search(&img, &loose, |b| synth_validate(b)).stop, Stop::Solved);
     }
 
-    /// Fragments start on cluster boundaries. A split that does not is outside
-    /// the lattice by construction, and the search says so rather than finding it.
     #[test]
     fn search_is_confined_to_the_cluster_lattice() {
         let cluster = 64u64;
         let obj = synth_object(300);
-        let f1 = 3 * cluster as usize + 17; // deliberately off-grid
+        let f1 = 3 * cluster as usize + 17;
         let img = plant(2048, &obj, &[(0, f1), (f1 + 320, obj.len() - f1)]);
         let p = plan_for(img.len(), 0, 8 * cluster, cluster, 16 * cluster);
         assert_eq!(search(&img, &p, |b| synth_validate(b)).stop, Stop::Exhausted);
 
-        // The same image on a byte grid does find it — the difference is the
-        // lattice, not the data.
         let p1 = plan_for(img.len(), 0, 8 * cluster, 1, 16 * cluster);
         assert_eq!(search(&img, &p1, |b| synth_validate(b)).stop, Stop::Solved);
     }
 
-    /// The cost formula in the module header, checked rather than claimed.
-    ///
-    /// `k` starts at 2 clusters, not 1: a first fragment at the lattice's floor
-    /// has no shorter head to contradict it, so [`is_determined`] refuses it.
-    /// That refusal is asserted in
-    /// [`tests::a_head_at_the_lattice_floor_is_not_pinned_from_below`] rather
-    /// than assumed here.
     #[test]
     fn validation_count_matches_the_published_formula() {
         let cluster = 64u64;
         let gaps = 8u64;
-        let obj = synth_object(700); // longer than the longest first fragment tried
+        let obj = synth_object(700);
         for (k, g) in [(2usize, 1u64), (3, 5), (5, 8)] {
             let f1 = k * cluster as usize;
             let img = plant(
@@ -1127,8 +485,6 @@ mod tests {
             let p = plan_for(img.len(), 0, gaps * cluster, cluster, 16 * cluster);
             let out = search(&img, &p, |b| synth_validate(b));
             assert_eq!(out.stop, Stop::Solved, "k={k} g={g}");
-            // sequential probe + lattice walk + up to four determinacy
-            // neighbours (fewer when a neighbour falls outside the image).
             let walk = 1 + (k as u64 - 1) * gaps + g;
             assert!(
                 out.validations >= walk && out.validations <= walk + 4,
@@ -1140,22 +496,12 @@ mod tests {
         }
     }
 
-    /// The smallest head in the lattice is never returned, because nothing on
-    /// the lattice can contradict it from below.
-    ///
-    /// This is the rule that stopped a real 2 048-byte JPEG header prefix over
-    /// free space from being answered with a 139-byte tail — see
-    /// [`tests::a_real_header_prefix_over_free_space_does_not_manufacture_an_object`]
-    /// for the measurement on the fixture. Here it is checked on the synthetic
-    /// format, where the object planted at a one-cluster first fragment IS
-    /// really there and the search still refuses to state it: the refusal is a
-    /// property of the rule, not of the data.
     #[test]
     fn a_head_at_the_lattice_floor_is_not_pinned_from_below() {
         let cluster = 64u64;
         let gaps = 8u64;
         let obj = synth_object(700);
-        let f1 = cluster as usize; // the lattice floor: hl - grid == 0
+        let f1 = cluster as usize;
         let img = plant(4096, &obj, &[(0, f1), (f1 + 64, obj.len() - f1)]);
         let p = plan_for(img.len(), 0, gaps * cluster, cluster, 16 * cluster);
         let out = search(&img, &p, |b| synth_validate(b));
@@ -1167,8 +513,6 @@ mod tests {
         assert!(out.found.is_none());
         assert_eq!(out.accepted, 1, "the true splice should still be accepted");
 
-        // The same object, one cluster further in, is recovered: the refusal is
-        // about the floor and nothing else.
         let f2 = 2 * cluster as usize;
         let img2 = plant(4096, &obj, &[(0, f2), (f2 + 64, obj.len() - f2)]);
         let out2 = search(&img2, &p, |b| synth_validate(b));
@@ -1179,14 +523,10 @@ mod tests {
         );
     }
 
-    /// A second extent below [`MIN_SECOND_EXTENT_CLUSTERS`] is not stated as an
-    /// object, and the refusal is reported as a refusal.
     #[test]
     fn a_second_extent_below_the_materiality_floor_is_refused() {
         let cluster = 64u64;
         let gaps = 8u64;
-        // 20 bytes of tail behind a 3-cluster head: a real object of the
-        // synthetic format, planted, found by the validator, and still refused.
         let total = 3 * cluster as usize + 20;
         let obj = synth_object(total);
         let f1 = 3 * cluster as usize;
@@ -1202,7 +542,6 @@ mod tests {
         assert_eq!(out.stop, Stop::Ambiguous);
     }
 
-    /// An exhausted search costs exactly the lattice, plus the probe.
     #[test]
     fn exhausted_search_costs_exactly_the_lattice() {
         let cluster = 64u64;
@@ -1215,17 +554,11 @@ mod tests {
         assert_eq!(out.validations, 1 + p.lattice());
     }
 
-    // ------------------------------------------------------------------
-    // 2 · the buffer
-    // ------------------------------------------------------------------
-
-    /// The sliding-head buffer must hand the validator exactly the bytes a
-    /// naive `head ++ tail` splice would. Checked across the whole lattice.
     #[test]
     fn sliding_head_buffer_equals_a_naive_splice() {
         let cluster = 64u64;
         let data: Vec<u8> = (0..4096u32).map(|i| (i.wrapping_mul(2654435761) >> 13) as u8).collect();
-        for header_at in [0u64, 64, 1000 /* deliberately unaligned */] {
+        for header_at in [0u64, 64, 1000 ] {
             let p = plan_for(data.len(), header_at, 6 * cluster, cluster, 10 * cluster);
             let mut seen: Vec<Vec<u8>> = Vec::new();
             search(&data, &p, |b| {
@@ -1234,7 +567,6 @@ mod tests {
             });
 
             let mut expect: Vec<Vec<u8>> = Vec::new();
-            // the sequential probe
             let h = header_at as usize;
             let seq = (p.span as usize).min(p.window as usize);
             expect.push(data[h..h + seq].to_vec());
@@ -1264,12 +596,10 @@ mod tests {
         }
     }
 
-    /// An unaligned header still produces cluster-aligned split and resume
-    /// points, because a real allocator aligns the *image*, not the file.
     #[test]
     fn unaligned_header_still_splits_on_image_cluster_boundaries() {
         let cluster = 64u64;
-        let header_at = 1000u64; // 1000 = 15*64 + 40
+        let header_at = 1000u64;
         let p = plan_for(4096, header_at, 4 * cluster, cluster, 8 * cluster);
         assert_eq!(p.first_head, 24, "first split is the next boundary at 1024");
         assert_eq!((header_at + p.first_head) % cluster, 0);
@@ -1282,14 +612,6 @@ mod tests {
         }
     }
 
-    // ------------------------------------------------------------------
-    // 3 · the two planted failures — load-bearing for the demo's honesty
-    // ------------------------------------------------------------------
-
-    /// Three fragments cannot be solved by a two-fragment search. Geometry of
-    /// `media_inventory.docx`: extents of 9, 13 and 17 clusters with gaps of 11
-    /// and 29 clusters, both inside the gap bound. The search must terminate
-    /// and report failure, not return a two-extent object.
     #[test]
     fn three_fragments_are_not_solved_by_a_two_fragment_search() {
         let cluster = 64usize;
@@ -1314,17 +636,12 @@ mod tests {
         );
     }
 
-    /// A physically reversed object is not solvable by a forward-only search.
-    /// Geometry of `evidence_bag_seal.jpg`: the header's extent sits 77 clusters
-    /// *after* the continuation. The search must not find it, and must not be
-    /// taught to look backwards to win.
     #[test]
     fn reversed_object_is_not_solved_by_a_forward_search() {
         let cluster = 64usize;
         let obj = synth_object(18 * cluster + 600);
         let e1 = 18 * cluster;
         let e2 = obj.len() - e1;
-        // continuation first, header 77 clusters later.
         let o2 = 1000 * cluster;
         let o1 = o2 + 77 * cluster;
         let img = plant(o1 + e1 + 4096, &obj, &[(o1, e1), (o2, e2)]);
@@ -1334,21 +651,12 @@ mod tests {
         assert!(out.found.is_none(), "a forward search must not solve a reversed object");
         assert_eq!(out.stop, Stop::Exhausted);
 
-        // And the object IS there — a backward search would find it. Proving the
-        // data is present is what makes the failure a decision rather than a bug.
         let mut whole = Vec::new();
         whole.extend_from_slice(&img[o1..o1 + e1]);
         whole.extend_from_slice(&img[o2..o2 + e2]);
         assert!(synth_validate(&whole).valid, "the reversed object is intact in the image");
     }
 
-    // ------------------------------------------------------------------
-    // 3b · determinacy
-    // ------------------------------------------------------------------
-
-    /// A validator blind to a stretch of the object accepts several splices.
-    /// The determinacy probe must catch that and refuse, rather than returning
-    /// whichever one the lattice reached first.
     #[test]
     fn a_validator_blind_to_part_of_the_object_yields_a_refusal() {
         let cluster = 64u64;
@@ -1358,7 +666,6 @@ mod tests {
         let img = plant(4096, &obj, &[(0, f1), (f1 + gap * 64, obj.len() - f1)]);
         let p = plan_for(img.len(), 0, 8 * cluster, cluster, 16 * cluster);
 
-        // Exact validator: one accepting splice, determined, recovered.
         let out = search(&img, &p, |b| synth_validate(b));
         assert_eq!(out.stop, Stop::Solved);
         assert_eq!(
@@ -1366,11 +673,6 @@ mod tests {
             vec![(0, f1 as u64), ((f1 + gap * 64) as u64, (obj.len() - f1) as u64)]
         );
 
-        // Partial validator: it checks the object's two ends but never its
-        // middle — the failure mode of any format that declares its own length
-        // and carries no checksum over the body. It rejects the contiguous read
-        // (the far end is wrong) yet accepts every splice whose tail lands
-        // correctly, whatever the split point.
         let partial = |b: &[u8]| {
             if b.len() < 9 || &b[..5] != MAGIC {
                 return bad("no magic");
@@ -1392,8 +694,6 @@ mod tests {
         assert_eq!(out.stop, Stop::Ambiguous, "and the refusal must say why");
     }
 
-    /// The determinacy probe costs at most four validations per accepted
-    /// candidate, and they are counted.
     #[test]
     fn determinacy_cost_is_counted() {
         let cluster = 64u64;
@@ -1406,11 +706,6 @@ mod tests {
         assert_eq!(out.validations, first_hit + 4, "probe + lattice walk + 4 neighbours");
     }
 
-    // ------------------------------------------------------------------
-    // 4 · refusals
-    // ------------------------------------------------------------------
-
-    /// A contiguous object is sequential carving's job. Cost: one validation.
     #[test]
     fn contiguous_object_is_refused_after_one_validation() {
         let cluster = 64u64;
@@ -1423,8 +718,6 @@ mod tests {
         assert_eq!(out.validations, 1);
     }
 
-    /// A validator that says "valid" but cannot state an end yields no extents,
-    /// so no recovery is reported. The search does not invent a length.
     #[test]
     fn valid_without_an_end_is_not_a_recovery() {
         let cluster = 64u64;
@@ -1436,11 +729,9 @@ mod tests {
             score: 1.0,
             detail: "no end".into(),
         });
-        // the sequential probe returns valid -> Contiguous, which is also a refusal
         assert!(out.found.is_none());
     }
 
-    /// Degenerate inputs terminate rather than panicking.
     #[test]
     fn degenerate_inputs_terminate() {
         let img = vec![0u8; 1024];
@@ -1453,14 +744,10 @@ mod tests {
         assert_eq!(out.stop, Stop::Exhausted);
     }
 
-    // ------------------------------------------------------------------
-    // 5 · cluster grid versus byte grid — measured, both run to completion
-    // ------------------------------------------------------------------
-
     #[test]
     fn cluster_grid_versus_byte_grid_is_measured() {
         let cluster = 64u64;
-        let max_head_bytes = 8 * cluster; // identical byte-space for both grids
+        let max_head_bytes = 8 * cluster;
         let max_gap_bytes = 8 * cluster;
         let obj = synth_object(400);
         let f1 = 3 * cluster as usize;
@@ -1498,59 +785,22 @@ mod tests {
         assert!(ob.validations > oc.validations * 100, "the byte grid must cost far more");
     }
 
-    // ------------------------------------------------------------------
-    // 6 · the real fixture
-    // ------------------------------------------------------------------
-
     const FIXTURE_BYTES: u64 = 268_435_456;
     const CLUSTER: u64 = 2048;
     const MAX_GAP_CLUSTERS: u64 = 128;
 
-    /// Ground truth for the seven fragmented plants, transcribed from
-    /// `out/fixture.manifest.json` (image sha256
-    /// d85612b255ff8e72e1ab8d7a34c227b67c3cb3acda75e2a92e5042758ac2df41).
-    /// name, Kind::as_str, header offset, expected extents, expected outcome.
     struct Plant {
         name: &'static str,
         kind: &'static str,
         header_at: u64,
         extents: &'static [(u64, u64)],
-        /// The fixture manifest's `expected_recoverable` is "bifragment".
         recoverable: bool,
-        /// Whether `structure::validate` pins this object to exactly one splice
-        /// in the lattice. MEASURED against `core/carve/src/structure/`, not
-        /// assumed: see the determinacy table in the module header. `false`
-        /// names a gap in the validator, and `finding` says which.
         determined: bool,
-        /// Printed on every run when the plant is not recovered. This is the
-        /// "name the two we cannot do" discipline applied to everything we
-        /// cannot do, not only to the two the fixture planted.
         finding: &'static str,
     }
 
-    /// The highest structural credit any assembly of a PLANTED fragmented header
-    /// reaches while the validator REJECTS it.
-    ///
-    /// MEASURED by `reassembly_does_not_lift_a_residue_candidate_past_its_contiguous_credit`,
-    /// which prints the row it comes from: `entropy_heatmap.png`, one cluster off
-    /// its true splice, failing on a single IDAT CRC-32 while 27 of its 28 chunks
-    /// verify. A near miss of a real file scores nearly full marks, which is the
-    /// plainest possible statement of why an assembly the validator rejected must
-    /// never be scored.
     const PLANT_REJECTED_CEILING: f64 = 0.989_285_714_285_714_2;
 
-    /// The same figure for `media_inventory.docx`, the tri-fragment plant — the
-    /// widest lift in the image, 0.020000 contiguously to this.
-    ///
-    /// It is called out separately because it is the dangerous one: the PNG above
-    /// is a near miss of a file this engine recovers correctly anyway, while this
-    /// is the file the demo names on stage as unrecoverable by design, and the
-    /// rejected assembly resolves its true total length — 79 397 bytes — to the
-    /// byte. Scored, it would be admitted at 0.9850 as itself.
-    ///
-    /// Earlier build reports named 0.300000 at ZIP@1069434 as the reachable
-    /// ceiling on a rejected assembly. That was the residue population with the
-    /// seven plants filtered out of it, and it understated this by 3.2x.
     const PLANT_TRIFRAGMENT_REJECTED_CEILING: f64 = 0.957_142_857_142_857_1;
 
     const PLANTS: &[Plant] = &[
@@ -1578,12 +828,6 @@ mod tests {
             header_at: 170_430_464,
             extents: &[(170_430_464, 12_288), (170_704_896, 33_768)],
             recoverable: true,
-            // MEASURED by full-lattice enumeration: 10 splices validate, all
-            // at gap = 128 clusters (the true gap) and differing only in the
-            // split point, hl = 1..10 clusters. That interval is object 2's
-            // ~21 kB FlateDecode body, which structure::pdf never decodes.
-            // Exactly 1 of the 10 carries the planted bytes; none is
-            // determined; the search refuses.
             determined: false,
             finding: "structure::pdf verifies 34/34 xref offsets but decodes no \
                       stream body, so 10 splices validate and 9 are the wrong \
@@ -1619,7 +863,7 @@ mod tests {
             kind: "zip",
             header_at: 1_069_056,
             extents: &[],
-            recoverable: false, // three fragments
+            recoverable: false,
             determined: false,
             finding: "planted: three fragments, unsolvable by a two-fragment search",
         },
@@ -1628,7 +872,7 @@ mod tests {
             kind: "jpeg",
             header_at: 214_231_040,
             extents: &[],
-            recoverable: false, // physically reversed, gap -77 clusters
+            recoverable: false,
             determined: false,
             finding: "planted: physically reversed, unsolvable by a forward search",
         },
@@ -1654,22 +898,6 @@ mod tests {
         Some(data)
     }
 
-    /// The measurement the pitch rests on. Two claims, and they are different
-    /// sizes:
-    ///
-    /// 1. **Never wrong.** For every fragmented plant, the answer is either the
-    ///    manifest's extents or nothing. A structurally valid but content-wrong
-    ///    reassembly is the failure this module exists to avoid, and it is
-    ///    asserted for all five, unconditionally.
-    /// 2. **Recovered.** The plants `structure::validate` pins to exactly one
-    ///    splice are recovered exactly, and the floor is `determined: true` in
-    ///    the table below rather than a literal, so it rises on its own if the
-    ///    validators improve. MEASURED today that is two of the five solvable
-    ///    plants — `imaging_transcript.txt.gz` and `entropy_heatmap.png`. The
-    ///    PDF and the two MP4s are refused; see the determinacy table in the
-    ///    module header for which validator gap or container limit is
-    ///    responsible for each. The refusal is the honest answer, not a hidden
-    ///    one, and the reason is printed by name on every run.
     #[test]
     fn fixture_solvable_fragments_are_recovered_or_refused_never_wrong() {
         let Some(data) = load_fixture() else {
@@ -1704,9 +932,6 @@ mod tests {
                 Some(r) => {
                     let ok = r.extents == p.extents;
                     let gap = (r.extents[1].0 - (r.extents[0].0 + r.extents[0].1)) / CLUSTER;
-                    // Extents equal to the manifest's imply the bytes are the
-                    // planted file's, but the bytes are what the certificate
-                    // hashes, so they are compared directly rather than inferred.
                     let mut got = Vec::new();
                     for &(off, len) in &r.extents {
                         got.extend_from_slice(&data[off as usize..(off + len) as usize]);
@@ -1717,11 +942,6 @@ mod tests {
                         p.name, r.extents, gap, got.len(), r.validations, out.accepted, el, ok, bytes_ok
                     );
                     assert!(bytes_ok, "{}: recovered bytes are not the planted file", p.name);
-                    // The published cost formula, checked against the image
-                    // rather than only against a synthetic. Both plants sit on
-                    // cluster-aligned headers, so the walk is
-                    // (hl/cluster - 1) * gaps + g, plus the sequential probe,
-                    // plus at most four determinacy neighbours.
                     assert_eq!(p.header_at % CLUSTER, 0, "{}: header off-grid", p.name);
                     let walk = (r.extents[0].1 / CLUSTER - 1) * plan.gaps + gap;
                     assert!(
@@ -1756,10 +976,8 @@ mod tests {
         }
         println!("CARVE  fragmented: {recovered} recovered exactly, {refused} refused, {} wrong", wrong.len());
 
-        // Claim 1 — unconditional.
         assert!(wrong.is_empty(), "wrong-but-validating reassembly: {}", wrong.join("; "));
         assert!(missing.is_empty(), "{}", missing.join("; "));
-        // Claim 2 — the plants whose formats determine the answer.
         let want = PLANTS.iter().filter(|p| p.recoverable && p.determined).count();
         if recovered > want {
             println!(
@@ -1777,8 +995,6 @@ mod tests {
         );
     }
 
-    /// The two the fixture plants to defeat us. These assertions are the demo's
-    /// honesty: if either ever passes, the carver has been taught the answer.
     #[test]
     fn fixture_two_planted_failures_fail_and_say_so() {
         let Some(data) = load_fixture() else {
@@ -1828,23 +1044,15 @@ mod tests {
         }
     }
 
-    /// The byte grid, on the real image, under a budget. It does not reach the
-    /// solution; the cluster grid does. Both numbers are measured here.
     #[test]
     fn fixture_byte_grid_control_does_not_finish() {
         let Some(data) = load_fixture() else {
             eprintln!("FIXTURE  out/fixture.img absent — run `make fixtures`. Skipping.");
             return;
         };
-        // disposal_certificate.pdf: the cheapest of the five on the cluster grid.
         let p = &PLANTS[2];
         let kind = kind_by_str(p.kind).expect("pdf signature");
         let max_gap_bytes = MAX_GAP_CLUSTERS * CLUSTER;
-        // Both grids get the SAME span and the SAME head ceiling, so the only
-        // variable between them is the lattice. 64 KiB comfortably contains the
-        // 46 056-byte object and keeps the control affordable in a debug build;
-        // the head ceiling is a whole number of clusters below it so the two
-        // lattice cardinalities are exactly comparable.
         let span = 65_536u64;
         let max_head_bytes = 31 * CLUSTER;
 
@@ -1882,40 +1090,15 @@ mod tests {
         assert!(ob.found.is_none());
     }
 
-    // ------------------------------------------------------------------
-    // 7 · the whole lattice, enumerated — where the ambiguity actually is
-    // ------------------------------------------------------------------
-
-    /// One accepting splice, in lattice coordinates.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct Hit {
-        /// First-fragment length in bytes.
         hl: u64,
-        /// Gap in clusters.
         g: u64,
-        /// Object length the validator reported.
         end: u64,
-        /// Did all four one-cluster neighbours fail?
         determined: bool,
-        /// Are the assembled bytes the planted file, byte for byte? Ground
-        /// truth from the manifest's extents, not from the validator. This is
-        /// the column that turns "structurally perfect" into "the right file",
-        /// and the gap between the two columns is the whole argument for the
-        /// determinacy rule.
         content_ok: bool,
     }
 
-    /// Walk the ENTIRE lattice — no early exit — and return every splice the
-    /// validator accepts, each tagged with whether it is determined.
-    ///
-    /// This is the instrument the early-exit search is judged against. `search`
-    /// stops at the first determined hit; enumeration answers the question that
-    /// stopping early cannot: is that hit the ONLY determined one? On this
-    /// fixture the answer is measured, not assumed.
-    ///
-    /// Deliberately naive: it splices into a fresh buffer per candidate rather
-    /// than using the sliding-head buffer, so it is an independent check of the
-    /// buffer as well as of the search.
     fn enumerate_lattice<F>(
         data: &[u8],
         plan: &Plan,
@@ -1971,8 +1154,6 @@ mod tests {
         .expect("plan")
     }
 
-    /// The planted file's actual bytes, read out of the image at the manifest's
-    /// extents. Ground truth for the content column.
     fn true_bytes(data: &[u8], p: &Plant) -> Option<Vec<u8>> {
         if p.extents.is_empty() {
             return None;
@@ -1984,7 +1165,6 @@ mod tests {
         Some(v)
     }
 
-    /// The true splice of a plant, in lattice coordinates.
     fn true_splice(p: &Plant) -> Option<(u64, u64)> {
         if p.extents.len() != 2 {
             return None;
@@ -1994,30 +1174,6 @@ mod tests {
         Some((hl, gap / CLUSTER))
     }
 
-    /// The measurement behind every "Ambiguous" on the fixture, and the one that
-    /// licenses the early exit.
-    ///
-    /// Expensive by construction — it refuses to stop early — so it is
-    /// `#[ignore]`d. Run it with:
-    ///
-    /// ```text
-    /// cargo test --release -p sentinelwipe-carve --lib \
-    ///     bifragment::tests::fixture_lattice_enumeration -- --ignored --nocapture
-    /// ```
-    ///
-    /// Three things are asserted rather than printed, because each one is a
-    /// claim the demo makes out loud:
-    ///
-    /// 1. **The inclusive gap bound reaches the boundary plant.** The true
-    ///    splice of `disposal_certificate.pdf` sits at gap = 128 clusters =
-    ///    `max_gap_bytes` exactly. It must appear in the enumeration. If the
-    ///    bound were exclusive it could not, and the PDF's refusal would be a
-    ///    bound defect masquerading as ambiguity.
-    /// 2. **Every determined hit is the true splice.** A determined hit that is
-    ///    not the manifest's answer is the silent wrong-but-validating recovery
-    ///    this module exists to prevent, and it would be returned by the early
-    ///    exit.
-    /// 3. **The two planted failures accept nothing at all.**
     #[test]
     #[ignore = "walks the full 32768-cell lattice for seven plants; run with --release"]
     fn fixture_lattice_enumeration_measures_ambiguity() {
@@ -2066,10 +1222,6 @@ mod tests {
             if hits.len() > 12 {
                 println!("        ... {} more accepting splices", hits.len() - 12);
             }
-            // The planted file is IN the accepting set for every solvable plant,
-            // exactly once. Everything else the validator accepted is a
-            // different file with the same structure -- which is precisely the
-            // answer this module must never return.
             if !p.extents.is_empty() {
                 assert_eq!(
                     right, 1,
@@ -2086,7 +1238,6 @@ mod tests {
                 );
             }
 
-            // Claim 2 — every determined hit must be the manifest's answer.
             for h in det {
                 if truth != Some((h.hl, h.g)) {
                     wrong.push(format!(
@@ -2095,7 +1246,6 @@ mod tests {
                     ));
                 }
             }
-            // Claim 3 — the planted failures accept nothing.
             if !p.recoverable {
                 assert!(
                     hits.is_empty(),
@@ -2107,7 +1257,6 @@ mod tests {
         }
         assert!(wrong.is_empty(), "{}", wrong.join("; "));
 
-        // Claim 1 — the boundary plant's true splice is inside the search.
         let pdf = PLANTS.iter().find(|p| p.name == "disposal_certificate.pdf").unwrap();
         let (hl, g) = true_splice(pdf).unwrap();
         assert_eq!(g, MAX_GAP_CLUSTERS, "the boundary plant must sit on the bound");
@@ -2127,18 +1276,6 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // 8 · the public entry point, on the real image
-    // ------------------------------------------------------------------
-
-    /// `bifragment()` is the signature the interface contract fixes, and it is
-    /// what `carve.rs` calls. Everything above drives `search` so it can read a
-    /// failure's cost; this drives the contract itself, on the shipped image,
-    /// and checks that `max_gap_bytes` is the caller's number end to end.
-    ///
-    /// `entropy_heatmap.png` is the subject because its gap is one cluster: the
-    /// smallest possible bound that can contain it is 2048 bytes, so the
-    /// inclusive/exclusive difference is one byte wide and observable.
     #[test]
     fn fixture_public_entry_point_recovers_png_and_honours_the_gap_bound() {
         let Some(data) = load_fixture() else {
@@ -2163,8 +1300,6 @@ mod tests {
             "reassembled length must be the manifest's size"
         );
 
-        // The gap is exactly one cluster. An inclusive bound of one cluster
-        // finds it; anything below one cluster cannot describe a lattice at all.
         let tight = bifragment(&data, kind, p.header_at, CLUSTER, CLUSTER)
             .expect("a one-cluster inclusive bound must contain a one-cluster gap");
         assert_eq!(tight.extents, p.extents);
@@ -2183,7 +1318,6 @@ mod tests {
             "a bound below one cluster describes no lattice and must recover nothing"
         );
 
-        // And the contract's own refusals, through the contract's own function.
         let jpg = PLANTS.iter().find(|p| p.name == "evidence_bag_seal.jpg").unwrap();
         let jk = kind_by_str(jpg.kind).unwrap();
         assert!(
@@ -2201,18 +1335,6 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // 9 · what MAX_OBJECT_BYTES costs — the span/time trade, measured
-    // ------------------------------------------------------------------
-
-    /// The number behind [`MAX_OBJECT_BYTES`]. One exhausted PDF search at three
-    /// span ceilings: identical lattice, identical validator, only the slice
-    /// handed to `validate` changes.
-    ///
-    /// ```text
-    /// cargo test --release -p sentinelwipe-carve --lib \
-    ///     bifragment::tests::span_ceiling_cost -- --ignored --nocapture
-    /// ```
     #[test]
     #[ignore = "three full-lattice PDF searches, the widest at a 64 MiB span"]
     fn span_ceiling_cost_is_measured() {
@@ -2245,84 +1367,9 @@ mod tests {
     }
 
 
-    // ------------------------------------------------------------------
-    // 10 · the false-positive surface reassembly opens — MEASURED
-    // ------------------------------------------------------------------
-
-    /// The risk this module creates, measured rather than assumed.
-    ///
-    /// Sequential carving gives a residue candidate exactly one chance to
-    /// validate: the bytes that follow its header. A two-fragment search gives
-    /// it the whole lattice — up to 32 768 assemblies per candidate at the
-    /// fixture's bounds — so residue that fails contiguously gets tens of
-    /// thousands of further attempts to find bytes that happen to satisfy
-    /// `structure::validate`. If one succeeds, residue is admitted as evidence
-    /// with `assembly: "reassembled"` and the confidence argument is over.
-    ///
-    /// The binding number is not the 0.2500 population gap. It is
-    /// [`crate::confidence::STRUCTURAL_BREACH_POINT`] — the structural credit at
-    /// which a candidate already holding full marks on signature, entropy and
-    /// size crosses [`crate::confidence::MIN_CONFIDENCE`]. It is read from that
-    /// module, which derives it from the weights and the gate, and it is never
-    /// restated here as a literal.
-    ///
-    /// ## The population
-    ///
-    /// Every candidate the SHIPPED scanner finds in the whole image whose object
-    /// does not validate contiguously, minus the seven planted fragmented
-    /// headers. That is exactly the set `carve.rs` will hand to `bifragment`:
-    /// `carve.rs` calls `scan` and does not apply `suppress_nested`, so nested
-    /// ZIP local-file headers inside the planted archives are in the population,
-    /// as they will be in production. Nothing is filtered by the manifest, so a
-    /// candidate cannot be excused for being one the fixture knows about.
-    ///
-    /// ## What is asserted
-    ///
-    /// 1. **Zero reassemblies.** No non-planted candidate produces a determined
-    ///    splice, so none is emitted.
-    /// 2. **Zero acceptances.** Stronger, and the one that makes 1 robust: not a
-    ///    single assembly out of the whole lattice, for any non-planted
-    ///    candidate, is accepted by `structure::validate` at all. The
-    ///    determinacy rule is not what is holding the line here; the validator
-    ///    is.
-    /// 3. **No lift.** For every non-planted candidate, the greatest structural
-    ///    credit any assembly earns — accepted or rejected, since
-    ///    `confidence::structural_validity` does not consult `valid` — is no
-    ///    greater than the credit that candidate already earns from its
-    ///    contiguous read. Reassembly therefore does not enlarge the
-    ///    false-positive surface: it cannot raise any candidate's structural
-    ///    term above what sequential carving already gave it.
-    ///
-    /// Claim 3 is the one that answers the risk as stated. It is a per-candidate
-    /// comparison against that candidate's own contiguous baseline rather than
-    /// against a fixed number, because the population deliberately includes
-    /// candidates whose contiguous credit is ALREADY above the breach point —
-    /// `ZIP@1228603` is the run's known false positive at 0.3000 structural
-    /// credit and 0.7550 total, and it is supposed to stay one. An absolute
-    /// assertion would either fail on it or have to be weakened to admit it;
-    /// the baseline comparison asserts the thing that actually matters, which is
-    /// that this module made nothing worse.
-    /// `/incident_summary.docx` — a real, contiguous, 63 749-byte OOXML file from
-    /// the fixture, used as the control for the tri-fragment refusal. Offset and
-    /// size are the manifest's.
     const CONTROL_DOCX_AT: u64 = 85_690_368;
     const CONTROL_DOCX_LEN: u64 = 63_749;
 
-    /// The tri-fragment refusal, demonstrated on a REAL file of the same kind.
-    ///
-    /// `media_inventory.docx` is planted in three fragments and is not
-    /// recovered. On its own that is not yet a demonstration: the same sentence
-    /// would be true if the engine simply could not reassemble a DOCX at all —
-    /// which is exactly the trap `evidence_bag_seal.jpg` fell into, where the
-    /// non-recovery was attributed to the reversal and the kind turned out to be
-    /// unreachable forward as well (measured in
-    /// `core/carve/tests/structure_media_fixture.rs`, claim (e): 0 of 24 forward
-    /// layouts).
-    ///
-    /// So the control is run here: the same real OOXML bytes, laid out FORWARD in
-    /// benign filler, are recovered byte-exactly at two fragments and refused at
-    /// three. The refusal is therefore a property of the fragment COUNT, which is
-    /// what the demo claims, and not of the kind.
     #[test]
     fn a_real_docx_recovers_at_two_fragments_and_refuses_at_three() {
         let Some(data) = load_fixture() else {
@@ -2335,7 +1382,6 @@ mod tests {
         let gap = 4 * cluster;
         let filler = |n: usize| -> Vec<u8> { (0..n).map(|i| (i % 97) as u8 + 1).collect() };
 
-        // Two fragments: head 8 clusters, then the rest after a 4-cluster gap.
         let split = 8 * cluster;
         let mut two = filler(obj.len() + gap + 4 * cluster);
         two[..split].copy_from_slice(&obj[..split]);
@@ -2348,7 +1394,6 @@ mod tests {
         }
         assert_eq!(bytes, obj, "the two-fragment reassembly is not the file's bytes");
 
-        // Three fragments, same file, same filler, same bounds.
         let a = 6 * cluster;
         let b = 6 * cluster;
         let mut three = filler(obj.len() + 2 * gap + 4 * cluster);
@@ -2374,86 +1419,16 @@ mod tests {
         );
     }
 
-    // ------------------------------------------------------------------
-    // The false positive reassembly can manufacture, measured on the
-    // fixture's own free space.
-    // ------------------------------------------------------------------
-
-    /// A real JPEG header, `/seizure_photo_b.jpg`'s, from the manifest's extents.
-    /// The first cluster of it is a complete marker prefix: SOI, the APP and
-    /// table segments, the SOF, the SOS, and the start of the entropy-coded
-    /// scan — which is exactly what a partially overwritten photograph leaves
-    /// behind, and a strictly stronger input than the bare `FF D8 FF` decoys the
-    /// manifest counts.
     const REAL_JPEG_HEADER_AT: u64 = 200_210_432;
 
-    /// The last byte any planted file occupies, from `out/fixture.manifest.json`:
-    /// `/wipe_command_history.txt` ends at 236 487 573. Everything from
-    /// [`FREE_SPACE_FROM`] to the end of the image is therefore free space, and a
-    /// header written there is a header over residue and nothing else.
     const LAST_PLANTED_BYTE_END: u64 = 236_487_573;
     const FREE_SPACE_FROM: u64 = 240 * 1024 * 1024;
 
-    /// The sample: 100 cluster-aligned free offsets, 81 clusters apart, starting
-    /// at [`FREE_SPACE_FROM`]. Fixed rather than random so the rate below is a
-    /// number and not a distribution.
     const FABRICATION_SAMPLE: u64 = 100;
     const FABRICATION_STRIDE_CLUSTERS: u64 = 81;
 
-    /// How many of those 100 offsets the search still answers with a two-extent
-    /// object that is not in the image.
-    ///
-    /// MEASURED, and it is not zero:
-    ///
-    /// ```text
-    ///   rule set                                             fabricated
-    ///   as first shipped                                     13 of 100
-    ///   + a required neighbour that cannot be tested does      6 of 100
-    ///     not pin anything (`is_determined`)
-    ///   + MIN_SECOND_EXTENT_CLUSTERS                           2 of 100
-    /// ```
-    ///
-    /// The two survivors are the same tail — 59 927 bytes at 255 713 280, reached
-    /// from two different heads — and both score 0.8000 of structural credit, not
-    /// 1.0000, because `structure::jpeg` marks the assembly's chain unclean when
-    /// it has to step over a length-bearing marker inside the entropy-coded scan.
-    /// At 0.8000 they are still admitted (0.9300), so this is a real residual and
-    /// it is published as one.
-    ///
-    /// **Where the rest of it has to be fixed, and why not here.** The residual is
-    /// not a search defect: `structure::jpeg` treats a marker segment appearing
-    /// inside the entropy stream as an anomaly to report rather than a fatal
-    /// error, which lets a scan step over arbitrary residue until it lands on an
-    /// `FF D9`. Making that fatal is the fix, and it belongs to `structure/`, not
-    /// here: it changes what the CONTIGUOUS engine validates, and the contiguous
-    /// engine's recall, admitted set and residue separation are already published
-    /// measurements. It is named here so it is not rediscovered.
-    ///
-    /// **And why `--reassemble` is off by default.** That default was taken for
-    /// cost. It is also what keeps this residual off the demo path, which makes it
-    /// a safety property and not only a cost decision.
     const FABRICATED_OF_SAMPLE: usize = 2;
 
-    /// Reassembly enlarges the false-positive surface, and this is how much.
-    ///
-    /// One real 2 048-byte JPEG header prefix is written onto a free cluster of an
-    /// in-memory copy of the image; nothing else is changed. The question is
-    /// whether the two-fragment search answers with an object that does not
-    /// exist — a head of residue-borne header bytes spliced onto whatever
-    /// downstream residue happens to complete it.
-    ///
-    /// It did, at confidence 1.0000, for
-    /// `[(253691904, 2048), (253763584, 139)]`: 139 bytes of unrelated free space
-    /// 71 680 bytes downstream, scoring full marks on all four terms. Two rules
-    /// took that from 13 of 100 sampled offsets to 2 — see
-    /// [`MIN_SECOND_EXTENT_CLUSTERS`], [`is_determined`] and
-    /// [`FABRICATED_OF_SAMPLE`], which carries the table and names what is left.
-    ///
-    /// This is asserted at the search, which is where a record like that would
-    /// have to come from: `carve.rs` builds a reassembled record only from a
-    /// `Reassembly` this function returned, so a `None` here is a record that
-    /// cannot exist. Asserting it through `carve()` instead would cost a
-    /// whole-image scan per offset.
     #[test]
     fn a_real_header_prefix_over_free_space_does_not_manufacture_an_object() {
         let Some(data) = load_fixture() else {
@@ -2470,8 +1445,6 @@ mod tests {
         let header = data[src..src + CLUSTER as usize].to_vec();
         let mut copy = data.clone();
 
-        // One header, one offset, restored afterwards, so every measurement below
-        // is over the shipped image plus exactly one cluster.
         let probe = |copy: &mut Vec<u8>, at: u64| -> Option<Reassembly> {
             let a = at as usize;
             copy[a..a + CLUSTER as usize].copy_from_slice(&header);
@@ -2481,8 +1454,6 @@ mod tests {
             out
         };
 
-        // The reproduction that started this: reported as an ADMITTED record at
-        // confidence 1.0000 for an object that is not in the image.
         let reported = probe(&mut copy, 253_691_904);
         println!("FABRICATION  the reported case, JPEG@253691904: {reported:?}");
         assert!(
@@ -2542,24 +1513,13 @@ mod tests {
         let max_gap_bytes = MAX_GAP_CLUSTERS * CLUSTER;
         let plant_at = |at: u64| PLANTS.iter().find(|p| p.header_at == at);
 
-        // The second population. The first version of this test walked past the
-        // seven planted fragmented headers with `continue`, which left the
-        // highest rejected-assembly credit in the whole image unmeasured by
-        // every standing instrument: `fixture_lattice_enumeration_measures_ambiguity`
-        // covers the plants but counts only ACCEPTING splices, and this test
-        // covered rejected assemblies but not the plants. They are measured here
-        // instead, under exactly the same lattice walk, and the ceiling is
-        // asserted rather than left for an auditor to find.
         struct PlantRow {
             name: &'static str,
             kind: &'static str,
             at: u64,
             baseline: f64,
-            /// Highest structural credit an assembly the validator REJECTED reached.
             hi_rejected: f64,
             hi_rejected_detail: String,
-            /// Highest credit an ACCEPTED assembly reached. Reachable by design:
-            /// an accepted, determined assembly is what a recovery is.
             hi_accepted: f64,
             solved: bool,
         }
@@ -2595,9 +1555,6 @@ mod tests {
             let at = c.header_at as usize;
             let seq_len = (span as usize).min(data.len() - at);
 
-            // Sequential carving owns anything whole in place; `carve.rs` never
-            // reaches bifragment for these. The contiguous validation is also
-            // this candidate's baseline, so it is computed once and kept.
             let seq = validate(c.kind, &data[at..at + seq_len]);
             let baseline = crate::confidence::structural_validity(&seq);
             if seq.valid {
@@ -2620,18 +1577,6 @@ mod tests {
 
             if let Some(p) = plant {
                 let t_plant = Instant::now();
-                // Same walk, different population: what is the highest
-                // structural credit any assembly of a PLANTED header reaches,
-                // accepted or rejected? `search` is used rather than a fresh
-                // enumeration so that the cells measured are exactly the cells
-                // the engine walks — for the two solved plants that is the
-                // prefix before the early exit, and for the five refused ones
-                // it is the whole 32 768-cell lattice.
-                // `hi` counts REJECTED assemblies only. An accepted assembly's
-                // credit is reachable by design — that is what a recovery is —
-                // and is reported beside it as `hi_accepted`. The question this
-                // population answers is what credit sits behind the one rule
-                // that `search` returns nothing the validator rejected.
                 let mut hi = 0.0f64;
                 let mut hi_detail = String::new();
                 let mut hi_accepted = 0.0f64;
@@ -2735,8 +1680,6 @@ mod tests {
                 ));
             }
         }
-        // The two populations are timed apart: they share one walk over the
-        // scanner's candidates and their costs are not each other's.
         let el = t0.elapsed().saturating_sub(plant_time);
 
         by_kind.sort();
@@ -2767,11 +1710,6 @@ mod tests {
             reassembled.len(),
             lifted_accepted.len()
         );
-        // ---- the second population: the seven planted fragmented headers ----
-        //
-        // The first version of this test walked past them with `continue`, which
-        // left the highest rejected-assembly credit in the image unmeasured by
-        // every standing instrument. It is measured here.
         println!(
             "PLANTS  {} planted fragmented headers reach the lattice, {plant_validations} \
              validations, {plant_time:?}. {} never reach it: the contiguous read validates, so `carve.rs` and \
@@ -2850,14 +1788,11 @@ mod tests {
             worst_baseline_at
         );
 
-        // Claim 1.
         assert!(
             reassembled.is_empty(),
             "reassembly admitted residue as evidence: {}",
             reassembled.join("; ")
         );
-        // Claim 2. Nothing in the lattice validated, so nothing could be
-        // returned regardless of the determinacy rule.
         assert_eq!(
             accepted_total, 0,
             "a non-planted candidate produced {accepted_total} structurally valid \
@@ -2872,26 +1807,17 @@ mod tests {
              reaches the output: {}",
             lifted_accepted.join("; ")
         );
-        // Claim 3 — the risk, answered at the population level. Per-candidate
-        // lift on the rejected side is real and printed above; what must not
-        // move is the ceiling, because that is what a decoy can actually reach.
         assert!(
             worst_lattice <= worst_baseline,
             "reassembly raised the residue population's structural ceiling from \
              {worst_baseline:.6} (contiguous, ZIP@{worst_baseline_at}) to \
              {worst_lattice:.6} (ZIP@{worst_lattice_at}): the false-positive surface grew"
         );
-        // The guard must be measuring something. The manifest counts 8 JPEG and
-        // 13 GZIP residue signature hits, and every one of them fails
-        // contiguously by construction, so all 21 are in this population.
         assert!(
             examined >= 21,
             "expected at least the manifest's 21 residue hits to enter the lattice, got {examined}"
         );
 
-        // Claim 4 — the plant population, which the first version of this test
-        // walked past. Both figures are asserted so that they are measured here
-        // rather than found by an auditor.
         assert_eq!(
             plant_rows.len() + plant_contiguous.len(),
             PLANTS.len(),
@@ -2928,9 +1854,6 @@ mod tests {
             admitted_if_scored(lift.hi_rejected),
             crate::confidence::MIN_CONFIDENCE
         );
-        // And the invariant that makes all of it unreachable, asserted directly
-        // rather than argued: nothing this population returned is a rejected
-        // assembly.
         for r in &plant_rows {
             assert!(
                 !r.solved || r.hi_accepted > 0.0,

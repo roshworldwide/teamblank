@@ -1,57 +1,3 @@
-//! `wipe` — the operator's handle on the sanitization engine.
-//!
-//! **One** JSON document on stdout, `sentinelwipe.wipe.report/1`. Nothing else on
-//! stdout, ever: diagnostics go to stderr, so `wipe ... > report.json` is always a
-//! valid report and never a report with a progress line in it.
-//!
-//! # It cannot be made to destroy anything by accident
-//!
-//! This is CLAUDE.md rule 4, and it is enforced here as four independent
-//! conjunctions, each of which alone stops the run:
-//!
-//! 1. **No positional arguments exist.** `wipe /dev/disk0` is a usage error with a
-//!    named cause, not a target. A path reaches the engine only through `--target`.
-//! 2. **`--allow-root` is required and has no default.** It builds the
-//!    [`guard::Policy`] allowlist. There is no compiled-in root, no environment
-//!    variable that supplies one, and no fallback to the working directory: with no
-//!    `--allow-root`, no policy can be constructed and nothing can be opened.
-//! 3. **`--i-understand <STRING>` is required**, and the guard compares it against
-//!    *its own* resolution of the target, not against the string typed after
-//!    `--target`. A confirmation that names a symlink, a relative path or a
-//!    different spelling is `DENY_CONFIRMATION_MISMATCH`. The policy is built with
-//!    `require_confirmation: true` unconditionally on the destructive path.
-//! 4. **The guard opens the file, not this binary.** `guard::open_authorized`
-//!    descends from the allowed root one component at a time with `O_NOFOLLOW` and
-//!    hands back a descriptor. This binary never calls `File::open` on a target.
-//!
-//! The confirmation is checked **last**, after containment has already said yes, and
-//! it carries no authority of its own: typing the right string for a target outside
-//! every allowed root is still `DENY_NOT_ALLOWLISTED`.
-//!
-//! `--plan` runs conjunctions 1 to 3, prints the decision the guard reached, and
-//! exits without opening anything writable. It is the safe way to find out what the
-//! confirmation string has to be.
-//!
-//! # Exit codes
-//!
-//! `grep`'s convention, which is the one every operator already knows: 0 is the
-//! clean answer, 1 is a run that happened and did not produce a clean answer, 2 and
-//! above mean the run did not happen.
-//!
-//! | code | meaning |
-//! |---|---|
-//! | 0 | the medium was overwritten and **every pass was confirmed by read-back**, at the coverage the report publishes. The report is on stdout. Exit 0 is not by itself a whole-medium claim: `outcome.code` is `OVERWRITE_VERIFIED_WHOLE_MEDIUM` only after `--verify exhaustive`, and `OVERWRITE_VERIFIED_ON_SAMPLE` otherwise, with `outcome.whole_medium_claim` as the boolean |
-//! | 1 | the job ran, and read-back did **not** confirm every pass. The report is on stdout and is complete. This is a result, not a crash, and the certificate must not be signed from it |
-//! | 2 | usage error — an unknown option, a missing value, a positional argument, a missing `--target` / `--allow-root` / `--i-understand`. Nothing on stdout |
-//! | 3 | the write guard refused the target. Its reason code is on stderr. Nothing on stdout, and nothing was opened writable |
-//! | 4 | the policy could not be built — a root that does not exist, a system directory, `$HOME`. Nothing on stdout |
-//! | 5 | the device could not be opened, or its geometry was refused. Nothing on stdout |
-//! | 6 | the job failed after it began. Nothing on stdout; the medium is in an unknown state and stderr says so |
-//! | 7 | internal error |
-//!
-//! Exit 0 is the only code that means "this medium was sanitized and we read it back
-//! to check". Nothing here returns 0 on the strength of a device return code.
-
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
@@ -276,9 +222,6 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 return Err(format!("unknown option {other:?}"))
             }
             other => {
-                // The rule, stated as an error rather than as a comment: there is
-                // no positional argument, so a bare path can never become a target
-                // by being in the right place on the line.
                 return Err(format!(
                     "unexpected argument {other:?}: this binary takes no positional \
                      arguments. The medium is named by --target, and a target with no \
@@ -291,7 +234,6 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     Ok(a)
 }
 
-/// Everything the run needs, or the exit code that stops it.
 fn required(a: &Args) -> Result<(&str, &Vec<String>), (u8, String)> {
     let target = a.target.as_deref().ok_or((
         EXIT_USAGE,
@@ -312,19 +254,11 @@ fn required(a: &Args) -> Result<(&str, &Vec<String>), (u8, String)> {
 
 fn build_policy(roots: &[String]) -> Result<guard::Policy, String> {
     let mut spec = guard::PolicySpec::with_roots(roots.iter().cloned());
-    // Unconditional on this path. Every destructive caller sets it, and a wipe is
-    // the destructive caller.
     spec.require_confirmation = true;
     guard::Policy::build(spec).map_err(|e| e.0)
 }
 
 fn run() -> Result<u8, (u8, String)> {
-    // args_os, not args(): `std::env::args()` PANICS on a non-UTF-8 argument, and a
-    // panic is not a decision. Measured: `--target /x/\xFF\xFE.img` exited 101 with a
-    // backtrace, a code the exit table above does not publish. The device layer
-    // already had the right answer for this input (DENY_NON_UTF8_PATH), but argv
-    // parsing died before it could be reached. Every rejection is now a documented
-    // code, and nothing is opened on this path either way.
     let mut argv: Vec<String> = Vec::new();
     for a in std::env::args_os().skip(1) {
         match a.into_string() {
@@ -343,7 +277,6 @@ fn run() -> Result<u8, (u8, String)> {
         }
     }
     if argv.is_empty() {
-        // No arguments is not a default run. It is the help text and a usage exit.
         eprint!("{HELP}");
         return Ok(EXIT_USAGE);
     }
@@ -355,7 +288,6 @@ fn run() -> Result<u8, (u8, String)> {
     let (target, roots) = required(&args)?;
     let policy = build_policy(roots).map_err(|e| (EXIT_POLICY, e))?;
 
-    // The decision, taken before anything is opened. `--plan` stops here.
     let decision = guard::authorize(
         &policy,
         target,
@@ -365,14 +297,6 @@ fn run() -> Result<u8, (u8, String)> {
         None,
     );
     if args.plan {
-        // CONTAINMENT AND CONFIRMATION ARE PRINTED AS TWO LINES, because they are two
-        // conjuncts and --plan is how an operator learns the confirmation string. The
-        // single-line version reported `decision DENY_CONFIRMATION_ABSENT / allowed
-        // false` for a perfectly allowlisted target whenever --i-understand was
-        // omitted — which is every first run of --plan — so the one command whose job
-        // is to say "yes, this target is inside your allowlist" printed a refusal of
-        // it. The predicate has not changed: the run below still takes the decision
-        // with the operator's own confirmation and still refuses without it.
         let containment = guard::authorize(
             &policy,
             target,
@@ -422,7 +346,6 @@ fn run() -> Result<u8, (u8, String)> {
         ));
     }
 
-    // The guard opens it. This binary does not.
     let authority = GuardAuthority::new(policy.clone(), args.confirmation.clone());
     let policy_digest = {
         use sentinelwipe_device::WriteAuthority;
@@ -455,27 +378,8 @@ fn run() -> Result<u8, (u8, String)> {
     });
     spec.command = rebuild_command(&argv);
 
-    // The trace file goes through the same guard as the target: a recorder is a
-    // file this process creates, and a destructive tool that opens one file
-    // through a policy and another with `File::create` has one policy and two
-    // behaviours.
     let (report, _dev) = match &args.trace {
         Some(path) => {
-            // A recorder opened "w" TRUNCATES an existing file, and the
-            // confirmation for it is supplied by this program rather than typed
-            // by the operator -- so without this the `--trace` option would be a
-            // way to destroy a file inside the allowlist with no typed
-            // confirmation naming it. Ask the guard the exclusive-create
-            // question first: mode "x" answers DENY_TARGET_ALREADY_EXISTS in the
-            // guard's own vocabulary rather than in a hand-rolled `Path::exists`
-            // check.
-            //
-            // What this does NOT close, stated rather than implied: a file
-            // created between this decision and the open below is still
-            // truncated. Closing that needs an authority that opens "x", which
-            // lives in the device layer's `GuardAuthority` and is not this
-            // file's to add. The exposure is bounded to a path inside a
-            // directory the operator explicitly allowlisted.
             let precheck = guard::authorize(
                 &policy,
                 path,
@@ -508,10 +412,6 @@ fn run() -> Result<u8, (u8, String)> {
             let (chan, rx) = sentinelwipe_wipe::telemetry::channel(
                 sentinelwipe_wipe::telemetry::DEFAULT_CHANNEL_CAPACITY,
             );
-            // Nothing consumes the channel in this binary; the receiver is dropped
-            // immediately so the sink sees a disconnected consumer rather than a
-            // live one that never reads. See telemetry.rs: a held Receiver that
-            // stops reading is what deadlocked an earlier design.
             drop(rx);
             let sink = FanoutSink::new()
                 .with(Box::new(RecorderSink::new(granted.file)))
@@ -530,19 +430,11 @@ fn run() -> Result<u8, (u8, String)> {
         .map_err(|e| (EXIT_INTERNAL, format!("flushing report: {e}")))?;
 
     Ok(match report.outcome {
-        // Exit 0 means every pass was confirmed by read-back AT THE COVERAGE the
-        // report publishes. It is deliberately the same code for a sampled and an
-        // exhaustive run, so that the default demo path is not a failure exit — and
-        // for that reason exit 0 alone is NOT a whole-medium claim. The field that
-        // carries that distinction is `outcome.code`
-        // (OVERWRITE_VERIFIED_ON_SAMPLE vs OVERWRITE_VERIFIED_WHOLE_MEDIUM), with
-        // `outcome.whole_medium_claim` as the boolean form.
         Outcome::VerifiedWholeMedium | Outcome::VerifiedOnSample => EXIT_VERIFIED,
         Outcome::NotVerified => EXIT_UNVERIFIED,
     })
 }
 
-/// The command line, re-rendered so `provenance.command` reproduces the run.
 fn rebuild_command(argv: &[String]) -> String {
     let mut s = String::from("wipe");
     for a in argv {
@@ -573,10 +465,6 @@ fn main() -> ExitCode {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,7 +476,6 @@ mod tests {
 
     #[test]
     fn a_bare_path_is_a_usage_error_and_never_a_target() {
-        // The single-path case the brief names explicitly. It must not parse.
         for line in [
             argv(&["/tmp/whatever.img"]),
             argv(&["out/fixture.img"]),
@@ -608,9 +495,6 @@ mod tests {
         let (code, msg) = required(&a).expect_err("must be refused");
         assert_eq!(code, EXIT_USAGE);
         assert!(msg.contains("--allow-root"), "{msg}");
-        // And with a root but no confirmation, the policy is still built with
-        // require_confirmation, so the guard would refuse. Asserted at the policy
-        // level here because building one needs no filesystem target.
         assert!(
             Args::default().confirmation.is_none(),
             "there is no default confirmation, and there must never be one"
@@ -619,14 +503,11 @@ mod tests {
 
     #[test]
     fn the_destructive_policy_always_requires_a_confirmation() {
-        // Not a preference of the caller: a wipe builds its policy one way.
         let dir = std::env::var("SENTINELWIPE_SCRATCH")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|_| std::env::temp_dir());
         let root = dir.join(format!("wipe-cli-policy-{}", std::process::id()));
         if std::fs::create_dir(&root).is_err() {
-            // A scratch root we could not create is not a reason to assert nothing.
-            // The unconditional line is still checkable by reading it back.
             assert!(HELP.contains("--i-understand <S>   The typed confirmation"));
             return;
         }
@@ -731,7 +612,6 @@ mod tests {
 
     #[test]
     fn a_sink_type_the_binary_uses_really_is_an_event_sink() {
-        // Compile-time only: it fails to build rather than fails to assert.
         fn takes<S: EventSink>(_: S) {}
         takes(NullSink);
         let (chan, rx): (ChannelSink, _) = sentinelwipe_wipe::telemetry::channel(2);

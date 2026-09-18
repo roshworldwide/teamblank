@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""Assemble ui/payload.json from committed artifacts. Invents nothing.
-
-Every value written here is read out of a file this repo already carries:
-  docs/evidence/fake_sanitize_run.txt   the lying-drive run (sanitize + overwrite)
-  fixtures/sample_output.json           the frozen carve report, 56 records
-  <live>/wipe.json, carve_pre/post, telemetry.jsonl   a real run's artifacts
-
-Refuses to write a payload it could not source. A missing input is a hard failure
-naming the path, never a default.
-"""
 import json, re, sys, pathlib
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
@@ -24,7 +14,6 @@ def load(p):
     return json.loads(p.read_bytes())
 
 def embedded_report(path):
-    """The evidence file is prose + one raw report. Pull the report out."""
     t = pathlib.Path(path).read_text()
     m = re.search(r'^\{', t, re.M) or die(f"no JSON object in {path}")
     s = m.start()
@@ -34,7 +23,6 @@ def embedded_report(path):
     die(f"no parseable JSON object in {path}")
 
 def audit_view(a):
-    """One audit block, flattened to exactly what a derivation renders."""
     if a is None: return None
     return {
         "operation": a["operation"], "code": a["code"], "severity": a["severity"],
@@ -57,14 +45,6 @@ def audit_view(a):
     }
 
 def planted_block(manifest_path):
-    """The 40 planted files at their true offsets, from the fixture manifest.
-
-    The manifest is not committed -- out/ is gitignored -- but it is regenerated
-    byte-identically from the seed, and the frozen carve sample records its
-    sha256, so main() checks the two agree before this is trusted. Every extent
-    is carried, not just the first, so a fragmented file draws as the two pieces
-    it actually occupies rather than one contiguous lie.
-    """
     raw = pathlib.Path(manifest_path).read_bytes()
     man = json.loads(raw)
     files = sorted(
@@ -94,7 +74,6 @@ def carve_record(r):
         "admitted": r["admitted"], "reason_code": r["reason_code"], "reason": r["reason"],
         "assembly": r.get("assembly", "contiguous"),
         "total": c["total"],
-        # the four terms sit at the top of `confidence`; `weighted` holds them post-weight
         "terms": {k: c[k] for k in TERMS},
         "weighted": {k: c["weighted"][k] for k in TERMS},
         "sha256": r["sha256"][:16],
@@ -117,10 +96,6 @@ def main():
     tl    = [json.loads(l) for l in (live / "telemetry.jsonl").read_text().splitlines() if l.strip()]
     ledger = load(live / "ledger.json") if (live / "ledger.json").exists() else None
     if ledger is not None:
-        # The canonical bytes of the certificate, as a string, so the page can
-        # hash EXACTLY what was signed. Python's canonicalize is byte-identical
-        # to the Rust signer's output -- that is what fixtures/canon_vectors.json
-        # and fixtures/jcs_vectors.json exist to prove.
         from sentinelwipe.canon import canonicalize
         cert = ledger["signed_certificate"]["certificate"]
         ledger["certificate_canonical"] = canonicalize(cert).decode("utf-8")
@@ -142,10 +117,7 @@ def main():
             "schemas": {"carve": carve["schema"], "wipe": wipe["schema"]},
         },
 
-        # ---- Surface A: the argument -------------------------------------
         "lie": {
-            # the real command, with the scratch path collapsed to a marked
-            # placeholder. Shortening a path is presentation; inventing one is not.
             "command": re.sub(r'/\S*/([^/\s]+\.img)', r'<root>/\1',
                       re.sub(r'--allow-root \S+', '--allow-root <root>',
                              lie["provenance"]["command"])),
@@ -174,13 +146,8 @@ def main():
                         "estimator": wipe["entropy_bits_per_byte"]["estimator"]},
         },
 
-        # Ground truth: where the 40 planted files actually sit on the medium.
-        # The canvas draws these, so what a viewer watches being destroyed is
-        # the real layout of the real fixture and not an arrangement chosen to
-        # look good.
         "planted": planted_block(REPO / "out/fixture.manifest.json"),
 
-        # ---- Surface B: the instrument -----------------------------------
         "device":  wipe["device"],
         "dispatch": wipe["dispatch"],
         "authorization": {k: wipe["authorization"][k] for k in
@@ -201,9 +168,6 @@ def main():
                     "bd": e["bytes_done"], "bps": e["throughput_bps"], "en": e["entropy_sample"],
                     "hs": e["head_sector"], "hx": e["head_hex"]} for e in frames],
 
-        # The signed artifact, verbatim: certificate envelope + chain proof.
-        # None on a pre-Phase-4 artifact dir, and the page says so rather than
-        # drawing a signature that does not exist.
         "ledger": ledger,
 
         "carve": {
@@ -217,7 +181,6 @@ def main():
         },
     }
 
-    # --- self-check: refuse to ship a payload with an unsourced hole ------
     L = payload["lie"]
     for k in ("floor_ns","measured_ns","rate_bps","probe_bytes","probe_elapsed_ns"):
         if L["sanitize"][k] in (None, 0): die(f"lie.sanitize.{k} is empty — evidence not sourced")
@@ -226,8 +189,6 @@ def main():
     if payload["carve"]["counts"]["records"] != len(payload["carve"]["records"]):
         die("carve record count disagrees with the record list")
 
-    # The manifest is regenerated, not committed. It is only ground truth if it
-    # is the SAME fixture the frozen carve sample was measured against.
     PL = payload["planted"]
     if PL["manifest_sha256"] != payload["carve"]["ground_truth"]["manifest_sha256"]:
         die("planted manifest sha256 != carve.ground_truth.manifest_sha256 — "

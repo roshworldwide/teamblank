@@ -47,9 +47,6 @@ EXE = ".exe" if os.name == "nt" else ""
 CARVE = REPO / f"core/target/release/carve{EXE}"
 WORK = REPO / "out/usb-run"
 
-# The carver's signature table. A file whose kind is not in here has no header
-# to scan for and WILL NOT be recovered -- that is the documented plaintext
-# case, not a bug, and the operator is told before the run rather than after.
 CARVABLE = {
     ".jpg": "JPEG", ".jpeg": "JPEG", ".png": "PNG", ".pdf": "PDF",
     ".zip": "ZIP", ".docx": "ZIP", ".xlsx": "ZIP", ".pptx": "ZIP",
@@ -62,9 +59,6 @@ DRIVE_TYPE = {0: "unknown", 1: "no-root-dir", 2: "removable", 3: "fixed",
               4: "network", 5: "cdrom", 6: "ramdisk"}
 
 
-# --------------------------------------------------------------------------
-# enumerate
-# --------------------------------------------------------------------------
 def volumes():
     """Every mounted volume, with the removable ones marked.
 
@@ -123,9 +117,6 @@ def _require_removable(letter):
     raise FileNotFoundError(f"{letter}: is not mounted")
 
 
-# --------------------------------------------------------------------------
-# 1. enrol -- ground truth, taken before the deletion
-# --------------------------------------------------------------------------
 def sha256_file(path, chunk=1 << 20):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -142,7 +133,6 @@ def enrol(letter):
     v = _require_removable(letter)
     files, skipped = [], []
     for dirpath, dirnames, filenames in os.walk(v["root"]):
-        # System Volume Information and any recycler are noise, not evidence
         dirnames[:] = [d for d in dirnames
                        if d.lower() not in ("system volume information", "$recycle.bin")]
         for name in filenames:
@@ -178,11 +168,8 @@ def enrol(letter):
     }
 
 
-# --------------------------------------------------------------------------
-# 2. image -- raw read, read-only, sector aligned
-# --------------------------------------------------------------------------
-MARGIN = 256 << 20          # headroom past the used region, in bytes
-FLOOR = 256 << 20           # never image less than this
+MARGIN = 256 << 20
+FLOOR = 256 << 20
 
 
 def suggested_limit(v):
@@ -199,7 +186,6 @@ def suggested_limit(v):
     free = v.get("free_bytes") or 0
     used = max(0, cap - free)
     want = max(FLOOR, used + MARGIN)
-    # round up to a whole MiB so the number on screen is a clean one
     want = ((want + (1 << 20) - 1) >> 20) << 20
     return min(want, cap) if cap else want
 
@@ -222,15 +208,13 @@ def image_volume(letter, out_path, progress=None, block=1 << 20, limit=None):
     h = hashlib.sha256()
     done = 0
     t0 = time.perf_counter()
-    # buffering=0: raw volume reads must be whole sectors, and Python's buffered
-    # reader is free to issue a short read that the device layer will refuse.
     with open(src, "rb", buffering=0) as fh, open(out_path, "wb") as w:
         while limit is None or done < limit:
             want = block if limit is None else min(block, limit - done)
             try:
                 chunk = fh.read(want)
             except OSError:
-                break                      # end of the volume, reported by the OS
+                break
             if not chunk:
                 break
             w.write(chunk)
@@ -258,9 +242,6 @@ def image_volume(letter, out_path, progress=None, block=1 << 20, limit=None):
     }
 
 
-# --------------------------------------------------------------------------
-# 3+4. carve the image, and join to the enrolment by SHA-256
-# --------------------------------------------------------------------------
 def carve_image(img_path, report_path, extra_argv=()):
     if not CARVE.exists():
         raise FileNotFoundError(f"carver not built: {CARVE}")
@@ -300,7 +281,6 @@ def compare(enrolment, report, img=None, image_path=None):
     by_hash = {}
     for f in enrolment["files"]:
         by_hash.setdefault(f["sha256"], []).append(f)
-    # enrolled files indexed by size, for the over-run check
     by_size = {}
     for f in enrolment["files"]:
         by_size.setdefault(f["size"], []).append(f)
@@ -315,8 +295,6 @@ def compare(enrolment, report, img=None, image_path=None):
         match = by_hash.get(r["sha256"])
         mode = "exact"
         if not match and blob is not None:
-            # the candidate over-ran its object: does an enrolled file sit at
-            # the front of it, byte for byte?
             for size, cands in by_size.items():
                 if size >= r["length"]:
                     continue
@@ -386,9 +364,6 @@ def compare(enrolment, report, img=None, image_path=None):
     }
 
 
-# --------------------------------------------------------------------------
-# CLI -- so the whole path is testable without the browser
-# --------------------------------------------------------------------------
 def extract(hits, image_path, out_dir, source_letter=None):
     """Write the recovered objects out as real files, and verify each one.
 
@@ -411,9 +386,6 @@ def extract(hits, image_path, out_dir, source_letter=None):
                 f"back to the medium it came from.")
     blob = pathlib.Path(image_path).read_bytes()
     out_dir.mkdir(parents=True, exist_ok=True)
-    # Clear it first. Left to accumulate, this directory ends up holding files
-    # from runs that are over, and the next restore copies a stale object the
-    # current enrolment has never heard of. The folder describes ONE run.
     for old in out_dir.iterdir():
         if old.is_file():
             old.unlink()
@@ -477,7 +449,6 @@ def restore(letter, from_dir, enrolment=None, subdir="RECOVERED"):
 
     dest_dir = pathlib.Path(v["root"]) / subdir
     dest_dir.mkdir(parents=True, exist_ok=True)
-    # our own folder, cleared so it reflects this run and not the last one
     for old in dest_dir.iterdir():
         if old.is_file():
             old.unlink()
@@ -488,7 +459,6 @@ def restore(letter, from_dir, enrolment=None, subdir="RECOVERED"):
             continue
         dest = dest_dir / f.name
         dest.write_bytes(f.read_bytes())
-        # read it back OFF the stick; a write that was not read back is a hope
         back = sha256_file(dest)
         expect = want.get(f.name)
         out.append({
@@ -539,7 +509,7 @@ def stage():
             continue
         blob = img[f["offset"]:f["offset"] + f["size"]]
         if hashlib.sha256(blob).hexdigest() != f["sha256"]:
-            continue                        # never stage bytes we cannot vouch for
+            continue
         picked[f["kind"]] = True
         name = pathlib.Path(f["path"]).name
         (STAGE / name).write_bytes(blob)
@@ -641,7 +611,7 @@ def main():
         limit = None
         for i, a in enumerate(sys.argv):
             if a == "--limit" and i + 1 < len(sys.argv):
-                limit = int(float(sys.argv[i + 1]) * (1 << 20))     # MiB
+                limit = int(float(sys.argv[i + 1]) * (1 << 20))
         img = image_volume(letter, WORK / "evidence.img", progress=prog, limit=limit)
         sys.stderr.write("\r" + " " * 78 + "\r")
         print("  %s bytes in %.3f s = %s B/s" % (

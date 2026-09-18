@@ -5,131 +5,55 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SENTINELWIPE RECOVERY</title>
 <style>
-/* ============================================================================
-   AURUM — THE TITANIUM STANDARD · Edition 27.0 · 412 declarations
-   Transcribed from the token appendix (sheet 45) and the semantic layer
-   (sheet 23) of the AURUM deck, not from the build prompt.
-
-   FINISH: BLACK TITANIUM — "DEFAULT · DARK. Cinema, media, telemetry, night.
-   The canonical AURUM expression: the void with one warm light in it."
-   Sheet 22 names five finishes; Desert Gold is CEREMONIAL·LIGHT (onboarding,
-   receipts, anniversaries) and is the wrong costume for a forensic instrument.
-   A product picks one and never mixes.
-
-   AXIS: FRONTIER (sheet 05) — "near-black canvas, monospaced numerics, tabular
-   figures, live telemetry, precision displayed to the digit that actually
-   matters. Legible under stress. No colour without semantics, no motion without
-   cause, no alarm without an action attached."
-
-   TOTAL COLOUR BUDGET: 32 values. Thirteen Titanium + ten Aurum + five Vapor +
-   four Signal. A SCREEN MAY USE AT MOST NINE OF THEM. No value outside this set
-   may ever enter the codebase.
-
-   ONE DIRECTION ONLY: roles reference ramp values; ramp values reference
-   nothing. A role that references another role is an alias, and aliases are
-   audited out at every release.
-
-   OPACITY OVER NEW HEX: strokes and fills are stated as a percentage of a ramp
-   value, never as a new opaque colour, so they stay correct over glass and
-   over media.
-
-   NAMING: category-role-state. No product prefixes, no screen names, no -v2.
-   GOVERNANCE: additive only — a token's value is never edited in place.
-   ============================================================================ */
 
 :root{
-  /* ---- PRIMITIVE · TITANIUM — thirteen values, the structural ramp ---- */
   --ti-00:#F7F6F4;  --ti-05:#EEEDEA;  --ti-10:#E3E0DB;  --ti-20:#CFCBC4;
   --ti-30:#B4AFA7;  --ti-40:#98938A;  --ti-50:#7C776E;  --ti-60:#615D56;
   --ti-70:#4A4741;  --ti-80:#35322C;  --ti-90:#232120;  --ti-95:#171615;
   --ti-100:#0B0B0B;
 
-  /* ---- PRIMITIVE · AURUM — ten values, the champagne ramp ------------ */
   --au-05:#FBF3E4;  --au-10:#F6E7CE;  --au-20:#EED6AE;  --au-30:#E3C089;
   --au-40:#D4A96A;  --au-50:#C08F4E;  --au-60:#A5763D;  --au-70:#835C30;
   --au-80:#5E4223;  --au-90:#3A2916;
 
-  /* ---- PRIMITIVE · VAPOR — five values, the cold axis.
-         hue 244–256°, chroma <= 0.033. For glass tint, depth and atmosphere
-         ONLY. Never brand, never decoration. --------------------------- */
-  --vp-10:#D0E4EA;  /* specular rim on cold glass   15.33:1 */
-  --vp-30:#A9BAC4;  /* distant-object label          9.54:1 */
-  --vp-50:#657F90;  /* atmosphere mid-depth          4.78:1 */
-  --vp-70:#445D6C;  /* cool elevated fill            2.39:1 */
-  --vp-90:#232B33;  /* chrome-theme canvas           1.37:1 */
+  --vp-10:#D0E4EA;
+  --vp-30:#A9BAC4;
+  --vp-50:#657F90;
+  --vp-70:#445D6C;
+  --vp-90:#232B33;
 
-  /* ---- PRIMITIVE · SIGNAL — four values, RESERVED FOR STATE.
-         NEVER COLOUR ALONE: every signal use carries a redundant channel —
-         a glyph, a position, or a word. Eight per cent of men cannot resolve
-         nominal from abort by hue, and a system that fails them fails the law.
-         ---------------------------------------------------------------- */
-  --sig-nominal:#38D158;  /* success, completion, within tolerance   9.74:1 */
-  --sig-caution:#FFD60A;  /* degraded, approaching limit            13.94:1
-                             NEVER PAIRED WITH GOLD                        */
-  --sig-abort:#FF453A;    /* failure and destruction                 5.78:1
-                             ALWAYS ACCOMPANIED BY AN ACTION               */
-  --sig-link:#0A84FF;     /* navigation away from context only       5.40:1 */
+  --sig-nominal:#38D158;
+  --sig-caution:#FFD60A;
+  --sig-abort:#FF453A;
+  --sig-link:#0A84FF;
 
-  /* ============ SEMANTIC LAYER · 42 roles · BLACK TITANIUM ============
-     Product code references a role. It never references a ramp value. */
+  --surface-canvas:var(--ti-100);
+  --surface-grouped:var(--ti-95);
+  --surface-raised:var(--ti-90);
+  --surface-glass:rgba(247,246,244,.09);
+  --surface-scrim:rgba(11,11,11,.56);
 
-  /* SURFACE */
-  --surface-canvas:var(--ti-100);              /* the floor. Never elevated,
-                                                  never tinted, never glass  */
-  --surface-grouped:var(--ti-95);              /* behind lists and forms     */
-  --surface-raised:var(--ti-90);               /* cards. One level only —
-                                                  no card inside a card      */
-  --surface-glass:rgba(247,246,244,.09);       /* floating chrome ONLY:
-                                                  bars, popovers, sheets     */
-  --surface-scrim:rgba(11,11,11,.56);          /* behind modals              */
+  --content-primary:var(--ti-00);
+  --content-secondary:var(--ti-20);
+  --content-tertiary:var(--ti-40);
+  --content-quaternary:var(--ti-60);
+  --content-accent:var(--au-30);
+  --content-on-accent:var(--ti-100);
 
-  /* CONTENT */
-  --content-primary:var(--ti-00);              /* titles and the sentence
-                                                  that matters      18.22:1  */
-  --content-secondary:var(--ti-20);            /* body. The workhorse 8.57:1 */
-  --content-tertiary:var(--ti-40);             /* metadata, timestamps,
-                                                  captions   6.44:1 still AA */
-  --content-quaternary:var(--ti-60);           /* placeholder and disabled
-                                                  ONLY. Never a real word    */
-  --content-accent:var(--au-30);               /* ONE INSTANCE PER VIEWPORT
-                                                                    11.40:1  */
-  --content-on-accent:var(--ti-100);           /* label on a filled metal
-                                                  capsule. Obsidian on gold,
-                                                  always                     */
-
-  /* STROKE & FILL — opacity over new hex, always */
-  --stroke-hairline:rgba(247,246,244,.09);     /* 0.5pt separators.
-                                                  PREFER A GAP; a rule only
-                                                  when space fails           */
-  --stroke-rim:rgba(247,246,244,.18);          /* the 1pt edge of every
-                                                  glass object. Non-optional */
-  --stroke-focus:var(--au-30);                 /* 3pt, 2pt offset OUTSIDE the
-                                                  shape. Never removed,
-                                                  never inset                */
-  --fill-quiet:rgba(247,246,244,.07);          /* secondary capsule ground,
-                                                  segmented track, chip      */
-  --fill-pressed:rgba(247,246,244,.14);        /* applied WITH scale .96 —
-                                                  colour alone never reads
-                                                  as pressed                 */
+  --stroke-hairline:rgba(247,246,244,.09);
+  --stroke-rim:rgba(247,246,244,.18);
+  --stroke-focus:var(--au-30);
+  --fill-quiet:rgba(247,246,244,.07);
+  --fill-pressed:rgba(247,246,244,.14);
   --fill-accent:linear-gradient(168deg,var(--au-30),var(--au-40));
-                                               /* 168° two-stop, 6% delta.
-                                                  Flat metal looks printed   */
-  /* LIGHT */
-  --specular-top:rgba(255,255,255,.45);        /* 1pt inset highlight, top
-                                                  edge only. The tell of
-                                                  real glass                 */
-  --specular-bottom:rgba(255,255,255,.12);     /* bounce light. Always
-                                                  weaker than the top by 3x  */
-  --shadow-key:rgba(11,11,11,.68);             /* single source, 12° above   */
-  --glow-accent:rgba(227,192,137,.28);         /* dark themes only. 42px
-                                                  blur, zero offset.
-                                                  NEVER ON TEXT              */
+  --specular-top:rgba(255,255,255,.45);
+  --specular-bottom:rgba(255,255,255,.12);
+  --shadow-key:rgba(11,11,11,.68);
+  --glow-accent:rgba(227,192,137,.28);
 
-  /* ---- TYPE · the fourteen-step scale ------------------------------- */
   --font-display:"SF Pro Display",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Inter,system-ui,sans-serif;
   --font-text:"SF Pro Text",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Inter,system-ui,sans-serif;
   --font-mono:"SF Mono",ui-monospace,Menlo,"JetBrains Mono",monospace;
-  /* SF Pro is Apple-licensed and this repository is public: never vendored. */
 
   --size-colossus:96px;   --lh-colossus:88px;
   --size-display-1:64px;  --lh-display-1:64px;
@@ -146,15 +70,13 @@
   --size-micro:11px;      --lh-micro:13px;
   --size-overline:10px;   --lh-overline:12px;
 
-  /* ---- SPACE & RADIUS ------------------------------------------------ */
   --space-1:4px;  --space-2:8px;  --space-3:12px; --space-4:16px;
   --space-5:20px; --space-6:24px; --space-8:32px; --space-12:48px;
   --space-16:64px;
   --radius-sm:12px; --radius-md:16px; --radius-lg:20px; --radius-xl:28px;
   --radius-capsule:999px;
-  --target-min:44px;   /* AA5 floor. No target under 44px, ever. */
+  --target-min:44px;
 
-  /* ---- MOTION · six curves, six springs, no exceptions ---------------- */
   --ease-standard:cubic-bezier(.32,.72,0,1);
   --ease-enter:cubic-bezier(.16,1,.3,1);
   --ease-exit:cubic-bezier(.7,0,.84,0);
@@ -164,11 +86,8 @@
   --dur-large:400ms;   --dur-enter:520ms;   --dur-morph:620ms;
   --dur-ambient:4000ms;
   --stagger:24ms;
-  --frame-budget:8.33ms;   /* every frame ships in 8.33ms or the feature is
-                              not finished. A budget from the first commit,
-                              never polish applied at the end. */
+  --frame-budget:8.33ms;
 
-  /* ---- MATERIAL & ELEVATION ------------------------------------------ */
   --glass-thin:blur(20px) saturate(170%);
   --glass-regular:blur(28px) saturate(180%);
   --glass-thick:blur(40px) saturate(150%);
@@ -179,7 +98,6 @@
   --e5:0 28px 70px rgba(11,11,11,.72), 0 0 42px rgba(227,192,137,.28);
 }
 
-/* ---- The fourteen registers, set in their own spec ------------------- */
 .t-colossus {font:700 var(--size-colossus)/var(--lh-colossus) var(--font-display);letter-spacing:-.03em}
 .t-display-1{font:700 var(--size-display-1)/var(--lh-display-1) var(--font-display);letter-spacing:-.025em}
 .t-display-2{font:700 var(--size-display-2)/var(--lh-display-2) var(--font-display);letter-spacing:-.022em}
@@ -196,9 +114,6 @@
 .t-overline {font:600 var(--size-overline)/var(--lh-overline) var(--font-text);
              letter-spacing:.18em;text-transform:uppercase;color:var(--content-tertiary)}
 
-/* Every numeral in this product is monospace and tabular, carries its unit,
-   and is never abbreviated and never animated. Precision displayed to the
-   digit that actually matters. */
 .num {font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
       font-feature-settings:"tnum" 1,"lnum" 1}
 .unit{color:var(--content-tertiary);font-size:.72em;margin-left:.3em;letter-spacing:.02em}
@@ -210,27 +125,14 @@ body{margin:0;background:var(--surface-canvas);color:var(--content-secondary);
      -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 ::selection{background:rgba(227,192,137,.28);color:var(--au-05)}
 
-/* 2pt ring at 2pt offset OUTSIDE the shape. Never removed, never inset. */
 :focus-visible{outline:2px solid var(--stroke-focus);outline-offset:2px;border-radius:inherit}
 
-/* Sheet 43 — the floor, not the ceiling. Reduced motion is a first-class
-   path: all travel and scale become a 160ms opacity cross-fade at the
-   destination. Parallax and auto-play stop. No state is lost. */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{
     animation-duration:1ms!important;animation-iteration-count:1!important;
     transition-duration:160ms!important;transition-property:opacity!important;
     scroll-behavior:auto!important}
 }
-
-/* ============================================================================
-   SURFACE 3 - LIVE RECOVERY FROM REMOVABLE MEDIA
-   The closer. A stick the room can watch being emptied, and the files coming
-   back with their hashes intact.
-
-   Every number on this page arrives from ui/serve.py during the run. Nothing
-   is precomputed, because nothing CAN be: the operator chooses the files.
-   ============================================================================ */
 
 html,body{height:100%}
 body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
@@ -243,7 +145,6 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
 .atm-vig{background:radial-gradient(122% 98% at 50% 42%,
   transparent 44%, rgba(11,11,11,.6) 88%, rgba(11,11,11,.9) 100%)}
 
-/* ---- RACK -------------------------------------------------------------- */
 .rack{position:relative;z-index:3;flex:0 0 auto;display:flex;align-items:center;
   gap:var(--space-5);padding:var(--space-4) var(--space-8) var(--space-2)}
 .wordmark{font:600 var(--size-footnote)/1 var(--font-display);letter-spacing:.34em;
@@ -268,10 +169,6 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
 .src[data-mode="run"]{color:var(--sig-caution);border-color:var(--sig-caution)}
 .src[data-mode="bad"]{color:var(--sig-abort);border-color:var(--sig-abort)}
 
-/* ---- STAGE ------------------------------------------------------------- */
-/* The row is capped at the stage, never at its own content: the evidence
-   table grows by a row per enrolled file, and an uncapped row would push the
-   control bar off the bottom of the viewport mid-demo. */
 #stage{position:relative;z-index:2;flex:1 1 auto;min-height:0;overflow:hidden;
   padding:var(--space-3) var(--space-8) 0;
   display:grid;grid-template-columns:minmax(320px,.62fr) minmax(0,1.38fr);
@@ -288,8 +185,6 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
   font-size:clamp(52px,7vw,104px);line-height:.92;letter-spacing:-.045em;
   color:var(--content-primary);white-space:nowrap;
   text-shadow:0 0 80px rgba(227,192,137,.14)}
-/* The caption wraps rather than truncates: "byte-exact" is the claim, and an
-   ellipsis would eat exactly the word the whole demo exists to say. */
 .hero .of{display:block;font-size:.22em;letter-spacing:.02em;font-weight:400;
   color:var(--content-quaternary);margin:10px 0 0;
   white-space:normal;line-height:1.3;text-wrap:balance;max-width:21ch}
@@ -299,7 +194,6 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
   font:400 var(--size-callout)/1.4 var(--font-display);color:var(--content-secondary)}
 .saysub b{color:var(--content-primary);font-weight:600}
 
-/* the three steps, and which one you are on */
 .steps{margin-top:var(--space-6);padding-top:var(--space-4);
   border-top:1px solid var(--stroke-hairline);display:flex;
   flex-direction:column;gap:var(--space-3)}
@@ -318,7 +212,6 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
 .step .d{display:block;margin-top:2px;font:400 var(--size-overline)/1.55 var(--font-mono);
   letter-spacing:.02em;color:var(--content-quaternary)}
 
-/* ---- RIGHT: the volume, then the evidence ------------------------------ */
 .panel{min-width:0;min-height:0;align-self:stretch;
   display:flex;flex-direction:column;gap:var(--space-4)}
 .vols{flex:0 0 auto;display:flex;gap:var(--space-3);flex-wrap:wrap}
@@ -345,15 +238,9 @@ body{overflow:hidden;background:#0B0B0B;color:var(--content-tertiary)}
   font-variant-numeric:tabular-nums lining-nums;color:var(--content-tertiary);
   white-space:nowrap}
 
-/* the file table: one row per enrolled object, verdict on the right */
 .tw{flex:1 1 auto;min-height:0;overflow:auto;border-top:1px solid var(--stroke-hairline)}
 table{width:100%;border-collapse:collapse;font-family:var(--font-mono);
   font-size:var(--size-footnote);font-variant-numeric:tabular-nums lining-nums}
-/* z-index is load-bearing, not defensive. The returning rows carry a transform
-   animation, which promotes them into their own stacking context and lifts
-   them over an un-indexed sticky header -- so at a short viewport the evidence
-   scrolled straight THROUGH the column names. A positioned element with an
-   explicit index wins over a transformed one without. */
 thead th{position:sticky;top:0;z-index:2;background:var(--surface-canvas);
   text-align:left;
   padding:var(--space-3) var(--space-4) var(--space-2) 0;
@@ -372,7 +259,6 @@ td.v{white-space:nowrap;font-weight:600}
 .warn{color:var(--sig-caution)}
 .bad{color:var(--sig-abort)}
 
-/* ---- CONTROL BAR ------------------------------------------------------- */
 .bar{position:relative;z-index:3;flex:0 0 auto;display:flex;align-items:center;
   gap:var(--space-4);padding:var(--space-3) var(--space-8) var(--space-4)}
 .run{display:inline-flex;align-items:center;gap:var(--space-3);min-height:52px;
@@ -410,16 +296,8 @@ td.v{white-space:nowrap;font-weight:600}
   .hero{font-size:clamp(46px,5.6vw,80px)}
 }
 
-/* ==========================================================================
-   THE MEDIUM — the cinematic centre of the recovery demo.
-   A map of the stick's byte space. During imaging it fills at the REAL rate
-   the stream reports; at the join, every byte-exact recovery lights at its
-   TRUE offset. Nothing here is decorative and nothing is simulated: the fill
-   is `done/total` off the wire, the lights are `hits[].offset`.
-   Canvas, not DOM -- 16,384 cells could never be nodes inside 8.33 ms.
-   ========================================================================== */
 .medium{
-  flex:0 0 auto;                             /* the panel's gap does the spacing */
+  flex:0 0 auto;
   border:1px solid var(--stroke-hairline);
   border-radius:var(--radius-md);
   background:var(--surface-canvas);
@@ -431,9 +309,9 @@ td.v{white-space:nowrap;font-weight:600}
 .medium[data-live="1"]{ opacity:1; transform:none; }
 .medium canvas{
   display:block; width:100%; height:auto;
-  max-height:22vh;                           /* the evidence keeps the rest */
+  max-height:22vh;
   object-fit:contain;
-  image-rendering:pixelated;                 /* one cell = one block, exactly */
+  image-rendering:pixelated;
   border-radius:var(--radius-sm);
 }
 .medium .mhead{
@@ -449,8 +327,6 @@ td.v{white-space:nowrap;font-weight:600}
 .mkey span{ display:inline-flex; align-items:center; gap:var(--space-2); }
 .mkey i{ width:9px; height:9px; border-radius:2px; display:inline-block; }
 
-/* The peak. AURUM: one ceremony per flow, and this is it -- the moment a file
-   a judge deleted comes back and its hash still matches. E5, once, 620 ms. */
 .hero.peak{ animation:peak var(--dur-morph) var(--ease-snap) 1; }
 @keyframes peak{
   0%  { transform:scale(0.985); opacity:.72; }
@@ -458,15 +334,9 @@ td.v{white-space:nowrap;font-weight:600}
 }
 .hero.peak .of{ color:var(--content-tertiary); }
 #stage[data-peak="1"] .hero{
-  text-shadow:0 0 42px rgba(227,192,137,.28);   /* --glow-accent, dark only */
+  text-shadow:0 0 42px rgba(227,192,137,.28);
 }
 
-/* THE CARVE HAS NO PROGRESS, SO THIS REPORTS NONE.
-   carve_image is one blocking call and the carver emits nothing until it is
-   finished, so there is no percentage to draw and none is drawn. A shuttling
-   segment is permitted exactly here -- no count exists -- and it is shaped so
-   it can never be misread as a position: it never rests, and the readout
-   beside it says in words why there is no number. Transform only. */
 .track[data-indet="1"] i{ width:26%; background:var(--content-quaternary);
   animation:shuttle 1400ms var(--ease-standard) infinite; }
 @keyframes shuttle{
@@ -474,14 +344,11 @@ td.v{white-space:nowrap;font-weight:600}
   100%{ transform:translate3d(385%,0,0); }
 }
 
-/* Rows return in a cascade at the token stagger, transform+opacity only. */
 tr[data-back="1"]{ animation:back var(--dur-medium) var(--ease-enter) both; }
 @keyframes back{
   0%  { opacity:.28; transform:translate3d(-4px,0,0); }
   100%{ opacity:1;   transform:none; }
 }
-/* The hash pair: enrolled before deletion, recovered after. Same value is the
-   whole argument, so they are shown together rather than one replacing one. */
 td.h .pair{ display:block; color:var(--content-quaternary); }
 td.h .pair b{ color:var(--sig-nominal); font-weight:400; }
 
@@ -605,16 +472,6 @@ td.h .pair b{ color:var(--sig-nominal); font-weight:400; }
 </div>
 <script>
 "use strict";
-/* =========================================================================
-   SENTINELWIPE - SURFACE 3 - LIVE RECOVERY FROM REMOVABLE MEDIA
-
-   NETWORK. Same-origin relative paths to ui/serve.py on 127.0.0.1 and nothing
-   else. No external host appears in this file.
-
-   There is no payload block here and there could not be one: the operator
-   chooses the files, so every figure on this page is measured during the run
-   or does not exist. A state that has not been measured shows an em dash.
-   ========================================================================= */
 (function(){
 
 var $ = function(id){ return document.getElementById(id); };
@@ -647,7 +504,6 @@ function hero(html, small){
   $("hero").className = small ? "hero small" : "hero";
 }
 
-/* ---------- 0. which volumes are there --------------------------------- */
 function loadVolumes(){
   fetch("/api/usb/volumes", {cache:"no-store"}).then(function(r){ return r.json(); })
   .then(function(d){
@@ -680,9 +536,6 @@ function loadVolumes(){
     }
     badge("ok","Ready", rem+" removable");
     if(rem === 1){
-      /* One stick, one choice. Making the operator click it first is a step
-         that can only go wrong on stage, and picking it changes nothing:
-         everything before RECOVER is read-only. */
       var only = null, all = document.querySelectorAll(".vol"), q;
       for(q=0;q<all.length;q++) if(!all[q].disabled) only = all[q];
       if(only) only.click();
@@ -721,7 +574,6 @@ function pick(v, btn){
        "<b>before</b> you delete.");
 }
 
-/* ---------- 1. enrol ---------------------------------------------------- */
 function doEnrol(){
   $("mainBtn").disabled=true;
   badge("run","Enrolling","hashing "+VOL.letter+":");
@@ -772,7 +624,6 @@ function renderEnrolment(){
   t.innerHTML=html;
 }
 
-/* ---------- 2. recover -------------------------------------------------- */
 function doRecover(){
   PHASE="running";
   $("mainBtn").disabled=true;
@@ -861,10 +712,6 @@ function doRecover(){
 var REDUCED = !!(window.matchMedia &&
                  matchMedia("(prefers-reduced-motion: reduce)").matches);
 
-/* Keep the row that just came back inside the frame. The evidence list is
-   taller than the panel by design -- twelve files do not fit and should not be
-   made to -- so the list follows the cascade instead of the judge hunting for
-   it. Scrolls the container only; the page itself never moves. */
 function follow(row){
   var tw=document.querySelector(".tw");
   if(!tw) return;
@@ -888,7 +735,7 @@ function paintResult(d){
     tr=rows[i]; sha=tr.getAttribute("data-sha");
     if(!sha) continue;
     byShaRow[sha]=tr;
-    if(!hits[sha]){            /* the quiet truth, stated at once, never staged */
+    if(!hits[sha]){
       tr.removeAttribute("data-hit");
       tr.cells[4].className="v no";
       tr.cells[4].textContent="∅ not recovered";
@@ -899,10 +746,6 @@ function paintResult(d){
     "name, not by size. A recovered object is correct only if its bytes hash to "+
     "what was there before the deletion.";
 
-  /* The tail, composed now and shown at the peak. A summary printed while
-     the cascade is still running answers the question before the evidence
-     for it has arrived, and the answer is the last thing a judge should get,
-     not the first. */
   var lines = [], over = 0;
   for(i=0;i<d.hits.length;i++) if(d.hits[i].mode === "over-run") over++;
   lines.push("<b>"+n(d.byte_exact_and_admitted)+"</b> of the "+
@@ -920,10 +763,6 @@ function paintResult(d){
 
   note("Joining "+n(d.hits.length)+" carved objects to the enrolment by hash.");
 
-  /* THE JOIN. One file at a time: the map lights where the bytes actually sat
-     on the stick, and the row it belongs to comes back with it. Peak-end --
-     the count lands LAST, after the cascade, and it is the only gold on the
-     screen. Nothing is animated that is not a measurement arriving. */
   MAP.reveal(d.hits, function(h){
     var row=byShaRow[h.sha256];
     if(!row) return;
@@ -939,9 +778,6 @@ function paintResult(d){
       c.className="v ok";
       c.textContent="✓ byte-exact"+(h.admitted?"":" (below gate)");
     }
-    /* Both hashes together: the one enrolled BEFORE the deletion and the one
-       computed from the bytes just carved back out of free space. That they
-       are the same string is the entire argument, so both are shown. */
     row.cells[3].innerHTML =
       '<span class="pair">enrolled  '+esc(h.sha256.slice(0,16))+'…</span>'+
       '<span class="pair"><b>recovered '+esc(h.sha256.slice(0,16))+'… ✓</b></span>';
@@ -954,14 +790,6 @@ function paintResult(d){
     $("hero").className="hero peak";
     $("stage").setAttribute("data-peak","1");
     note(lines.join(" "));
-    /* Settle on the tail, not the head: the rows a judge must leave with are
-       the over-run and the two we did not recover, because the claim is only
-       worth what the admitted failures cost it.
-       After the note, and a frame later. The ledger above is several lines on
-       a short screen, which makes the control bar taller and the table
-       shorter -- a scroll computed against the layout that existed before it
-       was written lands past the bottom and hides the very rows it was
-       aiming at. */
     requestAnimationFrame(function(){
       var tw=document.querySelector(".tw");
       if(tw) tw.scrollTo({top:tw.scrollHeight, behavior:REDUCED?"auto":"smooth"});
@@ -970,35 +798,19 @@ function paintResult(d){
 }
 
 
-/* ---------- THE MEDIUM MAP ------------------------------------------------
-   A byte-space map of the volume. Every pixel of state on it comes off the
-   wire: the fill is the imaging stream's own done/total, the lights are the
-   true offsets the carver reported. There is no animation here that is not a
-   measurement arriving.
-
-   Cells are drawn through ImageData and scaled with image-rendering:pixelated
-   -- the same technique the instrument's sector map uses -- because 16,384
-   DOM nodes cannot be touched inside an 8.33 ms frame and a map that stutters
-   is worse than no map.                                                     */
 var MAP = (function(){
   var COLS=256, ROWS=64, N=COLS*ROWS, SCALE=4, DPR=1;
   var cv=null, ctx=null, off=null, octx=null, img=null;
   var state=null, total=0, readCells=0, marks=[], pulses=[], raf=0, head=-1;
   var RM = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  /* THE MAP'S FIVE COLOURS, READ FROM THE TOKENS AT RUN TIME.
-     A canvas paints pixels, not styled elements, so it cannot inherit; but it
-     must not fork either. These are looked up from :root by name, which means
-     ui/inline.py's drift detector still governs them -- change a ramp value in
-     ui/tokens.css and the map follows, or the check fails. Hardcoded triples
-     here would be a second source of truth that nothing audits. */
   var C = {};
   var TOKENS = {
-    unread : "--ti-100",       /* the medium not yet read: the canvas itself */
-    read   : "--ti-80",        /* read into the image                        */
-    head   : "--au-30",        /* the read head, while imaging               */
-    exact  : "--sig-nominal",  /* byte-exact recovery                        */
-    over   : "--sig-caution"   /* recovered, end over-run                    */
+    unread : "--ti-100",
+    read   : "--ti-80",
+    head   : "--au-30",
+    exact  : "--sig-nominal",
+    over   : "--sig-caution"
   };
   function hex2rgb(v){
     v=(v||"").trim().replace("#","");
@@ -1012,9 +824,6 @@ var MAP = (function(){
       var rgb=hex2rgb(cs.getPropertyValue(TOKENS[k]));
       if(!rgb) miss.push(TOKENS[k]); else C[k]=rgb;
     }
-    /* Loud, not silent: a map drawn in fallback colours would still look
-       plausible, and a plausible wrong picture is the failure mode this whole
-       project exists to refuse. */
     if(miss.length) throw new Error("map: unresolved design tokens "+miss.join(", "));
   }
 
@@ -1026,15 +835,6 @@ var MAP = (function(){
     d[o]=rgb[0]; d[o+1]=rgb[1]; d[o+2]=rgb[2]; d[o+3]=a===undefined?255:a;
   }
 
-  /* THE TWO LAYERS, AND WHY THERE ARE TWO.
-     The lower layer is the medium itself: one pixel is one block, and a file
-     that occupies one block lights exactly one block. That is the truth and it
-     is never inflated -- a marker that spanned more cells than the file spanned
-     would be a drawn lie about extent.
-     The upper layer is annotation, at 4x, in vector: a ring AROUND the cell,
-     plainly a pin and not a footprint, so a 220 KB file on an 8 GB stick is
-     findable by a judge standing across a room. The ring's centre is the
-     carver's own offset; only its radius is ours, and a radius is not a claim. */
   function paint(){
     if(!ctx) return;
     octx.putImageData(img,0,0);
@@ -1075,7 +875,7 @@ var MAP = (function(){
     var alive=[];
     for(var i=0;i<pulses.length;i++){
       var p=pulses[i];
-      p.t += 1/24;                      /* ~400 ms == --dur-large at 60 Hz */
+      p.t += 1/24;
       if(p.t<1){ p.r=p.r0+(p.r1-p.r0)*p.t; p.a=0.9*(1-p.t); alive.push(p); }
     }
     pulses=alive; paint();
@@ -1088,7 +888,7 @@ var MAP = (function(){
     loadTokens();
     DPR = Math.min(2, window.devicePixelRatio || 1);
     var box = cv.getBoundingClientRect().width || (COLS*4);
-    SCALE = Math.max(2, Math.round(box*DPR/COLS));   /* device px per block */
+    SCALE = Math.max(2, Math.round(box*DPR/COLS));
     cv.width=COLS*SCALE; cv.height=ROWS*SCALE;
     ctx=cv.getContext("2d");
     off=document.createElement("canvas"); off.width=COLS; off.height=ROWS;
@@ -1105,7 +905,6 @@ var MAP = (function(){
       total ? (n(N)+" blocks · "+n(per)+" B each") : "—";
   }
 
-  /* Real progress only. `done` and `total` are the stream's own integers. */
   function progress(done, tot){
     if(!ctx) return;
     if(tot && tot!==total){ total=tot; }
@@ -1113,7 +912,7 @@ var MAP = (function(){
     var want=Math.min(N, Math.floor(N*done/total));
     if(want<=readCells) return;
     for(var i=readCells;i<want;i++){ state[i]=1; put(i, C.read); }
-    head = (want<N) ? want : -1;                  /* the head, one cell */
+    head = (want<N) ? want : -1;
     if(head>=0) put(head, C.head);
     readCells=want;
     paint();
@@ -1125,12 +924,9 @@ var MAP = (function(){
     readCells=N; head=-1; paint();
   }
 
-  /* The join. Each byte-exact hit lights where it actually sat on the stick.
-     Staggered at the token cadence so the eye can follow one file at a time;
-     under reduced motion they land at once and nothing is lost. */
   function reveal(hits, onEachRow, onDone){
     if(!ctx){ if(onDone) onDone(); return; }
-    var bytesPer = total/N, step = RM ? 0 : 24;   /* --stagger */
+    var bytesPer = total/N, step = RM ? 0 : 24;
     var order = hits.slice().sort(function(a,b){ return a.offset-b.offset; });
     var cap = order.length ? Math.max(step, Math.min(620/order.length, 90)) : 0;
     var i=0;
@@ -1158,15 +954,10 @@ var MAP = (function(){
   return { init:init, progress:progress, imaged:imaged, reveal:reveal };
 })();
 
-/* ---------- controls ---------------------------------------------------- */
 $("mainBtn").addEventListener("click", function(){
   if(PHASE==="enrol") return doEnrol();
   if(PHASE==="delete" || PHASE==="done") return doRecover();
 });
-/* Put them back. The one write to the stick, and it happens only here --
-   after the image is taken, the carve is done, and every object is already on
-   local disk and hashed. Nothing is left to lose on the device by then, and the
-   copies are read BACK OFF it to prove they landed intact. */
 $("putBackBtn").addEventListener("click", function(){
   if(!VOL) return;
   $("putBackBtn").disabled=true;
@@ -1231,10 +1022,6 @@ document.addEventListener("keydown", function(e){
   else if(k==="r" && !$("mainBtn").disabled){ e.preventDefault(); $("mainBtn").click(); }
 });
 
-/* Exposed for the headless render check only: the cinematic path has to be
-   drivable without a Windows box and a physical stick in the machine. Nothing
-   in the product reads this, and it injects no data of its own -- the checker
-   supplies a payload shaped exactly like usb.compare()'s return. */
 window.__rec={ setVol:function(v){ VOL=v; }, setEnrol:function(e){ ENROL=e; },
                renderEnrolment:renderEnrolment, paintResult:paintResult, MAP:MAP };
 loadVolumes();

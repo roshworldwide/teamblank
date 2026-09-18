@@ -1,61 +1,3 @@
-//! [`Policy`] and [`authorize`] — the **Windows** backend of the write guard.
-//!
-//! # What this file guarantees, and the one thing it does not
-//!
-//! It answers the same question the Unix backend answers: *may this process
-//! open this path for writing?* It refuses on the same grounds — the target is
-//! not under an allowlisted root, the root is a system directory, the path is
-//! relative, the leaf is not a regular file, the size is outside bounds, the
-//! typed confirmation does not match the guard's own resolution of the target.
-//! Every allow it issues carries the same [`Decision`] shape and the same code
-//! strings, so a certificate written on Windows is read by the same reader.
-//!
-//! **It is not TOCTOU-hardened, and that is the difference.** The Unix backend
-//! descends from the allowlisted root one component at a time with
-//! `openat(O_NOFOLLOW | O_DIRECTORY)` and re-checks type, identity, link count
-//! and size on the descriptor it will actually write through, so the path it
-//! checked and the path it opened are provably the same object. Windows exposes
-//! no `dir_fd` equivalent through `std` — `os::supports_dir_fd` is empty there —
-//! and the two primitives that would substitute for `(st_dev, st_ino)` identity,
-//! `volume_serial_number` and `file_index`, are behind the unstable
-//! `windows_by_handle` feature, so a crate that adds no dependencies cannot
-//! reach them. This backend therefore resolves, checks, opens, and then
-//! **re-checks on the open handle**. That narrows the window; it does not close
-//! it. An attacker who can write to a directory on the path, racing the guard
-//! between the check and the open, is not defeated here and is defeated on Unix.
-//!
-//! That sentence is reproduced in the `detail` of every allow this file issues,
-//! in `docs/architecture.md` D7, and in the certificate's limitations block. It
-//! is not a footnote: CLAUDE.md rule 1 says the tool never claims more than it
-//! verified, and a guard that quietly implied Unix's guarantee on Windows would
-//! be exactly that claim.
-//!
-//! # What is strictly stricter here
-//!
-//! Nothing about this backend widens the allowed set relative to Unix:
-//!
-//! * **Device targets are always refused.** [`DENY_DEVICE_PLATFORM`] is returned
-//!   for every `\\.\PhysicalDriveN`, `\\?\` and legacy DOS device name, whether
-//!   or not the policy arms devices and whether or not the environment sets
-//!   [`DEVICE_MODE_ENV`]. Arming devices is refused at policy construction. The
-//!   Linux block layer is gated and unproven; a Windows one does not exist at
-//!   all, so there is nothing here for a device decision to authorise and the
-//!   honest answer is no.
-//! * **The reserved-name check has no Unix counterpart.** `CON`, `NUL`, `AUX`,
-//!   `PRN`, `COM1`..`COM9` and `LPT1`..`LPT9` resolve to devices in any
-//!   directory and at any extension, so `out\NUL.img` is a device and not a
-//!   file, and is refused as synthetic.
-//!
-//! # What cannot be enforced here, stated rather than skipped
-//!
-//! [`DENY_HARDLINK`] is in [`ALL_CODES`] and this backend never returns it.
-//! `std::fs::Metadata` exposes no link count on Windows outside the same
-//! unstable feature, so the multiple-hardlink refusal the Unix backend performs
-//! cannot be performed here. A hard link from outside an allowlisted root into
-//! it is therefore **not** detected on Windows. The code is kept in the table so
-//! the two platforms share one vocabulary, and so this paragraph has something
-//! to name.
-
 use std::fs::{File, OpenOptions};
 use std::path::{Component, Path, PathBuf};
 
@@ -91,12 +33,6 @@ pub const DENY_DEVICE_PLATFORM: &str = "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_
 pub const DENY_RACE: &str = "DENY_RACE_DETECTED_AT_OPEN";
 pub const DENY_SYMLINK_AT_OPEN: &str = "DENY_SYMLINK_COMPONENT_AT_OPEN";
 
-/// The same 28 codes the Unix backend publishes, in the same order, so a reader
-/// of a decision never has to know which platform produced it.
-///
-/// Two are unreachable here and it is better to say which than to let a reader
-/// assume coverage: [`DENY_HARDLINK`] (no link count without an unstable
-/// feature) and [`ALLOW_DEVICE`] (device targets are always refused).
 pub const ALL_CODES: [&str; 28] = [
     ALLOW_FILE,
     ALLOW_CREATE,
@@ -130,18 +66,10 @@ pub const ALL_CODES: [&str; 28] = [
 
 pub const DEVICE_MODE_ENV: &str = "SENTINELWIPE_DEVICE_MODE";
 
-/// A root must name at least two components below its drive: `C:\a\b`. `C:\`
-/// and `C:\Users` are refused by depth before the forbidden table is consulted.
 pub const MIN_ROOT_DEPTH: usize = 2;
 
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 8 * (1 << 30);
 
-/// Top-level directories that may never *be* a write root.
-///
-/// Spelled without a drive letter and compared component-wise, because the
-/// system volume is not always `C:` and a rule that assumed so would silently
-/// stop protecting anyone who installed Windows elsewhere. Upper case because
-/// the comparison is case-insensitive and this is the folded form.
 pub const FORBIDDEN_TOP: &[&str] = &[
     "WINDOWS",
     "PROGRAM FILES",
@@ -154,15 +82,6 @@ pub const FORBIDDEN_TOP: &[&str] = &[
     "PERFLOGS",
 ];
 
-/// Top-level directories that may never be an *ancestor* of a write root.
-///
-/// This is deliberately [`FORBIDDEN_TOP`] minus `USERS`, and the difference is
-/// the whole point. Being under `C:\Windows` or `C:\Program Files` is dangerous
-/// and is refused. Being under `C:\Users` is where every developer's checkout
-/// lives on this platform — there is no `/home` — so refusing it would refuse
-/// the repository itself, and a guard that makes itself unusable protects
-/// nothing. `C:\Users` as the root, and the operator's own profile directory as
-/// the root, are both still refused.
 pub const FORBIDDEN_UNDER: &[&str] = &[
     "WINDOWS",
     "PROGRAM FILES",
@@ -174,8 +93,6 @@ pub const FORBIDDEN_UNDER: &[&str] = &[
     "PERFLOGS",
 ];
 
-/// Legacy DOS device names. These resolve to devices in **every** directory and
-/// with any extension.
 const RESERVED_LEAFS: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
     "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
@@ -212,17 +129,12 @@ impl Kind {
     }
 }
 
-/// Where environment lookups come from. `Map` exists so a test can state an
-/// environment instead of mutating the process's, which is shared and racy.
 pub enum Env<'a> {
     Process,
     Map(&'a [(String, String)]),
 }
 
 impl Env<'_> {
-    /// Parity surface. The Unix backend reads [`DEVICE_MODE_ENV`] through this;
-    /// here device targets are refused before any environment is consulted, so
-    /// nothing calls it. It is kept so the two backends present one type.
     #[allow(dead_code)]
     fn get(&self, key: &str) -> Option<String> {
         match self {
@@ -239,9 +151,6 @@ pub struct Decision {
     pub resolved: String,
     pub detail: String,
     pub target: String,
-    /// Always `None` on Windows: there is no stable inode identity to report.
-    /// The Unix backend fills both, so a reader must treat absence as "this
-    /// platform does not measure it", never as zero.
     pub st_dev: Option<u64>,
     pub st_ino: Option<u64>,
     pub kind: Kind,
@@ -401,9 +310,6 @@ impl Policy {
         &self.root_reals
     }
 
-    /// Always empty on Windows. The Unix backend matches containment on
-    /// `(st_dev, st_ino)`; this one matches on canonicalised path components, so
-    /// there is no identity pair to publish and none is invented.
     pub fn root_ids(&self) -> &[(u64, u64)] {
         &[]
     }
@@ -416,11 +322,6 @@ impl Policy {
         self.spec.require_confirmation
     }
 
-    /// The exact byte string the certificate records as `policy_digest_payload`.
-    ///
-    /// Field order, separators and escaping match the Unix backend character for
-    /// character, so the two platforms produce the same payload for the same
-    /// policy modulo the roots themselves, which are genuinely different paths.
     pub fn digest_payload(&self) -> String {
         let mut roots: Vec<String> = self.spec.roots.iter().map(|r| realpath(r)).collect();
         roots.sort();
@@ -487,18 +388,11 @@ fn json_string(s: &str) -> String {
     out
 }
 
-/// True for `C:\x` and `\\server\share\x`; false for `C:x`, `\x` and `x`.
-///
-/// Spelled out rather than left to `Path::is_absolute` because the carve layer
-/// was bitten by the opposite assumption: a POSIX path like `/a/b` has a root
-/// and no prefix, so it is **not** absolute here.
 fn is_absolute_windows(p: &Path) -> bool {
     let mut c = p.components();
     matches!(c.next(), Some(Component::Prefix(_))) && matches!(c.next(), Some(Component::RootDir))
 }
 
-/// The components of a path below its prefix and root: for `C:\a\b\c.img` this
-/// yields `a`, `b`, `c.img`.
 fn body_components(p: &Path) -> impl Iterator<Item = std::ffi::OsString> + '_ {
     p.components().filter_map(|c| match c {
         Component::Normal(s) => Some(s.to_os_string()),
@@ -506,8 +400,6 @@ fn body_components(p: &Path) -> impl Iterator<Item = std::ffi::OsString> + '_ {
     })
 }
 
-/// Strip the `\\?\` verbatim prefix `canonicalize` adds, so a decision carries
-/// the spelling an operator typed and can be compared against one.
 fn strip_verbatim(p: &Path) -> String {
     let s = p.to_string_lossy().to_string();
     if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
@@ -519,11 +411,6 @@ fn strip_verbatim(p: &Path) -> String {
     }
 }
 
-/// Fully resolve `path`, following symlinks and junctions.
-///
-/// A relative path is returned unchanged, exactly as the Unix backend does:
-/// resolving one against the working directory would import state the caller did
-/// not state, and every caller rejects relative targets before this point.
 pub fn realpath(path: &str) -> String {
     let p = Path::new(path);
     if !is_absolute_windows(p) {
@@ -532,8 +419,6 @@ pub fn realpath(path: &str) -> String {
     if let Ok(c) = std::fs::canonicalize(p) {
         return strip_verbatim(&c);
     }
-    // The leaf may legitimately not exist yet (mode "x", or "w" creating).
-    // Resolve the deepest existing ancestor and re-attach the tail lexically.
     let mut tail: Vec<std::ffi::OsString> = Vec::new();
     let mut cur = p.to_path_buf();
     while let Some(parent) = cur.parent().map(|q| q.to_path_buf()) {
@@ -568,12 +453,6 @@ fn lexical_normalize(p: &Path) -> String {
     out.to_string_lossy().to_string()
 }
 
-/// Case-insensitive, component-wise containment.
-///
-/// Component-wise rather than string-prefix, because `C:\out2\x` starts with
-/// `C:\out` as a string and is not inside it. That is the sibling-prefix
-/// confusion the Unix vector table has a row for, and it is just as reachable
-/// here.
 fn contained_by_components(resolved: &str, root_real: &str) -> bool {
     let rp: Vec<String> = Path::new(root_real)
         .components()
@@ -593,11 +472,6 @@ fn matching_root<'a>(policy: &'a Policy, resolved: &str) -> Option<&'a String> {
         .find(|r| contained_by_components(resolved, r))
 }
 
-/// Is any component from the root down to the leaf a reparse point?
-///
-/// This is the Windows stand-in for the Unix backend's `O_NOFOLLOW` descent. It
-/// is a check and not an open, so it establishes what was true when it ran and
-/// not what is true at the moment of the write.
 fn reparse_component(root_real: &str, resolved: &str) -> Option<String> {
     let root = Path::new(root_real);
     let mut cur = root.to_path_buf();
@@ -618,16 +492,11 @@ fn is_reserved_leaf(name: &str) -> bool {
     RESERVED_LEAFS.contains(&stem.as_str())
 }
 
-/// True for the Windows device and namespace prefixes. `\\?\` is included
-/// because it bypasses path normalisation, which is precisely the normalisation
-/// this guard's containment check depends on.
 fn is_synthetic_namespace(path: &str) -> bool {
     let p = path.replace('/', "\\");
     p.starts_with(r"\\.\") || p.starts_with(r"\\?\") || p.starts_with(r"\??\")
 }
 
-/// The sentence every allow carries. Written once so it cannot drift between the
-/// two allow paths.
 const TOCTOU_NOTE: &str = "windows backend: containment was checked on the resolved path \
 and re-checked on the open handle, not held across the open. Unlike the unix backend there \
 is no openat(O_NOFOLLOW) descent, so a directory on this path that an attacker can write to \
@@ -659,12 +528,6 @@ fn allow(code: &'static str, detail: String, target: &str, resolved: &str) -> De
     }
 }
 
-/// Decide whether `path` may be opened in `mode` under `policy`.
-///
-/// `platform` is accepted for signature parity with the Unix backend, which uses
-/// it to exercise its darwin-only rows from a test. Here a caller asking about a
-/// platform that is not `"windows"` is refused rather than answered, because
-/// this file's decisions are only true of the platform it is compiled for.
 pub fn authorize(
     policy: &Policy,
     path: &str,
@@ -673,8 +536,6 @@ pub fn authorize(
     env: &Env<'_>,
     platform: Option<&str>,
 ) -> Decision {
-    // Device targets are refused before any environment is read, so this
-    // backend never consults `env`. The parameter stays for API parity.
     let _ = env;
 
     if let Some(p) = platform {
@@ -914,8 +775,6 @@ pub fn authorize(
     )
 }
 
-/// The typed confirmation is checked **last**, after containment, so it can
-/// never be the thing that lets a target through. It grants nothing on its own.
 fn confirm_then(
     policy: &Policy,
     confirmation: Option<&str>,
@@ -952,12 +811,6 @@ fn confirm_then(
     }
 }
 
-/// Authorise, then open, then re-check on the handle.
-///
-/// The re-check is what stands in for the Unix backend's `openat` descent. It
-/// compares the opened handle's own metadata against the decision and refuses
-/// with [`DENY_RACE`] if the object changed shape between the two. It narrows
-/// the race; it does not remove it, and no line in this file claims otherwise.
 pub fn open_authorized(
     policy: &Policy,
     path: &str,
@@ -1008,8 +861,6 @@ pub fn open_authorized(
             Kind::File,
         )));
     }
-    // Re-resolve and re-check containment on what is now open. A rename of a
-    // directory on the path between authorize and open lands here.
     let again = realpath(&d.resolved);
     if matching_root(policy, &again).is_none() {
         return Err(GuardError::Refused(deny(
@@ -1027,21 +878,14 @@ pub fn open_authorized(
     Ok(file)
 }
 
-/// Present for signature parity with the Unix backend, which uses it to refuse a
-/// device that backs the running system. There is no Windows device path in this
-/// build, so there is nothing to report and nothing is invented.
 pub fn root_backing_device() -> Option<String> {
     None
 }
 
-/// Present for signature parity. See [`root_backing_device`].
 pub fn whole_disk(dev_name: &str) -> String {
     dev_name.to_string()
 }
 
-/// Always `None`: Windows has no stable inode identity through `std`, so this
-/// backend matches containment on canonicalised components instead. Returning
-/// `None` rather than a fabricated pair is the point.
 pub fn contained_by_inode(_resolved: &str, _root_ids: &[(u64, u64)]) -> Option<(u64, u64)> {
     None
 }
@@ -1200,7 +1044,6 @@ mod tests {
         );
         assert!(right.allowed, "{right:?}");
 
-        // A correct confirmation for a target outside the root still loses.
         let other = scratch("confirm-other");
         let outside = other.join("image.img");
         std::fs::write(&outside, vec![0u8; 4096]).unwrap();

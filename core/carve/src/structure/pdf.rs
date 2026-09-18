@@ -1,79 +1,20 @@
-//! PDF structure validation.
-//!
-//! Garfinkel, "Carving contiguous and fragmented files with fast object
-//! validation", DFRWS 2007 (Digital Investigation 4S, pp. S2-S12): a header
-//! match is a candidate, not a file.  Garfinkel's point is that a carver is
-//! only as good as the decision procedure it runs over a candidate byte range,
-//! and that the procedure has to be strong enough to reject the header-shaped
-//! noise that a real disk is full of.  `%PDF-1.` is five bytes; this validator
-//! refuses to call anything a PDF until the document's own cross-reference
-//! table has been followed back into the bytes and found to be telling the
-//! truth.
-//!
-//! The procedure, in order:
-//!
-//!   1. `%PDF-N.M` header with a plausible version;
-//!   2. locate `%%EOF`, and immediately before it `startxref` with a decimal
-//!      byte offset -- the pair is what makes a PDF self-locating;
-//!   3. follow that offset and require it to land on either the `xref`
-//!      keyword (classic table, PDF 1.0-1.4 and most 1.7 producers) or on an
-//!      `N G obj` whose dictionary declares `/Type /XRef` (cross-reference
-//!      stream, PDF 1.5+).  BOTH forms are parsed here;
-//!   4. parse every subsection / stream row into (object number, offset);
-//!   5. require the trailer dictionary -- or the xref stream's own dictionary
-//!      -- to carry `/Root`;
-//!   6. CROSS-CHECK: seek to each in-use entry's byte offset and require the
-//!      bytes there to read `N G obj` with N equal to the object number the
-//!      table claimed.  This is the step that costs a spliced or truncated
-//!      candidate its score;
-//!   7. resolve `/Root` and require that object to declare `/Type /Catalog`.
-//!
-//! `/Prev` chains (incremental updates) are followed to a bounded depth so a
-//! multi-revision document is scored on its whole cross-reference set.
-//!
-//! Cross-reference streams: `/Filter /FlateDecode` is decoded with the
-//! hand-rolled inflater in `structure::zip`, and PNG predictors 10-15
-//! (`/DecodeParms /Predictor`) are reversed here.  What is NOT done, stated
-//! rather than silently scored: type-2 entries name objects living inside an
-//! object stream (`/ObjStm`), and this validator does not decompress object
-//! streams, so those entries are counted as *unverifiable* and excluded from
-//! the cross-check ratio rather than counted as hits.  `/Encrypt`ed documents
-//! are reported and not claimed.  Linearised first-page xref tables are read
-//! as ordinary tables.
-
 use super::zip::{inflate_zlib, inflate_zlib_checked};
 use super::{clamp01, Validation};
 
-/// Upper bound on how far a single PDF candidate is followed.  The carver
-/// hands over the rest of the image, so the scan must be bounded; a PDF whose
-/// `%%EOF` lies beyond this is reported unrecoverable rather than guessed at.
 const MAX_SCAN: usize = 64 << 20;
-/// How far back from `%%EOF` `startxref` is allowed to sit.
 const STARTXREF_LOOKBACK: usize = 160;
-/// The `%%EOF` scan stops this far in once at least one `%%EOF` has been seen
-/// (see `find_eofs_bounded`).  Measured effect on the fixture: 20-77 ms per PDF
-/// candidate before, 0.3-0.6 ms after, for identical results.
 const EOF_SCAN_FLOOR: usize = 1 << 20;
-/// Bound on the `/Prev` chain, so a cyclic or hostile chain terminates.
 const MAX_PREV_HOPS: usize = 16;
-/// Bound on how much of an object body is searched for `/Type /Catalog`.
 const CATALOG_WINDOW: usize = 16 << 10;
 
-// -------------------------------------------------------------------------
-// score weights -- published, and each term is measured, never asserted
-// -------------------------------------------------------------------------
-const W_HEADER: f64 = 0.10; // %PDF-N.M with a real version
-const W_EOF: f64 = 0.10; // %%EOF preceded by startxref <int>
-const W_XREF_AT: f64 = 0.15; // that offset lands on `xref` or an /Type /XRef object
-const W_TRAILER: f64 = 0.20; // trailer dictionary carries /Root (and a plausible /Size)
-const W_ENTRIES: f64 = 0.30; // fraction of in-use entries that land on `N G obj`
-const W_CATALOG: f64 = 0.15; // /Root resolves to an object declaring /Type /Catalog
+const W_HEADER: f64 = 0.10;
+const W_EOF: f64 = 0.10;
+const W_XREF_AT: f64 = 0.15;
+const W_TRAILER: f64 = 0.20;
+const W_ENTRIES: f64 = 0.30;
+const W_CATALOG: f64 = 0.15;
 
-/// A document with more than 5% of its cross-reference offsets pointing at
-/// something other than the object they name is reported as unrecoverable
-/// rather than repaired: xref reconstruction is a different tool.
 const VALID_HIT_MIN: f64 = 0.95;
-/// Below this many verified objects the ratio is not evidence of anything.
 const VALID_MIN_VERIFIED: usize = 3;
 
 #[derive(Clone, Copy, PartialEq)]
@@ -83,10 +24,7 @@ enum XrefForm {
 }
 
 struct XrefSet {
-    /// (object number, byte offset) for in-use, directly-addressable objects.
     inuse: Vec<(u32, u64)>,
-    /// Entries that name an object inside an /ObjStm: real, but not checkable
-    /// here.  Counted separately so the ratio never launders them as hits.
     in_objstm: usize,
     root: Option<u32>,
     size: Option<u64>,
@@ -94,11 +32,9 @@ struct XrefSet {
     encrypted: bool,
 }
 
-/// Validate a PDF candidate whose header byte is `data[0]`.
 pub fn validate(data: &[u8]) -> Validation {
     let window = &data[..data.len().min(MAX_SCAN)];
 
-    // ---- 1 · header -----------------------------------------------------
     let header_ok = window.len() >= 8
         && &window[..5] == b"%PDF-"
         && window[5].is_ascii_digit()
@@ -109,7 +45,6 @@ pub fn validate(data: &[u8]) -> Validation {
     }
     let version = format!("{}.{}", window[5] as char, window[7] as char);
 
-    // ---- 2 · every %%EOF, newest first ----------------------------------
     let (eofs, scanned) = find_eofs_bounded(window);
     if eofs.is_empty() {
         return reject(
@@ -121,10 +56,6 @@ pub fn validate(data: &[u8]) -> Validation {
         );
     }
 
-    // The last %%EOF whose startxref actually resolves is the true end: an
-    // incrementally updated PDF has several, and residue after the object can
-    // contribute spurious ones.  Try newest first and keep the best attempt
-    // so a total failure still reports why.
     let mut best: Option<Validation> = None;
     for &eof_at in eofs.iter().rev() {
         let v = try_revision(window, eof_at, &version);
@@ -147,7 +78,6 @@ fn try_revision(d: &[u8], eof_at: usize, version: &str) -> Validation {
     let mut score = W_HEADER;
     let mut notes: Vec<String> = Vec::new();
 
-    // `%%EOF` plus any single trailing end-of-line is the object's last byte.
     let mut end = eof_at + 5;
     if d.get(end) == Some(&b'\r') {
         end += 1;
@@ -156,7 +86,6 @@ fn try_revision(d: &[u8], eof_at: usize, version: &str) -> Validation {
         end += 1;
     }
 
-    // ---- 2 · startxref immediately before %%EOF -------------------------
     let lo = eof_at.saturating_sub(STARTXREF_LOOKBACK);
     let sx_kw = match rfind(&d[lo..eof_at], b"startxref") {
         Some(rel) => lo + rel,
@@ -191,7 +120,6 @@ fn try_revision(d: &[u8], eof_at: usize, version: &str) -> Validation {
         };
     }
 
-    // ---- 3/4/5 · follow the offset, and its /Prev chain -----------------
     let set = match collect_xref(d, sx) {
         Some(s) => s,
         None => {
@@ -210,8 +138,6 @@ fn try_revision(d: &[u8], eof_at: usize, version: &str) -> Validation {
 
     let root = set.root;
     if root.is_some() {
-        // /Size is a weak but free consistency signal: it must be at least one
-        // more than the largest object number the table addresses.
         let max_obj = set.inuse.iter().map(|e| e.0).max().unwrap_or(0) as u64;
         let size_ok = match set.size {
             Some(s) => s > max_obj,
@@ -225,7 +151,6 @@ fn try_revision(d: &[u8], eof_at: usize, version: &str) -> Validation {
         notes.push("trailer=/Root absent".into());
     }
 
-    // ---- 6 · cross-check every in-use offset against `N G obj` ----------
     let total = set.inuse.len();
     let mut hits = 0usize;
     for &(obj, off) in &set.inuse {
@@ -240,7 +165,6 @@ fn try_revision(d: &[u8], eof_at: usize, version: &str) -> Validation {
     };
     score += W_ENTRIES * ratio;
 
-    // ---- 7 · /Root resolves to a /Catalog -------------------------------
     let mut catalog_ok = false;
     if let Some(r) = root {
         if let Some(&(_, off)) = set.inuse.iter().find(|e| e.0 == r) {
@@ -287,11 +211,6 @@ fn try_revision(d: &[u8], eof_at: usize, version: &str) -> Validation {
         notes.join(" ")
     );
 
-    // `end` is reported whenever the object's terminator was genuinely
-    // established -- `startxref` resolved to a real cross-reference section and
-    // `%%EOF` closed it -- even when the document then failed a later check.
-    // structure/mod.rs documents that state, and the carver needs the length to
-    // step past a damaged object rather than rescan it.
     Validation {
         valid,
         end: if end <= d.len() {
@@ -304,12 +223,6 @@ fn try_revision(d: &[u8], eof_at: usize, version: &str) -> Validation {
     }
 }
 
-// -------------------------------------------------------------------------
-// cross-reference collection
-// -------------------------------------------------------------------------
-
-/// Follow `at` and its `/Prev` chain, merging every section's in-use entries.
-/// The newest section wins for a repeated object number.
 fn collect_xref(d: &[u8], at: usize) -> Option<XrefSet> {
     let mut merged: Vec<(u32, u64)> = Vec::new();
     let mut seen_obj: Vec<u32> = Vec::new();
@@ -331,9 +244,6 @@ fn collect_xref(d: &[u8], at: usize) -> Option<XrefSet> {
 
         let section = match parse_xref_section(d, pos) {
             Some(s) => s,
-            // The first hop is the one `startxref` names: if it does not
-            // parse, there is no cross-reference set at all.  A later /Prev
-            // hop that fails only truncates the chain.
             None if hops == 1 => return None,
             None => break,
         };
@@ -389,10 +299,6 @@ fn parse_xref_section(d: &[u8], at: usize) -> Option<Section> {
     }
 }
 
-/// Classic table:  `xref` (subsection header `first count`, then `count`
-/// 20-byte entries)* `trailer` `<< ... >>`.
-/// Entries are parsed token-wise rather than by fixed stride, because 19-byte
-/// entries from older producers are common and are still unambiguous.
 fn parse_classic_xref(d: &[u8], mut p: usize) -> Option<Section> {
     let mut inuse = Vec::new();
     let mut subsections = 0usize;
@@ -404,7 +310,7 @@ fn parse_classic_xref(d: &[u8], mut p: usize) -> Option<Section> {
         }
         subsections += 1;
         if subsections > 100_000 {
-            return None; // a digit field that never reaches `trailer`
+            return None;
         }
         let (first, np) = parse_uint(d, p)?;
         let (count, np) = parse_uint(d, skip_ws(d, np))?;
@@ -439,9 +345,6 @@ fn parse_classic_xref(d: &[u8], mut p: usize) -> Option<Section> {
     let size = dict_int(dict, b"/Size");
     let prev = dict_int(dict, b"/Prev").map(|v| v as usize);
     let encrypted = dict_key(dict, b"/Encrypt").is_some();
-    // Hybrid-reference files put a 1.5 xref stream beside the classic table.
-    // It is not followed: the classic table already addresses every object a
-    // 1.4 reader needs, and the ratio must not be diluted by a second copy.
     Some(Section {
         inuse,
         in_objstm: 0,
@@ -453,10 +356,7 @@ fn parse_classic_xref(d: &[u8], mut p: usize) -> Option<Section> {
     })
 }
 
-/// PDF 1.5+ cross-reference stream: `N G obj << /Type /XRef /W [a b c] ... >>
-/// stream ... endstream`.
 fn parse_xref_stream(d: &[u8], at: usize) -> Option<Section> {
-    // `N G obj`
     let (_obj, p) = parse_uint(d, at)?;
     let (_gen, p) = parse_uint(d, skip_ws(d, p))?;
     let p = skip_ws(d, p);
@@ -473,7 +373,6 @@ fn parse_xref_stream(d: &[u8], at: usize) -> Option<Section> {
         return None;
     }
 
-    // stream payload
     let sk = de + 2;
     let sk = find(&d[sk..(sk + 64).min(d.len())], b"stream").map(|r| sk + r)?;
     let mut data_at = sk + 6;
@@ -486,7 +385,6 @@ fn parse_xref_stream(d: &[u8], at: usize) -> Option<Section> {
     let declared = dict_int(&dict, b"/Length").map(|v| v as usize);
     let data_end = match declared {
         Some(n) if data_at + n <= d.len() => data_at + n,
-        // /Length may be an indirect reference; bound by `endstream` instead.
         _ => {
             let hi = (data_at + (64 << 20)).min(d.len());
             data_at + find(&d[data_at..hi], b"endstream")?
@@ -504,9 +402,6 @@ fn parse_xref_stream(d: &[u8], at: usize) -> Option<Section> {
             None => return None,
         }
     } else {
-        // /ASCIIHexDecode, /LZWDecode and friends are not implemented.  The
-        // dictionary was still verified, so the caller learns the form was
-        // recognised and the rows were not read.
         return Some(Section {
             inuse: Vec::new(),
             in_objstm: 0,
@@ -518,7 +413,6 @@ fn parse_xref_stream(d: &[u8], at: usize) -> Option<Section> {
         });
     };
 
-    // /DecodeParms /Predictor: PNG predictors 10-15 are the common case.
     let parms = dict_dict(&dict, b"/DecodeParms");
     let predictor = parms
         .as_ref()
@@ -541,12 +435,11 @@ fn parse_xref_stream(d: &[u8], at: usize) -> Option<Section> {
         let rowlen = (columns * colors * bpc + 7) / 8;
         png_unpredict(&decoded, rowlen, bpp)?
     } else if predictor == 2 {
-        return None; // TIFF predictor 2 is not implemented for xref streams
+        return None;
     } else {
         decoded
     };
 
-    // /W widths and /Index subsections
     let w = dict_ints_array(&dict, b"/W")?;
     if w.len() < 3 {
         return None;
@@ -608,13 +501,11 @@ fn be_uint(b: &[u8]) -> u64 {
     v
 }
 
-/// Reverse the PNG row filters used by `/Predictor` 10-15 (RFC 2083 §6).
 fn png_unpredict(src: &[u8], rowlen: usize, bpp: usize) -> Option<Vec<u8>> {
     if rowlen == 0 {
         return None;
     }
     let stride = rowlen + 1;
-    // Whole rows only: a trailing partial row is ignored rather than guessed at.
     let nrows = src.len() / stride;
     let mut out = vec![0u8; nrows * rowlen];
     for r in 0..nrows {
@@ -659,11 +550,6 @@ fn png_unpredict(src: &[u8], rowlen: usize, bpp: usize) -> Option<Vec<u8>> {
     Some(out)
 }
 
-// -------------------------------------------------------------------------
-// byte-level helpers.  No regex, no allocation in the hot paths.
-// -------------------------------------------------------------------------
-
-/// `data[at..]` reads `obj 0 obj` (any generation) for object number `obj`.
 fn object_header_at(d: &[u8], at: usize, obj: u32) -> bool {
     if at >= d.len() {
         return false;
@@ -730,9 +616,6 @@ fn parse_uint(d: &[u8], p: usize) -> Option<(u64, usize)> {
     }
 }
 
-/// Span of a dictionary's contents given `p` at its opening `<<`.
-/// Returns (inner_start, inner_end); `inner_end` is the index of the closing
-/// `>`, so the dictionary occupies `p ..= inner_end + 1`.
 fn dict_extent(d: &[u8], p: usize) -> Option<(usize, usize)> {
     if d.get(p) != Some(&b'<') || d.get(p + 1) != Some(&b'<') {
         return None;
@@ -742,7 +625,6 @@ fn dict_extent(d: &[u8], p: usize) -> Option<(usize, usize)> {
     while i < d.len() {
         match d[i] {
             b'(' => {
-                // literal string: balanced parens, backslash escapes
                 let mut par = 1usize;
                 i += 1;
                 while i < d.len() && par > 0 {
@@ -762,7 +644,6 @@ fn dict_extent(d: &[u8], p: usize) -> Option<(usize, usize)> {
                 continue;
             }
             b'<' => {
-                // hex string
                 while i < d.len() && d[i] != b'>' {
                     i += 1;
                 }
@@ -783,9 +664,6 @@ fn dict_extent(d: &[u8], p: usize) -> Option<(usize, usize)> {
     None
 }
 
-/// Position just past `key` when it occurs at the dictionary's top level.
-/// Nested dictionaries and arrays are skipped so `/Type` inside
-/// `/DecodeParms` never masquerades as the outer `/Type`.
 fn dict_key(dict: &[u8], key: &[u8]) -> Option<usize> {
     let mut i = 0usize;
     let mut depth = 0i32;
@@ -840,7 +718,6 @@ fn dict_key(dict: &[u8], key: &[u8]) -> Option<usize> {
                         return Some(after);
                     }
                 }
-                // skip the whole name token
                 i += 1;
                 while i < dict.len() && !is_ws(dict[i]) && !is_delim(dict[i]) {
                     i += 1;
@@ -858,7 +735,6 @@ fn dict_int(dict: &[u8], key: &[u8]) -> Option<u64> {
     parse_uint(dict, skip_ws(dict, p)).map(|(v, _)| v)
 }
 
-/// `/Key N G R` -> N
 fn dict_ref(dict: &[u8], key: &[u8]) -> Option<u32> {
     let p = dict_key(dict, key)?;
     let (n, p) = parse_uint(dict, skip_ws(dict, p))?;
@@ -888,7 +764,6 @@ fn dict_is_name(dict: &[u8], key: &[u8], want: &[u8]) -> bool {
     dict_name(dict, key) == Some(want)
 }
 
-/// `/Filter /X` or `/Filter [/X /Y]` -> the names, in order.
 fn dict_names<'a>(dict: &'a [u8], key: &[u8]) -> Vec<&'a [u8]> {
     let mut out = Vec::new();
     let p = match dict_key(dict, key) {
@@ -921,7 +796,6 @@ fn dict_names<'a>(dict: &'a [u8], key: &[u8]) -> Vec<&'a [u8]> {
     out
 }
 
-/// `/Key [a b c]` -> the integers.
 fn dict_ints_array(dict: &[u8], key: &[u8]) -> Option<Vec<i64>> {
     let p = dict_key(dict, key)?;
     let s = skip_ws(dict, p);
@@ -942,7 +816,6 @@ fn dict_ints_array(dict: &[u8], key: &[u8]) -> Option<Vec<i64>> {
     Some(out)
 }
 
-/// `/Key << ... >>` -> a copy of the nested dictionary's contents.
 fn dict_dict(dict: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     let p = dict_key(dict, key)?;
     let s = skip_ws(dict, p);
@@ -958,8 +831,6 @@ fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
     let last = hay.len() - n;
     let mut i = 0usize;
     while i <= last {
-        // `position` over the first byte is the vectorisable part of the scan;
-        // the full compare only runs on a first-byte hit.
         match hay[i..=last].iter().position(|&b| b == needle[0]) {
             Some(k) => {
                 let j = i + k;
@@ -991,16 +862,6 @@ fn rfind(hay: &[u8], needle: &[u8]) -> Option<usize> {
     }
 }
 
-/// Every `%%EOF` in the candidate, with the scan bounded by what it finds.
-///
-/// The carver hands over the rest of the image, so an unconditional scan costs
-/// `MAX_SCAN` on every PDF candidate whether the object is 40 KB or 40 MB --
-/// measured at 20-77 ms each on the fixture.  A PDF's revisions are contiguous,
-/// so once a `%%EOF` has been seen at offset E the object cannot plausibly
-/// continue past `4*E`, and anything further belongs to something else.  The
-/// scan therefore runs to `MAX_SCAN` only until the first `%%EOF`, and after
-/// that to `max(4*E, EOF_SCAN_FLOOR)`.  Returns the positions and how far the
-/// scan actually reached, so a rejection can name a real number.
 fn find_eofs_bounded(hay: &[u8]) -> (Vec<usize>, usize) {
     let hard = hay.len();
     let mut out: Vec<usize> = Vec::new();
@@ -1043,9 +904,6 @@ mod tests {
         (a - b).abs() < 1e-9
     }
 
-    /// The 4 contiguous fixture PDFs carve to their exact manifest length with
-    /// a perfect rubric: classic xref table, every offset landing on the object
-    /// it names, /Root resolving to a /Catalog.
     #[test]
     fn fixture_pdf_contiguous_are_valid_with_exact_end() {
         if !fixture::available() {
@@ -1073,7 +931,6 @@ mod tests {
         assert_eq!(n, 4, "manifest should hold 4 contiguous PDF files");
     }
 
-    /// Cut every PDF at 60% and require rejection.
     #[test]
     fn fixture_pdf_truncated_at_60_percent_is_rejected() {
         if !fixture::available() {
@@ -1090,15 +947,10 @@ mod tests {
                 p.path, cut, v.detail
             );
             assert!(v.end.is_none());
-            // The rubric collapses to the header term alone: with the tail gone
-            // there is no %%EOF, so nothing downstream of it can be earned.
             assert!(near(v.score, W_HEADER), "{} score {}", p.path, v.score);
         }
     }
 
-    /// The xref cross-check in isolation, and the published 5% tolerance
-    /// measured rather than asserted.  Overwrite the `N G obj` line of objects
-    /// the table names; every byte offset in the file is untouched.
     #[test]
     fn broken_object_offsets_cost_exactly_their_share_and_then_reject() {
         if !fixture::available() {
@@ -1129,8 +981,6 @@ mod tests {
             .take(2)
             .collect();
 
-        // One broken offset: 25/26 = 0.9615 is above the 0.95 gate, so the
-        // document is still recovered -- and the score records the damage.
         let mut one = good.clone();
         for i in 0..8 {
             one[victims[0] as usize + i] = b'X';
@@ -1145,7 +995,6 @@ mod tests {
             base.score
         );
 
-        // Two broken offsets: 24/26 = 0.923 is below the gate.
         let mut two = one.clone();
         for i in 0..8 {
             two[victims[1] as usize + i] = b'X';
@@ -1155,8 +1004,6 @@ mod tests {
         assert!(v2.detail.contains("verified=24/26"), "{}", v2.detail);
     }
 
-    /// `startxref` that does not land on a cross-reference section.  Same
-    /// length, so nothing in the file moves.
     #[test]
     fn startxref_pointing_at_junk_is_rejected() {
         if !fixture::available() {
@@ -1177,12 +1024,9 @@ mod tests {
         let v = validate(&bad);
         assert!(!v.valid, "junk startxref accepted: {}", v.detail);
         assert!(v.detail.contains("does not land on"), "{}", v.detail);
-        // Header + the startxref/%%EOF pairing were still earned; nothing else.
         assert!(near(v.score, W_HEADER + W_EOF), "score {}", v.score);
     }
 
-    /// A trailer with no /Root is not a document.  `/Root` -> `/Ruot`, same
-    /// length, every offset preserved.
     #[test]
     fn trailer_without_root_is_rejected() {
         if !fixture::available() {
@@ -1201,8 +1045,6 @@ mod tests {
         let v = validate(&bad);
         assert!(!v.valid, "trailer without /Root accepted: {}", v.detail);
         assert!(v.detail.contains("/Root absent"), "{}", v.detail);
-        // The trailer term and the catalog term both go; the 26 object offsets
-        // are untouched and still earn their 0.30.
         assert!(
             near(v.score, 1.0 - W_TRAILER - W_CATALOG),
             "score {}",
@@ -1210,7 +1052,6 @@ mod tests {
         );
     }
 
-    /// /Root that resolves to an object which is not a /Catalog.
     #[test]
     fn root_that_is_not_a_catalog_loses_exactly_that_term() {
         if !fixture::available() {
@@ -1227,15 +1068,10 @@ mod tests {
         let v = validate(&bad);
         assert!(!v.valid, "non-catalog root accepted: {}", v.detail);
         assert!(v.detail.contains("not-a-/Catalog"), "{}", v.detail);
-        // startxref resolved and %%EOF closed the object, so the extent is
-        // known even though the document is rejected.
         assert_eq!(v.end, Some(p.size));
         assert!(near(v.score, 1.0 - W_CATALOG), "score {}", v.score);
     }
 
-    /// The bifragment PDF: the fixture splits it across a 128-cluster gap, so
-    /// contiguous validation from its header must fail.  Reassembly is
-    /// bifragment.rs's job, not this validator's.
     #[test]
     fn bifragment_pdf_is_not_valid_contiguously() {
         if !fixture::available() {
@@ -1249,8 +1085,6 @@ mod tests {
         assert_eq!(p.extents.len(), 2);
         let v = validate(fixture::at_offset(&p));
         assert!(!v.valid, "{} accepted contiguously: {}", p.path, v.detail);
-        // ...and the same bytes reassembled by extent DO validate, which is
-        // what proves the failure above is fragmentation and not this parser.
         let joined = fixture::bytes_of(&p);
         let v2 = validate(&joined);
         assert!(v2.valid, "{} reassembled -> {}", p.path, v2.detail);
@@ -1258,24 +1092,15 @@ mod tests {
         assert!(near(v2.score, 1.0), "score {}", v2.score);
     }
 
-    // ---- PDF 1.5+ cross-reference streams -------------------------------
-    //
-    // The fixture corpus is PDF 1.7 with classic xref tables throughout, so
-    // the 1.5 path is exercised on documents assembled here, byte by byte,
-    // rather than claimed to work off a file nobody carved.
-
     fn push_row(rows: &mut Vec<u8>, ty: u8, f2: u32, f3: u16) {
         rows.push(ty);
         rows.extend_from_slice(&f2.to_be_bytes());
         rows.extend_from_slice(&f3.to_be_bytes());
     }
 
-    /// A zlib stream (RFC 1950) whose DEFLATE body is a single stored block.
-    /// Built by hand because this crate has an inflater and no compressor,
-    /// and a stored block needs neither.
     fn zlib_stored(payload: &[u8]) -> Vec<u8> {
-        let mut s = vec![0x78u8, 0x01]; // CMF/FLG, (0x7801 % 31 == 0)
-        s.push(0x01); // BFINAL=1, BTYPE=00
+        let mut s = vec![0x78u8, 0x01];
+        s.push(0x01);
         s.extend_from_slice(&(payload.len() as u16).to_le_bytes());
         s.extend_from_slice(&(!(payload.len() as u16)).to_le_bytes());
         s.extend_from_slice(payload);
@@ -1294,18 +1119,12 @@ mod tests {
         offs[3] = out.len() as u32;
 
         let mut rows = Vec::new();
-        // Field 1 is the ENTRY TYPE, not the object number: 0 free, 1 in-use
-        // at a byte offset, 2 inside an object stream.  Objects 1..3 are all
-        // type 1; the object number comes from /Index, which defaults to
-        // [0 /Size].
         push_row(&mut rows, 0, 0, 65535);
         push_row(&mut rows, 1, offs[1], 0);
         push_row(&mut rows, 1, offs[2], 0);
         push_row(&mut rows, 1, offs[3], 0);
 
         let (payload, parms) = if flate_with_predictor {
-            // /Predictor 12 is PNG prediction; each row carries its own filter
-            // type byte, and 0 (None) is a legal choice for every row.
             let mut pred = Vec::new();
             for r in rows.chunks(7) {
                 pred.push(0u8);
@@ -1353,8 +1172,6 @@ mod tests {
         assert!(near(v.score, 1.0), "score {} {}", v.score, v.detail);
     }
 
-    /// The same 1.5 document with one object body moved: the stream's own rows
-    /// now lie, and the cross-check is the only thing that can notice.
     #[test]
     fn pdf_15_xref_stream_with_a_lying_row_is_rejected() {
         let mut d = build_xref_stream_pdf(false);
@@ -1364,8 +1181,6 @@ mod tests {
         assert!(!v.valid, "lying xref row accepted: {}", v.detail);
         assert!(v.detail.contains("verified=2/3"), "{}", v.detail);
     }
-
-    // ---- terms that need no fixture -------------------------------------
 
     #[test]
     fn non_pdf_input_is_rejected_immediately() {
@@ -1396,7 +1211,6 @@ mod tests {
         assert!(near(v.score, W_HEADER), "score {}", v.score);
     }
 
-    /// The dictionary reader must not confuse a nested key with an outer one.
     #[test]
     fn dict_keys_are_matched_at_the_top_level_only() {
         let d = b"<< /DecodeParms << /Type /Inner /Predictor 12 >> /Type /XRef /Size 9 >>";
@@ -1404,16 +1218,13 @@ mod tests {
         let inner = &d[a..b];
         assert!(dict_is_name(inner, b"/Type", b"/XRef"));
         assert_eq!(dict_int(inner, b"/Size"), Some(9));
-        // /Predictor lives one level down and must be invisible from here.
         assert_eq!(dict_int(inner, b"/Predictor"), None);
         let parms = dict_dict(inner, b"/DecodeParms").unwrap();
         assert_eq!(dict_int(&parms, b"/Predictor"), Some(12));
     }
 
-    /// PNG predictor reversal, checked against a hand-computed Up filter.
     #[test]
     fn png_predictor_up_filter_reverses() {
-        // rowlen 3, two rows: [10 20 30] then Up-filtered [1 2 3] -> [11 22 33]
         let src = [0u8, 10, 20, 30, 2u8, 1, 2, 3];
         let out = png_unpredict(&src, 3, 1).unwrap();
         assert_eq!(out, vec![10, 20, 30, 11, 22, 33]);

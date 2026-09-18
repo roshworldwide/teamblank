@@ -1,16 +1,3 @@
-"""End-to-end suite for the Phase-1 forensic fixture.
-
-Five of these tests exist because the previous round shipped the defect they
-catch. Each says so in its own docstring; none of them is decoration.
-
-The expensive part -- generating the 40-file corpus and assembling a 256 MiB
-image -- happens once, in a session-scoped fixture, and every assertion is made
-against that one build. The determinism test pays for a second build on
-purpose: a hash compared against itself proves nothing.
-
-Run: uv run pytest -q tests/test_fixtures.py
-"""
-
 from __future__ import annotations
 
 import ast
@@ -25,8 +12,6 @@ from pathlib import Path
 
 import pytest
 
-# fixtures/ is a directory at the repo root, not on pythonpath (pyproject sets
-# pythonpath = ["py"]). Import it as a namespace package from the repo root.
 _REPO = Path(__file__).resolve().parents[1]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
@@ -41,34 +26,17 @@ SIZE = B.DEFAULT_SIZE_BYTES
 TRACKED_POINTER = _REPO / "fixtures" / "manifest.json"
 
 
-# --------------------------------------------------------------------------
-# One build, shared
-# --------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="session")
 def built():
-    """The fixture, built in-process with write=False: no Policy, no bytes on
-    disk, nothing for a test to leave behind. Every on-disk write in this
-    project goes through the guard, and a test suite is not an exception -- so
-    it does not write at all."""
     return B.build(seed=SEED, size_bytes=SIZE, write=False)
 
 
 @pytest.fixture(scope="session")
 def manifest(built):
-    """The manifest exactly as it is written: decoded from the emitted bytes,
-    not from the dict, so the tests read what the file will contain."""
     return json.loads(built.manifest_bytes.decode("utf-8"))
 
 
-# --------------------------------------------------------------------------
-# 1 · Determinism
-# --------------------------------------------------------------------------
-
-
 def test_two_builds_from_one_seed_are_byte_identical(built):
-    """CLAUDE.md rule 6. A second build, same seed, same everything."""
     again = B.build(seed=SEED, size_bytes=SIZE, write=False)
     assert again.image_sha256 == built.image_sha256
     assert again.manifest_sha256 == built.manifest_sha256
@@ -77,8 +45,6 @@ def test_two_builds_from_one_seed_are_byte_identical(built):
 
 
 def test_a_second_seed_moves_every_hash(built):
-    """The determinism test above is vacuous if the seed is not actually
-    driving the bytes. A different seed must produce a different image."""
     other = B.build(seed=SEED + "/v2-probe", size_bytes=SIZE, write=False)
     assert other.image_sha256 != built.image_sha256
     assert other.manifest_sha256 != built.manifest_sha256
@@ -86,10 +52,6 @@ def test_a_second_seed_moves_every_hash(built):
 
 
 def test_a_fresh_interpreter_under_a_hostile_environment_agrees(built, tmp_path):
-    """In-process repetition cannot see interpreter-level nondeterminism.
-    This one runs the real CLI in a new process with PYTHONHASHSEED, TZ, LANG
-    and umask all changed, which is where hash-order and locale drift would
-    show up."""
     env = dict(os.environ)
     env.update(PYTHONHASHSEED="12345", TZ="Pacific/Chatham",
                LANG="tr_TR.UTF-8", LC_ALL="tr_TR.UTF-8")
@@ -98,8 +60,6 @@ def test_a_fresh_interpreter_under_a_hostile_environment_agrees(built, tmp_path)
         [sys.executable, str(_REPO / "fixtures" / "build_image.py"),
          "--seed", SEED, "--size", str(SIZE), "--out", str(out), "--quiet"],
         cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=900)
-    # returncode 0 now asserts TWO things: the build ran, and it matched the
-    # digests committed in fixtures/manifest.json. A drifted fixture exits 4.
     assert proc.returncode == 0, proc.stderr
     printed = proc.stdout.split()[0]
     assert printed == built.image_sha256, proc.stdout
@@ -107,17 +67,11 @@ def test_a_fresh_interpreter_under_a_hostile_environment_agrees(built, tmp_path)
     assert hashlib.sha256(on_disk).hexdigest() == built.image_sha256
 
 
-# --------------------------------------------------------------------------
-# 2 · The manifest describes the image that exists
-# --------------------------------------------------------------------------
-
 REQUIRED_FILE_FIELDS = ("path", "offset", "size", "sha256", "fragmented",
                         "expected_recoverable")
 
 
 def test_every_file_carries_all_six_required_fields(manifest):
-    """The build pack names six per-file fields. A manifest missing one is a
-    manifest a downstream consumer has to guess at."""
     assert manifest["files"], "manifest lists no files"
     for entry in manifest["files"]:
         missing = [k for k in REQUIRED_FILE_FIELDS if k not in entry]
@@ -142,15 +96,8 @@ def test_manifest_header_matches_the_measured_image(built, manifest):
 
 
 def test_whole_image_entropy_is_measured_on_the_real_bytes(built, manifest):
-    """CLAUDE.md rule 2: every number on screen traces to a measurement. The
-    demo's entropy line reads this field, so it must be the entropy of the
-    image that was actually assembled -- not of a simulation, and not of the
-    corpus alone."""
     got = manifest["whole_image_entropy_bits_per_byte"]
     assert got == pytest.approx(C.shannon_bits_per_byte(built.image), abs=1e-6)
-    # Sanity band: an all-zero image is 0.0 and a SHAKE-filled one is ~8.0.
-    # A pre-wipe fixture that already sits at 8.0 leaves the wipe nothing to
-    # demonstrate, which is the reason the residue is a mix.
     assert 5.0 < got < 7.9
 
 
@@ -162,42 +109,24 @@ def test_counted_set_is_consistent_with_the_file_list(manifest):
     assert cs["unrecoverable_by_design"] == len(unrec) == 7
     assert cs["expected_recoverable"] == len(files) - len(unrec) == 33
 
-    # Seven unreachable files, TWO DISTINCT CAUSES, pinned separately so that
-    # losing one cause cannot be masked by the other still summing to seven.
     nosig = [f for f in unrec if f["kind"].upper() == "TXT"]
     byfrag = sorted(f["path"] for f in unrec if f["kind"].upper() != "TXT")
     assert len(nosig) == 5, "expected 5 plaintext files with no signature"
     assert byfrag == ["/evidence_bag_seal.jpg", "/media_inventory.docx"], byfrag
 
-    # Plain text carries no magic bytes, so signature carving cannot reach it at
-    # any offset.  Our corpus text does open with an ASCII banner and keying on
-    # it would lift recall to 38; that is refused, because a carver tuned to a
-    # marker we planted ourselves measures nothing about carving.
     for f in files:
         if f["kind"].upper() == "TXT":
             assert f["expected_recoverable"] == P.UNRECOVERABLE, f["path"]
 
-    # The operator's decision, asserted rather than trusted to the narration:
-    # the demo never reports a round 40 of 40.
     assert cs["expected_recoverable"] != cs["total"]
 
 
 def test_the_manifest_bytes_carry_no_carriage_return(built):
-    """Rule 5. The manifest is written in binary with explicit b"\\n". A
-    text-mode write on Windows would translate every newline and move the
-    manifest hash, and no test on this laptop would have noticed."""
     assert b"\r" not in built.manifest_bytes
     assert built.manifest_bytes.endswith(b"\n")
     assert json.loads(built.manifest_bytes.decode("utf-8"))["schema"] == B.MANIFEST_SCHEMA
 
 
-# --------------------------------------------------------------------------
-# 3 · Every extent offset holds the bytes the manifest claims
-# --------------------------------------------------------------------------
-
-# Magic at byte 0 of the file, by corpus kind. MP4 is the exception: its
-# signature is 'ftyp' at offset 4, which is why the carver keys on the box
-# tree and not on byte 0.
 MAGIC_AT_0 = {
     "GZIP": b"\x1f\x8b\x08",
     "PNG": b"\x89PNG\r\n\x1a\n",
@@ -209,8 +138,6 @@ MAGIC_AT_0 = {
 
 
 def test_first_extent_offset_holds_the_files_magic_bytes(built, manifest):
-    """The manifest's offsets are what Phase 2 carves against. If one is wrong
-    the carver finds nothing and the failure looks like a carver bug."""
     img = built.image
     checked = {}
     for entry in manifest["files"]:
@@ -220,7 +147,7 @@ def test_first_extent_offset_holds_the_files_magic_bytes(built, manifest):
             assert img[off + 4:off + 8] == b"ftyp", entry["path"]
         elif kind == "TXT":
             head = img[off:off + 64]
-            head.decode("ascii")                      # raises if it is not text
+            head.decode("ascii")
             assert head.strip(), entry["path"]
         else:
             magic = MAGIC_AT_0[kind]
@@ -231,9 +158,6 @@ def test_first_extent_offset_holds_the_files_magic_bytes(built, manifest):
 
 
 def test_every_extent_holds_its_own_slice_and_the_file_reassembles(built, manifest):
-    """Not only the first extent. Reading every extent in LOGICAL order out of
-    the image and concatenating must reproduce the recorded SHA-256 -- which is
-    the operation the carver has to perform, done here against the manifest."""
     img = built.image
     by_name = {"/" + p.name: p for p in built.placements}
     for entry in manifest["files"]:
@@ -272,22 +196,12 @@ def test_extent_arithmetic_agrees_with_the_geometry(built, manifest):
         assert total == entry["size"]
 
 
-# --------------------------------------------------------------------------
-# 4 · THE REGRESSION TEST: the deleted files survive the residue fill
-# --------------------------------------------------------------------------
-
-
 def _fat_entry(geo, img, cluster: int) -> int:
     off = geo.reserved * geo.bytes_per_sector + cluster * 4
     return struct.unpack_from("<I", img, off)[0] & 0x0FFFFFFF
 
 
 def test_deleted_files_survive_the_residue_fill(built, manifest):
-    """THE regression test. Deletion sets the dirent to 0xE5 and frees the FAT
-    chain, so all 12 deleted files' clusters read FREE. A residue rule keyed on
-    "FAT-free" alone overwrites every one of them and the demo degrades from 40
-    planted to 28 recoverable WITH NO ERROR ANYWHERE. The rule is FAT-free AND
-    not claimed by any planted extent, and this asserts the outcome of it."""
     img = built.image
     deleted = [e for e in manifest["files"] if e["deleted"]]
     assert len(deleted) == 12, "expected 12 deleted files, got %d" % len(deleted)
@@ -304,11 +218,6 @@ def test_deleted_files_survive_the_residue_fill(built, manifest):
 
 
 def test_the_naive_residue_rule_would_have_destroyed_all_twelve(built, manifest):
-    """The negative control for the test above. If the deleted files' clusters
-    were NOT FAT-free, the previous defect could not have happened and the test
-    above would be passing for the wrong reason. Measured: every cluster of
-    every deleted file is marked FREE in both FAT copies, i.e. every one of
-    them is in the naive rule's path."""
     geo, img = built.geo, built.image
     free = 0
     total = 0
@@ -327,21 +236,10 @@ def test_the_naive_residue_rule_would_have_destroyed_all_twelve(built, manifest)
 
 
 def test_the_survival_check_can_actually_fail(built, manifest):
-    """The other half of the negative control. The two tests above assert that
-    the deleted files survived and that the naive rule would have reached them;
-    this one applies the naive rule to a copy and confirms the survival check
-    then FAILS. Without it, `test_deleted_files_survive_the_residue_fill` could
-    be green because the assertion is unreachable rather than because the rule
-    is right.
-
-    Only the deleted files' own clusters are overwritten -- that is precisely
-    the subset the naive "FAT-free" rule adds over the correct rule -- so the
-    control costs 12 files' worth of bytes, not a second 256 MiB image.
-    """
     geo = built.geo
     img = bytearray(built.image)
     deleted = [e for e in manifest["files"] if e["deleted"]]
-    naive = P.make_residue_fn(geo, [], SEED)          # no placements: nothing claimed
+    naive = P.make_residue_fn(geo, [], SEED)
     touched = 0
     for entry in deleted:
         for ext in entry["extents"]:
@@ -370,19 +268,6 @@ def test_the_survival_check_can_actually_fail(built, manifest):
 
 
 def test_deleted_entries_carry_no_allocation_information(built, manifest):
-    """A deleted file must exist ONLY as unreferenced data -- a stated Phase-1
-    acceptance criterion.
-
-    MEASURED defect this catches. Marking the first byte 0xE5 and freeing the
-    FAT chain is only half a delete: the short entry still held
-    DIR_FstClusHI/LO and DIR_FileSize, so a metadata reader needed no carving
-    at all. The Sleuth Kit's `icat` recovered 8 of the 12 deleted files
-    byte-perfect from the directory alone -- every contiguous one -- which
-    makes "unreferenced" false and is falsifiable by a jury in five seconds.
-
-    Asserted on the directory bytes rather than through TSK, so the check runs
-    with no external tool. Measured with TSK afterwards: 0 of 12, each icat
-    emitting 0 bytes, while all 28 live files still recover byte-perfect."""
     got = F.read_image(built.image)
     by_name = {(e["long_name"] or e["short_name"]): e for e in got["files"]}
     gone = [e["path"].lstrip("/") for e in manifest["files"] if e["deleted"]]
@@ -396,12 +281,8 @@ def test_deleted_entries_carry_no_allocation_information(built, manifest):
             "carving" % (name, e["first_cluster"]))
         assert e["size"] == 0, "%s keeps its file size %d" % (name, e["size"])
         assert e["chain"] == [], name
-        # The long name must SURVIVE, or `fls` shows a stub during the
-        # independent cross-check and blocker (a) reopens.
         assert e["long_name"] == name
 
-    # The data itself is untouched -- unreferenced, not erased. That is the
-    # whole point: the carver has to find it.
     img = built.image
     for entry in manifest["files"]:
         if not entry["deleted"]:
@@ -412,9 +293,6 @@ def test_deleted_entries_carry_no_allocation_information(built, manifest):
 
 
 def test_live_entries_still_carry_their_allocation_fields(built, manifest):
-    """The negative control for the test above. If the zeroing reached live
-    entries the volume would be broken, and 'deleted' would not be
-    distinguishable from 'corrupt'."""
     got = F.read_image(built.image)
     by_name = {(e["long_name"] or e["short_name"]): e for e in got["files"]}
     live = [e for e in manifest["files"] if not e["deleted"]]
@@ -427,8 +305,6 @@ def test_live_entries_still_carry_their_allocation_fields(built, manifest):
 
 
 def test_live_files_still_have_their_fat_chains(built, manifest):
-    """The other half of deletion: a live file must be reachable through the
-    FAT, or 'deleted' is not distinguishable from 'broken'."""
     geo, img = built.geo, built.image
     for entry in manifest["files"]:
         if entry["deleted"]:
@@ -438,9 +314,6 @@ def test_live_files_still_have_their_fat_chains(built, manifest):
 
 
 def test_the_residue_never_wrote_into_a_planted_cluster(built):
-    """Belt and braces on the rule itself rather than on its outcome: the
-    adapter counts every cluster it filled, and planted clusters plus residue
-    clusters plus the root reserve must exactly account for the data area."""
     geo = built.geo
     planted = len(P.claimed_clusters(built.placements))
     residue = built.stats["residue_written"]
@@ -451,31 +324,19 @@ def test_the_residue_never_wrote_into_a_planted_cluster(built):
 
 
 def test_the_reserved_region_is_untouched_by_residue(built):
-    """The residue writer must never touch the boot sector, either FAT, the
-    FSInfo sectors, the backup boot region or the root directory. A
-    cluster-indexed function structurally cannot reach the first four -- they
-    live below data_start_offset -- so this asserts the structure holds."""
     geo, img = built.geo, built.image
     sec = geo.bytes_per_sector
-    assert img[510:512] == b"\x55\xaa"                     # boot signature
-    assert img[6 * sec:6 * sec + 512] == img[0:512]        # backup boot sector
-    assert img[sec:sec + 4] == b"RRaA"                     # FSInfo lead
-    assert img[7 * sec:7 * sec + 4] == b"RRaA"             # backup FSInfo
+    assert img[510:512] == b"\x55\xaa"
+    assert img[6 * sec:6 * sec + 512] == img[0:512]
+    assert img[sec:sec + 4] == b"RRaA"
+    assert img[7 * sec:7 * sec + 4] == b"RRaA"
     fat0 = geo.reserved * sec
     fat1 = fat0 + geo.fat_sectors * sec
     n = geo.fat_sectors * sec
     assert img[fat0:fat0 + n] == img[fat1:fat1 + n], "the two FAT copies differ"
 
 
-# --------------------------------------------------------------------------
-# 5 · fragmented means NON-ADJACENT
-# --------------------------------------------------------------------------
-
-
 def test_fragmented_means_non_adjacent_not_multiple_extents(manifest):
-    """A previous harness read fragmented as len(extents) > 1. Two runs that
-    abut are one physical run and a carver reading forward never notices them,
-    so that definition overstates the fixture's difficulty."""
     for entry in manifest["files"]:
         runs = sorted(entry["extents"], key=lambda e: e["cluster_start"])
         non_adjacent = any(
@@ -487,8 +348,6 @@ def test_fragmented_means_non_adjacent_not_multiple_extents(manifest):
 
 
 def test_the_two_definitions_actually_differ(built):
-    """The test above is only meaningful if the two definitions can disagree.
-    Two touching extents: len(extents) == 2 but fragmented is False."""
     bpc = built.geo.bytes_per_cluster
     touching = [P.Extent(cluster_start=100, cluster_count=2,
                          byte_offset=0, byte_length=2 * bpc),
@@ -500,12 +359,6 @@ def test_the_two_definitions_actually_differ(built):
                                    byte_offset=3 * bpc, byte_length=10)]
     assert P.is_fragmented(apart) is True
 
-    # Third case, and the one a sort-then-compare implementation gets wrong:
-    # two TOUCHING runs in reverse logical order. Physically contiguous, so
-    # adjacency alone says "not fragmented", but the file reassembles
-    # backwards and a forward-reading carver produces a wrong hash. FRAG-07's
-    # entire reason for existing is direction, so a flag blind to direction
-    # would mislabel exactly the case the fixture was built to test.
     reversed_adjacent = [
         P.Extent(cluster_start=110, cluster_count=5,
                  byte_offset=110 * bpc, byte_length=5 * bpc),
@@ -519,10 +372,6 @@ def test_the_two_definitions_actually_differ(built):
 
 
 def test_the_fragmentation_ladder_is_present_and_attributable(manifest, built):
-    """All seven rungs, and the two deliberate failures named. FRAG-06 and
-    FRAG-07 must fail for their structural reason -- fragment count and
-    fragment direction -- never for exceeding the carver's max_gap budget, or
-    the demo cannot attribute the failure on screen."""
     frag = [e for e in manifest["files"] if e["fragmented"]]
     assert len(frag) == 7
     by_fid = {p.frag_id: p for p in built.placements if p.frag_id}
@@ -547,10 +396,6 @@ def test_the_fragmentation_ladder_is_present_and_attributable(manifest, built):
                                           + p7.extents[1].cluster_count)
     assert back <= P.MAX_GAP_BUDGET_CLUSTERS
 
-    # Unreachable for a FRAGMENTATION reason is exactly FRAG-06 and FRAG-07.
-    # The plaintext files are also unreachable but for an unrelated reason (no
-    # signature at all), carry no frag_id, and must not be allowed to satisfy
-    # this assertion.
     unrec_frag = {p.frag_id for p in built.placements
                   if p.expected_recoverable == P.UNRECOVERABLE and p.frag_id}
     assert unrec_frag == {"FRAG-06", "FRAG-07"}
@@ -559,7 +404,6 @@ def test_the_fragmentation_ladder_is_present_and_attributable(manifest, built):
     assert unrec_nosig == {p.name for p in built.placements
                            if p.kind in P.NO_SIGNATURE_KINDS}
     assert len(unrec_nosig) == 5
-    # The mutual interleave, and the fact that it straddles the deleted line.
     a0, a1 = by_fid["FRAG-04"].extents
     b0, b1 = by_fid["FRAG-05"].extents
     assert a0.cluster_start + a0.cluster_count <= b0.cluster_start
@@ -570,16 +414,6 @@ def test_the_fragmentation_ladder_is_present_and_attributable(manifest, built):
 
 
 def test_the_max_gap_budget_is_published_with_its_convention(manifest):
-    """FRAG-03's gap is EXACTLY the budget, which is the only way a rung can
-    prove a budget rather than merely respect it -- and that makes the
-    comparison operator load-bearing. A Phase-2 carver implementing
-    `gap < budget` instead of `gap <= budget` loses disposal_certificate.pdf,
-    the counted set drops from 38 to 37 with no error raised, and the demo's
-    attribution (FRAG-06 fails on fragment COUNT, FRAG-07 on DIRECTION,
-    neither on distance) becomes false on stage.
-
-    So the convention is published in the manifest for the carver to read
-    instead of hardcode, and asserted here."""
     assert manifest["max_gap_clusters"] == P.MAX_GAP_BUDGET_CLUSTERS == 128
     assert manifest["max_gap_is_inclusive"] is True
 
@@ -596,10 +430,6 @@ def test_the_max_gap_budget_is_published_with_its_convention(manifest):
 
 
 def test_the_file_sitting_on_the_budget_is_counted_as_recoverable(manifest):
-    """The off-by-one, made to fail loudly. disposal_certificate.pdf is
-    counted in expected_recoverable at a gap of exactly max_gap_clusters; if
-    that ever stops being true the fixture and the carver disagree about the
-    convention, and one file goes missing quietly."""
     pdf = [e for e in manifest["files"]
            if e["path"] == "/disposal_certificate.pdf"][0]
     assert pdf["expected_recoverable"] == P.BIFRAGMENT
@@ -611,15 +441,6 @@ def test_the_file_sitting_on_the_budget_is_counted_as_recoverable(manifest):
 
 
 def test_the_residue_false_positive_floor_is_measured_and_published(built, manifest):
-    """CLAUDE.md rule 2, applied to a number Phase 2 will otherwise discover
-    on stage. 52% of the eligible clusters are SHAKE output, and the expected
-    count of a magic in ~134 MB of uniform bytes depends by orders of
-    magnitude on its LENGTH: ~0.03 for a 4-byte magic, ~8 for a 3-byte one.
-    JPEG, GZIP and BZ2 are 3-byte signatures, so they DO occur by chance.
-
-    Recomputed here from the image bytes with an independent scan, so the
-    published floor is a measurement of this fixture rather than a figure
-    copied forward."""
     published = manifest["residue_signature_false_positives"]
     assert set(published) == {n for n, _sig in P.CARVER_SIGNATURES}
 
@@ -633,49 +454,24 @@ def test_the_residue_false_positive_floor_is_measured_and_published(built, manif
             pos = img.find(sig, pos + 1)
         assert published[name] == n, name
 
-    # The 4-byte-and-longer signatures must be clean, or the carver's
-    # precision on them is not a property of the carver.
     for name in ("PNG", "PDF", "ZIP", "SQLITE", "MP4"):
         assert published[name] == 0, (name, published[name])
-    # And the 3-byte ones must NOT be, or the floor is a fiction and Phase 2
-    # would be tuned against a fixture that cannot produce a false positive.
     assert published["JPEG"] > 0 and published["GZIP"] > 0
 
 
-# --------------------------------------------------------------------------
-# 6 · Rule 1: no zlib compressor anywhere in the fixture path
-# --------------------------------------------------------------------------
-
-# zlib.compress output is a property of the linked libz, not of the input:
-# Info-ZIP and zlib produced 13,937 and 14,066 bytes from identical input.
-# PNG, DOCX and GZIP all ride on DEFLATE, so a compressor here would make the
-# corpus differ per laptop. crc32, adler32 and decompress are fixed algorithms
-# and stay allowed.
 _BANNED = re.compile(
     r"zlib\.compress|compressobj|zlib\.compressobj|gzip\.(open|compress|GzipFile)"
     r"|zipfile\.|ZipFile|ZIP_DEFLATED|bz2\.|lzma\.|import\s+random\b|random\.(?!$)"
     r"|time\.time\(|datetime\.|uuid\.|os\.urandom")
 
-# Every module the fixture build imports, checked for banned nondeterminism.
-#
-# The guard is a package with one module per platform, and BOTH backends are
-# listed: a rule enforced only on the one this laptop happens to run is not
-# enforced. The dispatcher is listed too, because `os.name` branching is exactly
-# where a platform-conditional source of nondeterminism would hide.
 _FIXTURE_MODULES = ("guard/__init__.py", "guard/posix.py", "guard/windows.py",
                     "deflate.py", "corpus.py", "fat32.py", "plan.py",
                     "build_image.py")
 
-#: The guard is the one place that legitimately reads host state -- it is the
-#: write allowlist, and it cannot decide containment without `os.stat` and
-#: `os.environ`. The exemption is keyed on the package prefix so it covers both
-#: backends and nothing else. See `test_the_guard_exemption_is_narrow`.
 _OS_EXEMPT_PREFIX = "guard/"
 
 
 def _code_lines(path: Path):
-    """Source lines with comments and docstring bodies removed, so a rule that
-    is DESCRIBED in prose does not read as a rule that is BROKEN in code."""
     text = path.read_text(encoding="utf-8")
     text = re.sub(r'"""(?:.|\n)*?"""', '""', text)
     text = re.sub(r"'''(?:.|\n)*?'''", "''", text)
@@ -686,7 +482,6 @@ def _code_lines(path: Path):
 
 
 def test_no_compressor_and_no_clock_in_the_fixture_path():
-    """Rule 1, enforced as a grep test the way the spec asks for it."""
     hits = []
     for name in _FIXTURE_MODULES:
         path = _REPO / "fixtures" / name
@@ -699,48 +494,22 @@ def test_no_compressor_and_no_clock_in_the_fixture_path():
 
 
 def test_the_compressor_grep_is_not_vacuous(tmp_path):
-    """A grep control that matches nothing is indistinguishable from one that
-    does not work."""
     probe = tmp_path / "probe.py"
     probe.write_bytes(b"import zlib\nx = zlib.compress(b'a')\ny = time.time()\n")
     hits = [i for i, line in _code_lines(probe) if _BANNED.search(line)]
     assert len(hits) == 2, hits
 
 
-# --------------------------------------------------------------------------
-# 6b · The SAME rules, resolved through the import graph instead of the text
-# --------------------------------------------------------------------------
-# MEASURED gap this section closes. The regex above is textual and
-# module-qualified, so the exact defect it exists to prevent survives a
-# one-line alias: `import zlib as _z; _z.compress(data, 9)` and
-# `from zlib import compress; compress(data)` both walk straight through it,
-# and so do 14 of the 17 clock/entropy spellings rule 5 names -- `import
-# time`, `time.monotonic()`, `secrets.token_bytes`, `os.getpid()`,
-# `datetime.now()`, `locale.getlocale()`, `Random(0).random()` and the rest.
-# The regex is kept as a cheap textual net; THIS is the enforcing control.
-#
-# It parses each module, builds the alias map from every Import/ImportFrom
-# node (so `_z` is known to be zlib and a bare `compress` is known to be
-# zlib.compress), then resolves every Name and Attribute back through that map
-# before testing it. Attribute access is checked, not only calls, because
-# `os.environ["TZ"]` is a Subscript and never a Call.
-
 _BANNED_IMPORTS = {
     "random", "secrets", "uuid", "time", "datetime", "locale", "gzip",
     "zipfile", "bz2", "lzma", "platform", "socket", "subprocess", "resource",
     "getpass", "pwd", "grp", "calendar", "sched", "tempfile",
 }
-# zlib is permitted ONLY for fixed algorithms. crc32 and adler32 are defined
-# by the standard and decompress is inflate, which is unique; compress is not.
 _ZLIB_ALLOWED = {"crc32", "adler32", "decompress"}
-# Host state, in every module.
 _OS_BANNED_ALWAYS = {
     "urandom", "getpid", "getppid", "getuid", "geteuid", "getgid", "getlogin",
     "uname", "times", "cpu_count", "getloadavg", "system", "popen", "fork",
 }
-# Host state that fixtures/guard.py legitimately needs -- it is the write
-# guard, it stats targets and reads SENTINELWIPE_DEVICE_MODE, and it produces
-# no image bytes. Banned in the five modules that DO produce image bytes.
 _OS_BANNED_OUTSIDE_GUARD = {
     "stat", "lstat", "fstat", "statvfs", "environ", "getenv", "putenv",
     "listdir", "scandir", "walk",
@@ -748,8 +517,6 @@ _OS_BANNED_OUTSIDE_GUARD = {
 
 
 def _dotted(node):
-    """ast node -> ['os', 'path', 'abspath'], or None if the head is not a
-    plain name (e.g. self.x, f(x).y)."""
     parts = []
     while isinstance(node, ast.Attribute):
         parts.append(node.attr)
@@ -761,10 +528,6 @@ def _dotted(node):
 
 
 def resolve_banned_uses(source: str, filename: str, os_exempt: bool = False):
-    """Every use of a banned module or attribute, with import aliases resolved.
-
-    Returns a sorted list of (lineno, resolved dotted name).
-    """
     tree = ast.parse(source, filename)
     aliases, hits = {}, []
 
@@ -805,7 +568,6 @@ def resolve_banned_uses(source: str, filename: str, os_exempt: bool = False):
 
 
 def test_no_banned_module_survives_an_import_alias():
-    """Rules 1 and 5, enforced through the import graph rather than the text."""
     hits = []
     for name in _FIXTURE_MODULES:
         path = _REPO / "fixtures" / name
@@ -816,9 +578,6 @@ def test_no_banned_module_survives_an_import_alias():
     assert not hits, "banned use in the fixture path:\n  " + "\n  ".join(hits)
 
 
-# The alias spellings the regex misses, verbatim from the finding that
-# produced this control. Every one must be caught, or the resolver has
-# regressed to being a grep with extra steps.
 _ALIAS_ATTACKS = [
     "import time",
     "import time\nstamp = time.monotonic()",
@@ -846,14 +605,12 @@ _ALIAS_ATTACKS = [
     "from os import getenv\nv = getenv('LANG')",
 ]
 
-# Spellings that are legitimate and must NOT fire. A control that flags
-# everything is as useless as one that flags nothing.
 _ALLOWED_SPELLINGS = [
     "import zlib\nc = zlib.crc32(b'a')",
     "import zlib\nx = zlib.adler32(b'a')",
     "import zlib\nx = zlib.decompress(b'')",
-    "import zlib as _z",                      # importing zlib is allowed; using
-    "from zlib import compress",              # it to COMPRESS is not
+    "import zlib as _z",
+    "from zlib import compress",
     "import os\nos.write(1, b'a')",
     "import os\np = os.path.abspath('.')",
     "import hashlib\nh = hashlib.shake_128(b'a')",
@@ -872,9 +629,6 @@ def test_the_alias_resolver_does_not_fire_on_permitted_calls(src):
 
 
 def test_the_guard_exemption_is_narrow():
-    """guard.py is exempt from os.stat/os.environ and from NOTHING else. If
-    the exemption ever widens to os.urandom the guard becomes a place a
-    nondeterminism could hide."""
     assert resolve_banned_uses("import os\nk = os.urandom(4)", "<p>",
                                os_exempt=True)
     assert resolve_banned_uses("import time\nt = time.time()", "<p>",
@@ -885,8 +639,6 @@ def test_the_guard_exemption_is_narrow():
 
 
 def test_zlib_is_used_only_for_fixed_algorithms():
-    """The permitted uses, enumerated: crc32, adler32, decompress. Anything
-    else calling into libz would make the bytes a property of the build host."""
     allowed = re.compile(r"zlib\.(crc32|adler32|decompress)\b")
     for name in _FIXTURE_MODULES:
         path = _REPO / "fixtures" / name
@@ -896,18 +648,8 @@ def test_zlib_is_used_only_for_fixed_algorithms():
                     name, i, line.strip())
 
 
-# --------------------------------------------------------------------------
-# 7 · The image is a real FAT32 volume, re-parsed independently
-# --------------------------------------------------------------------------
-
-
 def test_an_independent_reparse_finds_the_live_files_and_marks_the_deleted(built,
                                                                           manifest):
-    """fat32.read_image walks the on-disk BPB and FAT with no reference to the
-    plan or the manifest. Every live file is read back THROUGH ITS FAT CHAIN and
-    SHA-256 compared, which is the check that a fragmented file's chain is real
-    and not merely described. If the manifest and the image ever disagree, this
-    is where it shows."""
     got = F.read_image(built.image)
     assert got["cluster_count"] == built.geo.cluster_count
     assert got["data_start_offset"] == built.geo.data_start_offset
@@ -927,30 +669,12 @@ def test_an_independent_reparse_finds_the_live_files_and_marks_the_deleted(built
         assert found["sha256"] == entry["sha256"], (
             "%s does not read back through its FAT chain" % name)
     for name in gone:
-        # VFAT keeps the long-name entries; the short name lost its first byte
-        # to 0xE5 and read_image solves the LFN checksum to recover it.
         assert name in by_name, "deleted file %s left no directory trace" % name
         assert by_name[name]["deleted"] is True, name
         assert by_name[name]["chain"] == [], name
 
     assert sum(1 for e in got["files"] if not e["deleted"]) == 28
     assert sum(1 for e in got["files"] if e["deleted"]) == 12
-
-
-# --------------------------------------------------------------------------
-# 8 · The build FAILS on drift. It does not merely mention it.
-# --------------------------------------------------------------------------
-# MEASURED defect this section closes: build_image.py printed
-# "committed sha256 match  NO" and exited 0, so `make fixtures` reported
-# success while shipping a fixture that does not match the committed digests
-# -- and in --quiet, the advertised scripting mode, the comparison was never
-# performed at all. Nothing in the `make` surface caught it: `make test` is a
-# Phase-2 stub that exits 1, so the pytest check that DOES fail on drift was
-# unreachable through make.
-#
-# These tests drive main() with the real argument parser and the real exit
-# path, substituting only the expensive build, so the wiring is tested without
-# a second 256 MiB image per case.
 
 
 def _expected_block(res, image=None, man=None):
@@ -962,8 +686,6 @@ def _expected_block(res, image=None, man=None):
 
 @pytest.fixture()
 def cli(monkeypatch, built, tmp_path):
-    """main() with the build stubbed to the already-built fixture and the
-    committed record under the test's control."""
     def run(record, argv_extra=()):
         monkeypatch.setattr(B, "build", lambda **kw: built)
         monkeypatch.setattr(B, "_read_expected", lambda path: record)
@@ -974,8 +696,6 @@ def cli(monkeypatch, built, tmp_path):
 
 
 def test_a_mismatch_against_the_committed_digests_exits_nonzero(cli, built, capsys):
-    """THE test for the defect. A build that does not reproduce the committed
-    fixture must fail, so `make fixtures` fails with it."""
     bad = _expected_block(built, image="0" * 64, man="1" * 64)
     code = cli(bad)
     assert code == 4, "a drifted fixture exited %r" % code
@@ -986,9 +706,6 @@ def test_a_mismatch_against_the_committed_digests_exits_nonzero(cli, built, caps
 
 
 def test_the_mismatch_is_detected_in_quiet_mode_too(cli, built, capsys):
-    """--quiet is the advertised scripting mode and it skipped the comparison
-    entirely, which is the easier half of the defect: a script that shells out
-    here saw only a hash on stdout and a zero exit."""
     code = cli(_expected_block(built, image="0" * 64), ["--quiet"])
     assert code == 4
     cap = capsys.readouterr()
@@ -998,9 +715,6 @@ def test_the_mismatch_is_detected_in_quiet_mode_too(cli, built, capsys):
 
 def test_no_check_expected_is_the_typed_escape_for_a_deliberate_change(cli, built,
                                                                        capsys):
-    """A deliberate fixture change still has to be rebuilt. The escape is a
-    flag someone typed, not a silent fall-through -- and it still PRINTS the
-    mismatch, so the operator cannot use it without seeing what moved."""
     code = cli(_expected_block(built, image="0" * 64), ["--no-check-expected"])
     assert code == 0
     err = capsys.readouterr().err
@@ -1009,8 +723,6 @@ def test_no_check_expected_is_the_typed_escape_for_a_deliberate_change(cli, buil
 
 
 def test_a_matching_build_exits_zero(cli, built, capsys):
-    """The positive control: the three tests above are only meaningful if the
-    comparison can also say yes."""
     code = cli(_expected_block(built))
     assert code == 0
     out = capsys.readouterr().out
@@ -1018,9 +730,6 @@ def test_a_matching_build_exits_zero(cli, built, capsys):
 
 
 def test_absent_or_incomparable_records_are_not_failures(cli, built, capsys):
-    """A missing record and a record for a different seed or size are not
-    mismatches, and turning them into failures would make the first build of a
-    new fixture impossible."""
     assert cli(None) == 0
     assert "nothing to compare" in capsys.readouterr().out
     other = _expected_block(built)
@@ -1034,10 +743,6 @@ def test_absent_or_incomparable_records_are_not_failures(cli, built, capsys):
 
 
 def test_the_committed_expectation_matches_this_build(built):
-    """out/ is gitignored, so the only thing a checker can compare against
-    without trusting a rebuild is the digest committed in the repo. If this
-    fails, either the fixture changed on purpose -- update the record -- or it
-    changed by accident, which is exactly what the record is for."""
     doc = json.loads(TRACKED_POINTER.read_bytes().decode("utf-8"))
     exp = doc.get("expected")
     assert isinstance(exp, dict), "fixtures/manifest.json carries no expected block"
@@ -1051,8 +756,6 @@ def test_the_committed_expectation_matches_this_build(built):
     assert exp["whole_image_entropy_bits_per_byte"] == \
         built.manifest["whole_image_entropy_bits_per_byte"]
     assert exp["counted_set"] == built.manifest["counted_set"]
-    # The carver contract travels with the digests, so a checker that never
-    # rebuilds still gets the max_gap convention and the false-positive floor.
     assert exp["max_gap_clusters"] == built.manifest["max_gap_clusters"]
     assert exp["max_gap_is_inclusive"] is built.manifest["max_gap_is_inclusive"]
     assert exp["residue_signature_false_positives"] == \

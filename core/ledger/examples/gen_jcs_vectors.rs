@@ -1,17 +1,3 @@
-//! Writes `fixtures/jcs_vectors.json` — the cross-language canonicalization
-//! vectors, in the same pattern as `fixtures/guard_vectors.json`: one committed
-//! table, exercised by a Rust test AND a Python test, so the two
-//! implementations cannot drift apart silently.
-//!
-//! Direction of truth: for the write guard, Python was the measured original
-//! and Rust had to match it. Here it is the mirror image — the Rust module is
-//! the reference (it carries the RFC's own sample string and the 10,000-case
-//! property test), and `py/sentinelwipe/jcs.py` must reproduce these bytes.
-//!
-//! The file is ITSELF canonical JCS, produced by the implementation under
-//! test. Regenerating it on any platform must be byte-identical; a diff on
-//! regeneration is a finding, never noise.
-
 use sentinelwipe_ledger::jcs::corpus::{gen_value, messy, Rng};
 use sentinelwipe_ledger::jcs::{canonical, parse, Value};
 use std::path::PathBuf;
@@ -21,8 +7,6 @@ fn s(x: &str) -> Value {
 }
 
 fn pair(name: &str, input: String) -> Value {
-    // The expectation is derived by the reference implementation itself:
-    // parse the messy input, canonicalize, record both.
     let v = parse(input.as_bytes())
         .unwrap_or_else(|e| panic!("vector {name}: input must parse: {e}\n{input}"));
     let canon = String::from_utf8(canonical(&v).expect("canonicalizable")).unwrap();
@@ -54,10 +38,8 @@ fn refusal(name: &str, input: &str, class: &str) -> Value {
 
 fn main() {
     let mut vectors: Vec<Value> = vec![
-        // -- hand-picked edges, each earning its place ----------------------
         pair(
             "rfc-8785-sample-string",
-            // §3.2.3's canonical output for the running sample's string field.
             "\"\u{20ac}$\\u000f\\nA'B\\\"\\\\\\\\\\\"\\/\"".into(),
         ),
         pair(
@@ -81,7 +63,6 @@ fn main() {
         pair("whitespace-soup", "  { \"b\" : 1 ,\n\t\"a\" : [ true, null ] }  ".into()),
     ];
 
-    // -- 64 generated cases from the shared deterministic corpus ------------
     let mut r = Rng(0xC0FF_EE00_C0FF_EE00);
     let mut made = 0;
     while made < 64 {
@@ -162,7 +143,6 @@ fn main() {
         .and_then(|r| if let Value::Arr(a) = r { Some(a.len()) } else { None })
         .expect("refusals array");
     let bytes = canonical(&doc).expect("the vector file canonicalizes");
-    // Self-check before writing: the file must reparse to itself.
     assert_eq!(
         canonical(&parse(&bytes).expect("self-parse")).unwrap(),
         bytes,

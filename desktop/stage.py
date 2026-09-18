@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""Stage exactly what the shell bundles: the two pages, nothing else.
-
-frontendDist has no include filter, and pointing it at ui/ would bundle the
-pipeline's Python alongside the pages — harmless, but a bundle should contain
-what it ships and nothing it happens to sit next to. Refuses to stage a page
-whose payload block is missing, because an empty shell is worse than no shell.
-"""
 import pathlib, re, shutil, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]

@@ -1,110 +1,8 @@
-//! # Overwrite passes — the bytes we write, and why they are those bytes
-//!
-//! Three methods ship, and they differ only in the pattern each pass lays down:
-//! single-pass zero, single-pass seeded random, and the three-pass sequence a
-//! legacy policy expects. Everything else here — the seekable keystream, the
-//! adaptive chunk, the report — exists so that [`crate::verify`] can afterwards
-//! *check* what was written, and so the behavioural audit in [`crate::audit`] can
-//! be handed a throughput it measured rather than one it was told.
-//!
-//! ## Decision 1 — the demo pass is a seeded SHAKE-128 stream, not zeros
-//!
-//! Operator decision, taken before this file: zero-fill makes whole-image entropy
-//! **drop**, and `demo_script.md` says at 0:30 that entropy climbs from a measured
-//! 7.0617 bits/byte. Zeros would make that line false on stage. A seeded stream
-//! climbs toward 8.0 *and* keeps the certificate byte-identical across runs, which
-//! CLAUDE.md rule 6 requires. Zero-fill and the three-pass sequence remain shipped,
-//! named methods; the demo pass is [`Method::SeededRandom`].
-//!
-//! Measured on a 256 MiB copy of the fixture, whole-image Shannon entropy over all
-//! 268,435,456 bytes — the same estimator `fixtures/corpus.py` uses for the manifest
-//! figure. The numbers are in the build report, not asserted here.
-//!
-//! ## Decision 2 — the stream is keyed per sector, so verification can seek
-//!
-//! The obvious construction is one long XOF stream from the run seed. It is wrong
-//! for this project, because sampled read-back has to know what byte *should* be at
-//! sector 419,382 without regenerating the 204 MiB in front of it. So the pattern is
-//!
-//! ```text
-//! sector(lba) = SHAKE128( "SENTINELWIPE/wipe-pattern/v1" || seed[32] || method_id
-//!                         || pass_le32 || sector_bytes_le32 || lba_le64 )
-//! ```
-//!
-//! squeezed to `sector_bytes`. That is a counter-mode XOF: every sector is O(1) to
-//! generate and O(1) to re-derive, from the seed alone, on any machine, in any
-//! order. It costs four Keccak-f[1600] permutations per 512-byte sector — one to
-//! absorb-and-finalise, three to refill the 168-byte rate — and that cost is the
-//! measured throughput ceiling of [`Method::SeededRandom`]. The build report gives
-//! the figure against zero-fill, which pays none of it.
-//!
-//! **What this is not.** It is not a cipher and nothing here is encrypted. It is a
-//! reproducible pattern generator whose output is high-entropy, which is exactly and
-//! only what an overwrite pass needs. The one place a keystream *is* used as a
-//! cipher is [`CryptoEraseDemonstration`], and that type says in its own name and in
-//! every field it emits that it is a demonstration.
-//!
-//! ## Decision 3 — SHAKE-128 is hand-rolled, and checked against two KATs
-//!
-//! CLAUDE.md forbids a new dependency; `structure/mod.rs` hand-rolled CRC-32 and
-//! `examples/gen_sample_output.rs` hand-rolled SHA-256 under the same rule. The
-//! Keccak-f[1600] permutation here is checked two ways in `mod tests`: SHAKE-128
-//! against the published empty-message and `"abc"` vectors, and SHA-3-256 against
-//! its own, which exercises the same permutation through a *different* rate (136)
-//! and a *different* domain pad (0x06). A permutation bug that survived both would
-//! have to be consistent across two sponge parameterisations. Every vector in that
-//! test was taken from CPython's `hashlib` (OpenSSL's Keccak) on this machine, not
-//! from memory.
-//!
-//! ## Measured, 2026-09-03, 256 MiB copy of `out/fixture.img`, macOS arm64
-//!
-//! Reproduce with `measure_methods_against_a_scratchpad_copy_of_the_fixture` in
-//! [`crate::verify`] — an ignored test, because it is the only one in this crate that
-//! opens a writable descriptor on a file.
-//!
-//! | method | bytes written | wall | throughput | whole-image entropy after |
-//! |---|---|---|---|---|
-//! | `single_pass_zero` | 268,435,456 | 0.094 s | 2,732 MiB/s | **0.000000000** |
-//! | `single_pass_seeded_random_shake128` | 268,435,456 | 0.424 s | 604 MiB/s | **7.999999386** |
-//! | `three_pass_zero_ones_seeded_random` | 805,306,368 | 0.603 s | 1,274 MiB/s | **7.999999283** |
-//!
-//! Wall times and throughputs are **one run** of that test on an otherwise busy
-//! machine and move a few percent between runs -- 2,632 to 2,947 MiB/s for zero-fill
-//! across three runs, 604 to 637 for the seeded stream. The entropy figures and the
-//! digests do not move at all, because they are properties of the bytes rather than
-//! of the host.
-//!
-//! Before, over all 268,435,456 bytes: **7.061690499603866**, which is
-//! `fixture.manifest.json`'s figure to every digit it publishes — the Rust estimator
-//! and `fixtures/corpus.py`'s `math.fsum` agree exactly on this input.
-//!
-//! **This is the measurement that settles operator decision 2.** Zero-fill moves
-//! whole-image entropy *down* by 7.0617 bits/byte, to exactly zero. The seeded stream
-//! moves it *up* by 0.938308887 to 7.999999386. `demo_script.md`'s 0:30 line — entropy
-//! climbing from a measured 7.0617 — is true of the seeded pass and false of zero-fill,
-//! and the two figures are measured over the same 268,435,456 bytes with the same
-//! estimator, so they may be subtracted.
-//!
-//! Pattern generation alone, no device in the path: constant 54,621 MiB/s, seeded
-//! stream 672 MiB/s. The seeded method's 604 MiB/s is therefore generation-bound, not
-//! device-bound, on this host.
-//!
-//! ## What an overwrite of an image file does and does not claim
-//!
-//! See [`OVERWRITE_SCOPE_LIMIT`]. Writing a pattern over every sector of an image
-//! file really does destroy the prior contents *of that file's byte range* — the
-//! carve/wipe/carve loop is the evidence. It says nothing whatsoever about the
-//! physical NAND under the host filesystem holding the image, which may have
-//! copy-on-write snapshots, journal copies, or wear-levelled remaps of the old
-//! blocks. Rule 1: the tool never claims more than it verified.
-
 use std::fmt;
 use std::time::Instant;
 
 use crate::telemetry::{self, EventSink, Telemetry};
 
-/// The exact scope of an overwrite claim against an image file. Reproduced in the
-/// certificate rather than summarised, per CLAUDE.md rule 1.
 pub const OVERWRITE_SCOPE_LIMIT: &str = "\
 An overwrite pass against an image file overwrites the byte range of that file and \
 nothing else. It does not reach, and this tool does not claim to reach, prior copies \
@@ -112,46 +10,26 @@ of those bytes held by the host filesystem (copy-on-write snapshots, journals) o
 remapped by the host storage controller (wear levelling, over-provisioning, bad-block \
 retirement). Purge of the underlying physical medium is neither performed nor claimed.";
 
-/// Domain separation for the overwrite pattern. Any change here changes every byte
-/// this module writes and therefore every certificate; it moves with the same
-/// ceremony as a confidence weight.
 pub const PATTERN_DOMAIN: &[u8] = b"SENTINELWIPE/wipe-pattern/v1";
 
-/// Domain separation for the crypto-erase demonstration keystream.
 pub const CRYPTO_ERASE_DOMAIN: &[u8] = b"SENTINELWIPE/crypto-erase-demo/v1";
 
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
-/// Everything that can stop a pass. `Io` carries the LBA because a device error
-/// without the sector it happened at cannot be put in a certificate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WipeError {
-    /// The device layer failed at a specific sector.
     Io {
         op: &'static str,
         lba: u64,
         detail: String,
     },
-    /// The device cannot do this at all (a `WindowsBlock` stub, a read-only image).
     Unsupported(String),
-    /// A request ran off the end of the medium. Caught before it reaches the device.
     OutOfRange {
         lba: u64,
         sectors: u64,
         sector_count: u64,
     },
-    /// A buffer whose length is not a whole number of sectors, or not the length the
-    /// call implies.
     BadBufferLen { expected: usize, got: usize },
-    /// A device reporting a zero sector size or zero capacity. Refused rather than
-    /// divided by.
     DegenerateGeometry { sector_bytes: u32, sector_count: u64 },
-    /// [`CryptoEraseDemonstration::transform`] after the key was destroyed. This is
-    /// the point of the type, so it is an error and never a silent no-op.
     KeyDestroyed { object_id: String },
-    /// A pass index outside `1..=method.pass_count()`.
     NoSuchPass { pass: u32, passes: u32 },
 }
 
@@ -198,23 +76,10 @@ impl fmt::Display for WipeError {
 
 impl std::error::Error for WipeError {}
 
-// ---------------------------------------------------------------------------
-// The device surface
-// ---------------------------------------------------------------------------
-
-/// What the medium is, as the device layer detected it.
-///
-/// Four variants, and the same four wire spellings as
-/// `sentinelwipe_device::MediumKind`, so the adapter is a four-arm match and a report
-/// crossing the seam does not change spelling halfway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Medium {
     Rotational,
-    /// Flash. An overwrite does not reach over-provisioned or remapped blocks, which
-    /// is why no method in this module claims Purge. See [`OVERWRITE_SCOPE_LIMIT`].
     SolidState,
-    /// A regular file standing in for a medium. Not a disk. `docs/architecture.md`
-    /// D1 covers why nothing is ever mounted or attached.
     Image,
     Unknown,
 }
@@ -230,56 +95,25 @@ impl Medium {
     }
 }
 
-/// Who the target is. Carries no geometry, because `sentinelwipe_device::Identity`
-/// carries none either, for the reason its own doc gives: an implementation that does
-/// not know its sector size has nothing true to put in the field, and a 512 invented
-/// at this seam is a 512 printed on a certificate. Geometry lives in
-/// [`Capabilities`], which is fallible for exactly that reason.
-///
-/// `model` and `serial` are `String` rather than `Option<String>` because the device
-/// layer already defines one spelling of not-known: the adapter fills them from
-/// `Identity::model_or_unknown()` and `serial_or_unknown()`, which return `"unknown"`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceIdentity {
-    /// A category, never a marketing string: `"image file"`, `"block device"`.
     pub kind: String,
     pub model: String,
     pub serial: String,
-    /// `true` only for something that is physically a storage device. The certificate
-    /// branches on this to decide whether the phrase "the drive" is even permissible.
     pub is_physical_medium: bool,
 }
 
 impl DeviceIdentity {
-    /// One line for a telemetry header or a log: `kind model serial`.
     pub fn describe(&self) -> String {
         format!("{} {} {}", self.kind, self.model, self.serial)
     }
 }
 
-/// Geometry, and the one capability an overwrite pass acts on.
-///
-/// Fallible for the same reason `sentinelwipe_device::Device::capabilities` is: there
-/// is no true answer for a sector size that was never determined, so an
-/// implementation that does not know returns an error instead of a plausible number.
-/// `WindowsBlock` and an unarmed `LinuxBlock` are exactly that case.
-///
-/// **The sanitize claim vector is deliberately not mirrored here.** The device layer
-/// carries `Vec<SanitizeClaim>` behind a four-valued `Support` -- `Claimed`,
-/// `NotClaimed`, `Unknown`, `Simulated` -- and flattening that into booleans would
-/// erase the `Simulated` case, which is operator decision 3 expressed as a type. No
-/// overwrite pass consults a sanitize claim, so this type does not carry one and the
-/// sanitize path reads the device's own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capabilities {
     pub medium: Medium,
-    /// The addressing unit. Every `lba` in [`SectorIo`] is in these units.
     pub sector_bytes: u32,
     pub sector_count: u64,
-    /// The device layer's `Capabilities::writable`. `false` refuses the job before a
-    /// byte moves. `true` is still only a claim -- CLAUDE.md rule 5 -- and a write
-    /// refused later comes back as [`WipeError::Unsupported`], which is why the
-    /// read-only test asserts the medium is unchanged rather than trusting this bit.
     pub writable: bool,
 }
 
@@ -289,16 +123,6 @@ impl Capabilities {
     }
 }
 
-/// The subset of the device layer these passes touch.
-///
-/// **This is not a second `Device` trait, and it must not become one.** `core/device`
-/// owns `trait Device { read_sectors, write_sectors, capabilities, identify }` and is
-/// written by another agent; this crate did not yet have it to depend on when the
-/// passes were built, and adding `sentinelwipe-device` to `Cargo.toml` was outside
-/// this task's file list. The method names, argument order and semantics here mirror
-/// that trait deliberately, so the join is one blanket impl in whichever crate ends
-/// up owning the seam:
-///
 /// ```ignore
 /// impl<D: sentinelwipe_device::Device> SectorIo for D {
 ///     fn identify(&self) -> DeviceIdentity {
@@ -320,41 +144,11 @@ impl Capabilities {
 ///     /* write_sectors and sync are the same one-line shape */
 /// }
 /// ```
-///
-/// Nothing in that adapter invents a value. `model` and `serial` come from the device
-/// layer's own `_or_unknown` accessors, geometry comes from the fallible
-/// `capabilities()` rather than from a default, and `map_medium` is a four-arm match
-/// between two enums with identical variants and identical wire spellings. The five
-/// method names, their argument order and their arities were matched to
-/// `sentinelwipe_device::Device` after that crate landed, so the adapter has no
-/// reshaping to do.
-///
-/// **The seam is closed, and this paragraph says so because it used to say the
-/// opposite.** `crate::DeviceIo` in `lib.rs` is that impl: `core/wipe` depends on
-/// `sentinelwipe-device`, the shipped `wipe` binary runs
-/// `ImageFile -> DeviceIo -> passes/verify`, and every wipe measured for the build
-/// report went through it. An under-claim costs the same trust as an over-claim in a
-/// project whose whole argument is "we never say more than we verified", and a
-/// reviewer who reads this file before `lib.rs` was being told the shipped path was a
-/// live integration risk.
-///
-/// What remains genuinely unexercised is narrower and is stated separately:
-/// `sentinelwipe_device::LinuxBlock` compiles behind `--features linux-block` and has
-/// never been run against a block device by this project, and
-/// `sentinelwipe_device::WindowsBlock` is a stub that returns `Unsupported` for every
-/// call. Both reach these five methods through the same `DeviceIo`, so what is
-/// untested there is the device layer's platform code, not this seam.
 pub trait SectorIo {
     fn identify(&self) -> DeviceIdentity;
     fn capabilities(&self) -> Result<Capabilities, WipeError>;
-    /// Read `buf.len()` bytes starting at logical block `lba`. All-or-nothing.
     fn read_sectors(&mut self, lba: u64, buf: &mut [u8]) -> Result<(), WipeError>;
-    /// Write `buf.len()` bytes starting at logical block `lba`. All-or-nothing.
     fn write_sectors(&mut self, lba: u64, buf: &[u8]) -> Result<(), WipeError>;
-    /// Push accepted writes down to the medium. Called at the end of every pass,
-    /// before the pass is timed as complete and before read-back verification reads
-    /// a byte: verifying through a write-back cache verifies the cache. Named `sync`
-    /// rather than `flush` to match the device-layer method it forwards to.
     fn sync(&mut self) -> Result<(), WipeError>;
 }
 
@@ -376,14 +170,7 @@ impl<T: SectorIo + ?Sized> SectorIo for &mut T {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Keccak-f[1600], SHAKE-128, SHA-3-256
-// ---------------------------------------------------------------------------
-
-/// Rate of SHAKE-128 in bytes: (1600 - 2*128) / 8.
 pub const SHAKE128_RATE: usize = 168;
-/// Rate of SHA-3-256 in bytes: (1600 - 2*256) / 8. Used only by the KAT that
-/// cross-checks the permutation through a second sponge parameterisation.
 pub const SHA3_256_RATE: usize = 136;
 
 const KECCAK_RC: [u64; 24] = [
@@ -421,12 +208,9 @@ const KECCAK_PI: [usize; 24] = [
     10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1,
 ];
 
-/// The permutation. Twenty-four rounds of theta, rho-pi, chi, iota over a 5x5
-/// lane-major state of 64-bit lanes, little-endian, exactly as FIPS 202 defines it.
 #[inline]
 fn keccak_f1600(a: &mut [u64; 25]) {
     for round in 0..24 {
-        // theta
         let mut c = [0u64; 5];
         for x in 0..5 {
             c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
@@ -437,7 +221,6 @@ fn keccak_f1600(a: &mut [u64; 25]) {
                 a[x + 5 * y] ^= d;
             }
         }
-        // rho + pi
         let mut last = a[1];
         for i in 0..24 {
             let j = KECCAK_PI[i];
@@ -445,14 +228,12 @@ fn keccak_f1600(a: &mut [u64; 25]) {
             a[j] = last.rotate_left(KECCAK_ROT[i]);
             last = tmp;
         }
-        // chi
         for y in 0..5 {
             let row = [a[5 * y], a[5 * y + 1], a[5 * y + 2], a[5 * y + 3], a[5 * y + 4]];
             for x in 0..5 {
                 a[5 * y + x] = row[x] ^ ((!row[(x + 1) % 5]) & row[(x + 2) % 5]);
             }
         }
-        // iota
         a[0] ^= KECCAK_RC[round];
     }
 }
@@ -465,8 +246,6 @@ fn state_xor_bytes(state: &mut [u64; 25], offset: usize, bytes: &[u8]) {
     }
 }
 
-/// A Keccak sponge. Generic over rate and domain pad so one implementation serves
-/// SHAKE-128 (the pattern generator) and SHA-3-256 (the cross-check KAT).
 #[derive(Clone)]
 pub struct Keccak {
     state: [u64; 25],
@@ -497,9 +276,6 @@ impl Keccak {
         }
     }
 
-    /// Absorb. Panics if called after squeezing has begun: a sponge that silently
-    /// accepted late input would produce a digest of something other than the
-    /// message, which is the kind of defect that is invisible until it matters.
     pub fn absorb(&mut self, data: &[u8]) {
         assert!(!self.squeezing, "Keccak::absorb after squeeze");
         for &b in data {
@@ -520,7 +296,6 @@ impl Keccak {
         self.squeezing = true;
     }
 
-    /// Squeeze `out.len()` bytes. May be called repeatedly; the stream continues.
     pub fn squeeze(&mut self, out: &mut [u8]) {
         if !self.squeezing {
             self.finish();
@@ -536,10 +311,6 @@ impl Keccak {
     }
 }
 
-/// SHAKE-128 over the concatenation of `parts`, squeezed into `out`.
-///
-/// Takes a slice of slices so a caller never has to allocate a joined buffer to
-/// hash a structured header.
 pub fn shake128(parts: &[&[u8]], out: &mut [u8]) {
     let mut k = Keccak::shake128();
     for p in parts {
@@ -548,8 +319,6 @@ pub fn shake128(parts: &[&[u8]], out: &mut [u8]) {
     k.squeeze(out);
 }
 
-/// SHA-3-256. Present for the permutation cross-check and for callers who want a
-/// stable short fingerprint of a key or a seed. Not used on the wipe hot path.
 pub fn sha3_256(parts: &[&[u8]]) -> [u8; 32] {
     let mut k = Keccak::sha3_256();
     for p in parts {
@@ -560,7 +329,6 @@ pub fn sha3_256(parts: &[&[u8]]) -> [u8; 32] {
     out
 }
 
-/// Lowercase hex. Certificates and log lines only; not on the hot path.
 pub fn hex(bytes: &[u8]) -> String {
     const D: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -571,27 +339,8 @@ pub fn hex(bytes: &[u8]) -> String {
     s
 }
 
-// ---------------------------------------------------------------------------
-// The run seed
-// ---------------------------------------------------------------------------
-
-/// Domain separation for deriving a run seed from a human-readable run id.
 pub const RUN_SEED_DOMAIN: &[u8] = b"SENTINELWIPE/run-seed/v1";
 
-/// The 32 bytes every pattern in a job is derived from.
-///
-/// CLAUDE.md rule 6: `make demo` from a fresh clone produces byte-identical
-/// certificates given the same fixture seed. A wipe whose pattern came from the
-/// operating system's entropy pool cannot satisfy that — the written bytes, their
-/// entropy, and any digest over the wiped medium would differ every run. So the seed
-/// is an *input*, it is printed in the certificate as hex, and a third party can
-/// regenerate any sector of the wiped medium from it and check our arithmetic.
-///
-/// The trade that buys is stated rather than hidden: a published seed makes the
-/// pattern predictable. For an overwrite that is irrelevant — the pattern's job is
-/// to be *there*, not to be secret. For [`CryptoEraseDemonstration`] it would be
-/// fatal, which is why that type takes its key separately and never derives one from
-/// a seed that appears in a certificate.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Seed([u8; 32]);
 
@@ -600,8 +349,6 @@ impl Seed {
         Seed(b)
     }
 
-    /// Derive from a run identifier — `SHAKE128("SENTINELWIPE/run-seed/v1" || id)`.
-    /// Deterministic across machines, so the run id is enough to reproduce a job.
     pub fn from_run_id(run_id: &str) -> Self {
         let mut b = [0u8; 32];
         shake128(&[RUN_SEED_DOMAIN, run_id.as_bytes()], &mut b);
@@ -623,16 +370,9 @@ impl fmt::Debug for Seed {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Methods and patterns
-// ---------------------------------------------------------------------------
-
-/// What one pass lays down.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PassPattern {
-    /// Every byte the same. Cheap, and visible as a flat line in the entropy readout.
     Constant(u8),
-    /// The per-sector seeded SHAKE-128 stream described at the top of this file.
     Shake128Stream,
 }
 
@@ -647,28 +387,14 @@ impl PassPattern {
     }
 }
 
-/// The three shipped overwrite methods.
-///
-/// All three are *overwrite* methods and all three sit in the same NIST SP 800-88
-/// Rev. 1 category — see [`Method::nist_category`]. Choosing between them is a policy
-/// question about what a reviewer expects to see, not a claim that one erases more
-/// than another; this module makes no such claim and no measurement here supports one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
-    /// One pass of 0x00. Available, and deliberately *not* the demo pass: it drives
-    /// whole-image entropy to 0, and `demo_script.md` narrates entropy climbing.
     ZeroFill,
-    /// One pass of the seeded SHAKE-128 stream. The demo pass.
     SeededRandom,
-    /// 0x00, then 0xFF, then the seeded stream. The three-pass shape a legacy policy
-    /// expects. The final pass is the seeded stream so the medium ends high-entropy
-    /// and reproducible, exactly as [`Method::SeededRandom`] leaves it.
     ThreePass,
 }
 
 impl Method {
-    /// Stable numeric id. It is absorbed into every pattern, so two methods never
-    /// produce the same bytes for the same seed, pass and sector.
     pub fn id(&self) -> u8 {
         match self {
             Method::ZeroFill => 1,
@@ -677,7 +403,6 @@ impl Method {
         }
     }
 
-    /// The wire label. Goes into the telemetry header and the certificate.
     pub fn label(&self) -> &'static str {
         match self {
             Method::ZeroFill => "single_pass_zero",
@@ -702,7 +427,6 @@ impl Method {
         self.patterns().len() as u32
     }
 
-    /// The pattern for a 1-based pass number.
     pub fn pattern(&self, pass: u32) -> Result<PassPattern, WipeError> {
         let passes = self.pass_count();
         if pass == 0 || pass > passes {
@@ -711,21 +435,10 @@ impl Method {
         Ok(self.patterns()[(pass - 1) as usize])
     }
 
-    /// The NIST SP 800-88 Rev. 1 category an overwrite of the whole addressable
-    /// medium falls in. It is `Clear` for every method here, including the
-    /// three-pass one. `Purge` is not claimed by any overwrite in this module: on
-    /// flash it would require reaching over-provisioned and remapped blocks that a
-    /// host-addressed write cannot see, and CLAUDE.md rule 1 forbids claiming it.
-    /// The clause-by-clause table is `docs/standards_map.md`, which is the
-    /// operator's file; this function exists so the certificate writer never has to
-    /// guess.
     pub fn nist_category(&self) -> &'static str {
         "Clear"
     }
 
-    /// What a reviewer expecting a legacy pattern will recognise, where that is a
-    /// true statement about the shape of the passes. It is not a conformance claim:
-    /// nothing in this project has been tested against a DoD 5220.22-M procedure.
     pub fn legacy_shape(&self) -> Option<&'static str> {
         match self {
             Method::ThreePass => Some("three-pass overwrite shape (0x00, 0xFF, random)"),
@@ -733,28 +446,10 @@ impl Method {
         }
     }
 
-    /// Default method for a detected medium.
-    ///
-    /// Every medium gets [`Method::SeededRandom`]: one full-capacity overwrite pass,
-    /// which is the same NIST category as three of them and costs a third of the
-    /// writes. Two things this deliberately does *not* do:
-    ///
-    /// * It does not escalate a solid-state medium to ATA Secure Erase or NVMe
-    ///   Sanitize. That dispatch belongs to the sanitize path, which knows what the
-    ///   controller advertised and — per operator decision 3 — labels the result
-    ///   `simulated` on anything that is not a real controller.
-    /// * It does not pick [`Method::ThreePass`] for magnetic media. There is no
-    ///   measurement in this project supporting a claim that a second and third pass
-    ///   remove residue a first did not, and rule 2 forbids shipping a default we
-    ///   cannot defend with a number. An operator who needs that shape asks for it.
     pub fn default_for_medium(_medium: Medium) -> Method {
         Method::SeededRandom
     }
 }
-
-// ---------------------------------------------------------------------------
-// Pattern generation
-// ---------------------------------------------------------------------------
 
 #[inline]
 fn squeeze_rate_block(st: &[u64; 25], out: &mut [u8]) {
@@ -770,30 +465,15 @@ fn squeeze_rate_block(st: &[u64; 25], out: &mut [u8]) {
     }
 }
 
-/// Generates the expected bytes of one pass, at any sector, in any order.
-///
-/// Construction and cost are in the module header. The important property, and the
-/// only reason this type exists rather than a `Vec<u8>` of the pass, is that
-/// [`PatternGen::fill_sector`] is O(sector_bytes) *from the seed*, with no state
-/// carried between sectors — which is what makes sampled read-back verification
-/// possible at all.
 #[derive(Clone)]
 pub struct PatternGen {
     pattern: PassPattern,
     sector_bytes: usize,
-    /// Keccak state with the fixed header prefix already absorbed. Header is 77
-    /// bytes, well under the 168-byte rate, so no permutation has happened yet and
-    /// XOR-ing the per-sector suffix into a copy is a complete absorb.
     template: [u64; 25],
     lba_off: usize,
     hdr_len: usize,
 }
 
-/// Deliberately partial: the template state has the run seed absorbed into it, and
-/// a `#[derive(Debug)]` would print seed-derived material into any log line that
-/// formatted a generator. Nothing here is secret today -- the seed is published in
-/// the certificate -- but the same type is the shape a keyed generator would take,
-/// so the habit is set here rather than after it matters.
 impl fmt::Debug for PatternGen {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PatternGen")
@@ -804,7 +484,6 @@ impl fmt::Debug for PatternGen {
 }
 
 impl PatternGen {
-    /// `pass` is 1-based.
     pub fn new(
         seed: &Seed,
         method: Method,
@@ -833,9 +512,6 @@ impl PatternGen {
         }
         let lba_off = off;
         let hdr_len = lba_off + 8;
-        // A header at or past the rate would need a permutation mid-absorb and the
-        // template shortcut would be wrong. 77 < 168 today; assert so a future field
-        // cannot break it silently.
         assert!(
             hdr_len < SHAKE128_RATE,
             "pattern header {} bytes >= SHAKE-128 rate {}",
@@ -859,14 +535,10 @@ impl PatternGen {
         self.sector_bytes
     }
 
-    /// True when every sector of the pass carries identical bytes, so a write buffer
-    /// can be filled once and reused for the whole pass.
     pub fn is_constant(&self) -> bool {
         matches!(self.pattern, PassPattern::Constant(_))
     }
 
-    /// The expected bytes of one sector. `out.len()` is the sector size; a shorter
-    /// slice yields the corresponding prefix, which is what a partial compare wants.
     pub fn fill_sector(&self, lba: u64, out: &mut [u8]) {
         match self.pattern {
             PassPattern::Constant(b) => {
@@ -893,7 +565,6 @@ impl PatternGen {
         }
     }
 
-    /// Fill a run of whole sectors starting at `first_lba`.
     pub fn fill_run(&self, first_lba: u64, buf: &mut [u8]) -> Result<(), WipeError> {
         if buf.len() % self.sector_bytes != 0 {
             return Err(WipeError::BadBufferLen {
@@ -908,16 +579,6 @@ impl PatternGen {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Entropy, exactly as the fixture measures it
-// ---------------------------------------------------------------------------
-
-/// Compensated summation (Neumaier). `fixtures/corpus.py` uses `math.fsum`, which is
-/// exactly rounded; this is not, and the difference is bounded by about one ulp of
-/// the result over 256 terms. The build report records the measured agreement
-/// between this function and the manifest's `whole_image_entropy_bits_per_byte`
-/// against the same 268,435,456 bytes, so the claim that the two implementations
-/// agree is a measurement and not an inference.
 fn neumaier_sum(terms: &[f64]) -> f64 {
     let mut s = 0.0f64;
     let mut c = 0.0f64;
@@ -933,8 +594,6 @@ fn neumaier_sum(terms: &[f64]) -> f64 {
     s + c
 }
 
-/// Exact byte histogram, accumulated across chunks so a 256 MiB medium can be
-/// measured without being held in memory.
 #[derive(Debug, Clone)]
 pub struct ByteHistogram {
     counts: [u64; 256],
@@ -970,9 +629,6 @@ impl ByteHistogram {
         &self.counts
     }
 
-    /// Shannon entropy in bits/byte over everything added so far. Zero for an empty
-    /// histogram and for a single-symbol one, which is the correct answer in both
-    /// cases and is what a zero-filled medium measures.
     pub fn shannon_bits_per_byte(&self) -> f64 {
         if self.total == 0 {
             return 0.0;
@@ -994,31 +650,16 @@ impl ByteHistogram {
     }
 }
 
-/// Whole-buffer Shannon entropy in bits/byte. The exact estimator, over every byte —
-/// not the strided sample [`crate::telemetry::entropy_sampled`] takes for a live
-/// frame. The two are not interchangeable and a slide must not compare them: the
-/// sampled one is biased low by about `(K-1)/(2 N ln 2)` bits, which the telemetry
-/// module documents at its own budget.
 pub fn shannon_bits_per_byte(data: &[u8]) -> f64 {
     let mut h = ByteHistogram::new();
     h.add(data);
     h.shannon_bits_per_byte()
 }
 
-// ---------------------------------------------------------------------------
-// Job configuration
-// ---------------------------------------------------------------------------
-
-/// Default write chunk: 2048 sectors, which is 1 MiB at a 512-byte sector.
 pub const DEFAULT_CHUNK_SECTORS_MAX: u32 = 2048;
-/// Floor for the adaptive chunk. Below this the per-call overhead dominates and the
-/// device is being measured through the loop rather than the loop through the device.
 pub const DEFAULT_CHUNK_SECTORS_MIN: u32 = 8;
-/// Target wall time for one chunk: 10 ms, a quarter of the telemetry module's 40 ms
-/// emit period. See [`adapt_chunk`] for why a quarter and not one.
 pub const DEFAULT_TARGET_CHUNK_NS: u128 = 10_000_000;
 
-/// Everything a job needs that is not the device.
 #[derive(Debug, Clone)]
 pub struct WipeConfig {
     pub method: Method,
@@ -1039,11 +680,6 @@ impl WipeConfig {
         }
     }
 
-    /// The telemetry header this config and device imply. `simulated` is `false`
-    /// here and must stay so: an overwrite pass really does write every sector.
-    /// Operator decision 3 puts the word `simulated` on ATA Secure Erase, NVMe
-    /// Sanitize and crypto-erase against an image, which are the sanitize path's
-    /// operations, not this module's.
     pub fn telemetry_spec(
         &self,
         id: &DeviceIdentity,
@@ -1061,23 +697,6 @@ impl WipeConfig {
     }
 }
 
-/// Resize the write chunk so the engine keeps calling [`Telemetry::wrote`] often
-/// enough for the 20 Hz floor to be the *telemetry* module's decision rather than an
-/// accident of how fast the medium happens to be.
-///
-/// A fixed 1 MiB chunk is 3 ms on a fast NVMe and 200 ms on a slow USB stick. At 200
-/// ms the stream emits at 5 Hz whatever period telemetry asks for, because it is
-/// never called; the sector map would sweep in visible jumps and `Summary::
-/// met_rate_floor` would come back false through no fault of the consumer. So the
-/// loop measures each chunk and moves toward `target_chunk_ns`.
-///
-/// The target is a *quarter* of the emit period, not the period itself: emission
-/// happens on a `wrote` call, so the worst-case gap between two frames is one period
-/// plus one chunk. At a quarter, the overshoot is at most 25% and the achieved rate
-/// stays above the floor; at a full period it could be 50% and would not.
-///
-/// Hysteresis is 4x — shrink above the target, grow only below a quarter of it — so
-/// a chunk that lands near the target is left alone instead of oscillating.
 pub fn adapt_chunk(current: u32, elapsed_ns: u128, target_ns: u128, min: u32, max: u32) -> u32 {
     let min = min.max(1);
     let max = max.max(min);
@@ -1094,12 +713,6 @@ pub fn adapt_chunk(current: u32, elapsed_ns: u128, target_ns: u128, min: u32, ma
     }
 }
 
-// ---------------------------------------------------------------------------
-// Reports
-// ---------------------------------------------------------------------------
-
-/// What one pass did. Every field is measured; none is derived from a device's
-/// claim about itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PassReport {
     pub method_label: &'static str,
@@ -1109,35 +722,16 @@ pub struct PassReport {
     pub sector_bytes: u32,
     pub sectors_written: u64,
     pub bytes_written: u64,
-    /// Wall time for the pass including pattern generation and the closing sync.
     pub duration_ns: u128,
-    /// Wall time of the closing `sync` alone, included in `duration_ns`. Broken out
-    /// because a device that buffers a whole pass and pays for it at sync is a device
-    /// whose per-chunk throughput figure means nothing.
-    ///
-    /// **Measured on the fixture: 4-52 ms**, and this is the one thing that can still
-    /// break the 20 Hz floor. A frame is forced immediately before the sync, so the
-    /// worst inter-frame gap is `sync_ns` plus one chunk; when `fsync` of a 256 MiB
-    /// image ran 52 ms the three-pass job reported `met_rate_floor: false` with a
-    /// 51.7 ms gap. Nothing in a single-threaded write loop can emit during a
-    /// blocking `fsync`, so this is reported rather than fixed here: the honest
-    /// options are a `Syncing` state in the telemetry stream or a stream-side rule
-    /// that a gap spanning a known sync is not a stall. Both belong to
-    /// `telemetry.rs`, and `sync_ns` is the measurement either would need.
     pub sync_ns: u128,
     pub chunk_writes: u64,
     pub chunk_sectors_first: u32,
     pub chunk_sectors_final: u32,
     pub chunk_resizes: u32,
-    /// The longest single chunk iteration — generation, write and the `wrote` call.
-    /// This is the engine's contribution to the worst inter-frame gap, and the
-    /// number to look at when `Summary::met_rate_floor` comes back false.
     pub max_chunk_ns: u128,
 }
 
 impl PassReport {
-    /// Bytes per second over the whole pass. Zero duration reports 0.0 rather than
-    /// an infinity, because an infinity in a certificate is a defect.
     pub fn throughput_bytes_per_s(&self) -> f64 {
         if self.duration_ns == 0 {
             0.0
@@ -1146,17 +740,11 @@ impl PassReport {
         }
     }
 
-    /// The pair the behavioural audit needs: `(bytes, elapsed_ns)` of work this
-    /// process actually performed against this device in this run. Feed it to
-    /// `audit::ThroughputSample::new` with `BaselineSource::ObservedPass` — that is
-    /// the strongest baseline available, because it travelled the same I/O path as
-    /// the operation it will judge.
     pub fn throughput_sample_input(&self) -> (u64, u128) {
         (self.bytes_written, self.duration_ns)
     }
 }
 
-/// The whole job.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WipeReport {
     pub method_label: &'static str,
@@ -1171,11 +759,7 @@ pub struct WipeReport {
     pub passes: Vec<PassReport>,
     pub bytes_written: u64,
     pub duration_ns: u128,
-    /// Always `false` for an overwrite: every sector was really written. The word
-    /// belongs on the sanitize path, per operator decision 3.
     pub simulated: bool,
-    /// [`OVERWRITE_SCOPE_LIMIT`], carried so a certificate writer cannot emit the
-    /// result without the limitation attached to it.
     pub scope_limit: &'static str,
 }
 
@@ -1189,14 +773,6 @@ impl WipeReport {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The write loop
-// ---------------------------------------------------------------------------
-
-/// Read the geometry and refuse the job before a byte moves if it cannot be trusted.
-///
-/// Returns identity and capabilities together because every caller needs both and
-/// each is one call: the identity for the certificate, the geometry for the loop.
 fn preflight<D: SectorIo + ?Sized>(
     dev: &D,
 ) -> Result<(DeviceIdentity, Capabilities), WipeError> {
@@ -1217,13 +793,6 @@ fn preflight<D: SectorIo + ?Sized>(
     Ok((id, caps))
 }
 
-/// Run one 1-based pass over the whole medium.
-///
-/// Telemetry contract, exactly as `telemetry.rs` documents it: [`Telemetry::wrote`]
-/// is called **after** each chunk write returns, never before — a frame that runs
-/// ahead of the device is a progress bar, not an instrument. The caller owns
-/// [`Telemetry::start`], [`Telemetry::end_pass`] and [`Telemetry::finish`];
-/// [`overwrite`] does the `end_pass` part.
 pub fn run_pass<D, S>(
     dev: &mut D,
     cfg: &WipeConfig,
@@ -1244,9 +813,6 @@ where
     let first_chunk = chunk;
 
     let mut buf = vec![0u8; cmax as usize * sb];
-    // A constant pattern is the same bytes for every sector of the pass, so the
-    // buffer is filled once and reused. Measured: this is the whole reason zero-fill
-    // outruns the seeded stream.
     if gen.is_constant() {
         gen.fill_run(0, &mut buf)?;
     }
@@ -1265,7 +831,6 @@ where
             gen.fill_run(lba, slice)?;
         }
         dev.write_sectors(lba, slice)?;
-        // After the bytes are on the medium, never before.
         tm.wrote(pass, lba, slice);
         let elapsed = t_chunk.elapsed().as_nanos();
         if elapsed > max_chunk_ns {
@@ -1280,12 +845,6 @@ where
         }
     }
 
-    // Force a frame before the flush. Measured on the fixture: a zero-fill pass
-    // writes 256 MiB in 94 ms and then spends 39 ms in `fsync`, and with no frame in
-    // between the worst inter-frame gap was 53.2 ms -- over the 50 ms the 20 Hz floor
-    // allows, on a pass whose every chunk took 1.5 ms. The stall was entirely
-    // un-instrumented flush time. `tick` emits only if a span is pending, so this
-    // costs nothing when the period already emitted one.
     tm.tick(pass);
     let t_sync = Instant::now();
     dev.sync()?;
@@ -1309,13 +868,6 @@ where
     })
 }
 
-/// Run every pass of the configured method, closing each telemetry canvas layer.
-///
-/// This writes and does not verify. Verification is [`crate::verify`], and it is a
-/// separate call on purpose: a write that reports success is a claim, and this
-/// project does not put a claim in a certificate until something read the medium
-/// back. [`crate::verify::wipe_verified`] is the composed entry point that
-/// interleaves the two.
 pub fn overwrite<D, S>(
     dev: &mut D,
     cfg: &WipeConfig,
@@ -1352,19 +904,9 @@ where
     })
 }
 
-// ---------------------------------------------------------------------------
-// Crypto-erase: a demonstration, and labelled as one in every field it emits
-// ---------------------------------------------------------------------------
-
-/// The construction identifier that travels with every crypto-erase artifact.
-///
-/// It is deliberately unwieldy. Operator decision 3 requires the caveat to live in
-/// the field itself rather than in a footnote, and a reader who copies this string
-/// into a slide copies the caveat with it.
 pub const CRYPTO_ERASE_CONSTRUCTION: &str =
     "DEMONSTRATION_shake128_xor_keystream__not_a_certified_cipher";
 
-/// What this shim is and is not. Reproduced in [`CryptoEraseReport::limits`].
 pub const CRYPTO_ERASE_LIMITS: &str = "\
 DEMONSTRATION ONLY. The transform is a XOR with a SHAKE-128 keystream keyed per \
 512-byte block. It is not AES, it is not authenticated, it has no FIPS validation, it \
@@ -1375,35 +917,17 @@ self-encrypting drive the key lives in the controller and this process never see
 so a host-side crypto-erase against an image file is SIMULATED with respect to any \
 real device and is labelled simulated in the report.";
 
-/// Block size the keystream is keyed at. Independent of any device sector size: this
-/// operates on an object's bytes, not on a medium.
 pub const CRYPTO_ERASE_BLOCK: usize = 512;
 
-/// What happened to the key. Emitted after destruction, so it deliberately carries a
-/// fingerprint of the key rather than the key: a log has to be able to say *which*
-/// key died without being able to reconstruct it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyDestructionRecord {
     pub object_id: String,
-    /// First 8 bytes of `SHA3-256(domain || key)`. One-way, so this record is safe
-    /// to keep in a certificate.
     pub key_fingerprint_hex: String,
     pub key_bytes_zeroed: usize,
     pub destroyed: bool,
     pub method: &'static str,
 }
 
-/// Encrypt-then-discard-key, for per-file erasure.
-///
-/// The point of crypto-erase is that you do not have to overwrite an object to make
-/// it unrecoverable; you overwrite the *key*, which is 32 bytes however large the
-/// object is. This type demonstrates that end to end and measures the result: the
-/// ciphertext's entropy, and how much of the plaintext survives an attempt to read
-/// it back with a key that is not the one that was destroyed.
-///
-/// **Read [`CRYPTO_ERASE_LIMITS`].** The keystream is a XOF in counter mode, which is
-/// a real construction, but this project has not validated it as a cipher and does
-/// not ship it as one. Every artifact it produces says so in the field name.
 pub struct CryptoEraseDemonstration {
     key: Option<[u8; 32]>,
     key_fingerprint: [u8; 8],
@@ -1411,10 +935,6 @@ pub struct CryptoEraseDemonstration {
 }
 
 impl CryptoEraseDemonstration {
-    /// Take an explicit key. The key is **not** derived from the wipe run seed and
-    /// must not be: the run seed is printed in the certificate so a third party can
-    /// re-derive the overwrite pattern, and a key derivable from a published seed is
-    /// not destroyed by destroying it.
     pub fn with_key(key: [u8; 32], object_id: &str) -> Self {
         let fp = sha3_256(&[CRYPTO_ERASE_DOMAIN, b"fingerprint", &key]);
         let mut key_fingerprint = [0u8; 8];
@@ -1438,11 +958,6 @@ impl CryptoEraseDemonstration {
         hex(&self.key_fingerprint)
     }
 
-    /// XOR the keystream over `buf`, which starts at byte `offset` of the object.
-    /// The transform is its own inverse: the same call encrypts and decrypts.
-    ///
-    /// `offset` must be a multiple of [`CRYPTO_ERASE_BLOCK`] so the block index is
-    /// exact; a caller streaming an object hands it aligned chunks.
     pub fn transform(&self, offset: u64, buf: &mut [u8]) -> Result<(), WipeError> {
         let key = self.key.as_ref().ok_or_else(|| WipeError::KeyDestroyed {
             object_id: self.object_id.clone(),
@@ -1476,15 +991,6 @@ impl CryptoEraseDemonstration {
         Ok(())
     }
 
-    /// Overwrite the key in memory and drop it.
-    ///
-    /// `write_volatile` per byte plus a compiler fence, so the writes are not
-    /// optimised away as dead stores. This is the honest limit of what a std-only
-    /// Rust program can promise: it cannot control CPU caches, it cannot reach a
-    /// copy the allocator or a moved value left behind, and it cannot stop the
-    /// operating system having paged the key to swap. Those are stated here rather
-    /// than glossed, because "the key is gone" is exactly the kind of claim rule 1
-    /// is about.
     pub fn destroy_key(&mut self) -> KeyDestructionRecord {
         let zeroed = match self.key.as_mut() {
             Some(k) => {
@@ -1515,14 +1021,9 @@ impl Drop for CryptoEraseDemonstration {
     }
 }
 
-/// The measured outcome of one per-object crypto-erase demonstration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CryptoEraseReport {
-    /// The operation name. Carries both `simulated` and `demonstration`, so no
-    /// consumer can render it without rendering the caveat.
     pub operation: &'static str,
-    /// Always true. Against an image file no controller key was destroyed, because
-    /// there is no controller. Operator decision 3.
     pub simulated: bool,
     pub demonstration_construction: &'static str,
     pub object_id: String,
@@ -1531,19 +1032,10 @@ pub struct CryptoEraseReport {
     pub entropy_ciphertext_bits_per_byte: f64,
     pub key_destroyed: bool,
     pub key_destruction: KeyDestructionRecord,
-    /// Fraction of bytes that still match the plaintext when the ciphertext is read
-    /// back with a key that is not the destroyed one. For an independent keystream
-    /// the expectation is 1/256 = 0.00390625 by chance alone, and the measured
-    /// figure is reported rather than the expectation.
     pub residual_plaintext_match_fraction: f64,
     pub limits: &'static str,
 }
 
-/// Run the demonstration over one object's bytes and measure it.
-///
-/// Returns the ciphertext alongside the report. The key is destroyed before this
-/// function returns, so the returned ciphertext is not recoverable through the value
-/// that produced it — which is the property being demonstrated.
 pub fn crypto_erase_demonstration(
     key: [u8; 32],
     object_id: &str,
@@ -1557,8 +1049,6 @@ pub fn crypto_erase_demonstration(
     let entropy_ct = shannon_bits_per_byte(&buf);
     let entropy_pt = shannon_bits_per_byte(plaintext);
 
-    // The adversary's best case that is still honest to measure: a key that differs
-    // from the destroyed one. Measured, not assumed.
     let mut wrong = [0u8; 32];
     shake128(&[CRYPTO_ERASE_DOMAIN, b"wrong-key", &key], &mut wrong);
     let attacker = CryptoEraseDemonstration::with_key(wrong, object_id);
@@ -1595,34 +1085,18 @@ pub fn crypto_erase_demonstration(
     (buf, report)
 }
 
-// ---------------------------------------------------------------------------
-// Test doubles
-// ---------------------------------------------------------------------------
-
-/// Device doubles for tests in this crate.
-///
-/// [`stub::MemDevice`] stands in for `core/device`'s `Device` while that crate is
-/// being written by another agent — see the note on [`SectorIo`]. [`stub::ScratchImage`]
-/// is the file-backed double the measurement runs use, and it is where this file's
-/// write guard lives.
 #[cfg(test)]
 pub(crate) mod stub {
     use super::*;
 
-    /// An in-memory medium. Every unit test in this crate writes here and nowhere
-    /// else: no path, no descriptor, nothing that can be aimed at a disk.
     #[derive(Debug, Clone)]
     pub struct MemDevice {
         pub data: Vec<u8>,
         pub caps: Capabilities,
-        /// When set, `capabilities()` fails instead of answering -- the
-        /// `WindowsBlock` case, where there is no true sector size to report.
         pub caps_error: Option<String>,
         pub reads: u64,
         pub writes: u64,
         pub syncs: u64,
-        /// Simulated cost per sector of I/O, charged as a real sleep. Only the
-        /// chunk-adaptation test uses it, and it uses a small number of sectors.
         pub ns_per_sector: u64,
     }
 
@@ -1721,29 +1195,6 @@ pub(crate) mod stub {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // The file-backed double, and the guard in front of it
-    // -----------------------------------------------------------------------
-
-    /// CLAUDE.md rule 4, applied to this file's own measurement runs.
-    ///
-    /// The rule exists because a forensics tool that can wipe the demo laptop is a
-    /// disqualifying defect, and every unit test above writes to memory precisely so
-    /// nothing can be aimed. The measurement runs are the exception that has to
-    /// touch a real file, so the guard is written before the opener and the opener
-    /// is the only way to obtain a writable descriptor here.
-    ///
-    /// Containment is by **inode ancestry**, never by string prefix, for the reasons
-    /// `fixtures/guard.py` measured on this machine: firmlinks give one directory two
-    /// irreducible path strings, and the volume is case-insensitive. Identity under
-    /// `(st_dev, st_ino)` is exact under both and, being identity rather than a
-    /// string relation, cannot widen the allowed set.
-    ///
-    /// This is a test-only guard for a test-only opener. It is **not** the project's
-    /// write guard: `fixtures/guard.py` is, and the Rust reimplementation the
-    /// operator called for is another agent's file. It does not attempt that
-    /// policy's device rules, size bounds, `/.vol` refusal or TOCTOU-hardened
-    /// descend, and it must not be mistaken for them.
     #[cfg(unix)]
     pub mod guard {
         use std::fs;
@@ -1751,9 +1202,6 @@ pub(crate) mod stub {
         use std::os::unix::fs::{FileTypeExt, MetadataExt};
         use std::path::{Path, PathBuf};
 
-        /// Names the directory the measurement runs may write in. Nothing defaults;
-        /// an unset variable is a refusal with instructions, never a fallback to a
-        /// temp directory this process guessed.
         pub const SCRATCH_ENV: &str = "SENTINELWIPE_WIPE_SCRATCH";
 
         #[derive(Debug)]
@@ -1811,9 +1259,6 @@ pub(crate) mod stub {
             Ok((m.dev(), m.ino()))
         }
 
-        /// True when some ancestor of `target` is inode-identical to `root`.
-        /// `target` is canonicalised by the caller; ancestors are walked upward and
-        /// compared on `(st_dev, st_ino)`.
         pub fn inode_contained(root: &Path, target: &Path) -> bool {
             let want = match ino_pair(root) {
                 Ok(v) => v,
@@ -1829,11 +1274,10 @@ pub(crate) mod stub {
             false
         }
 
-        /// The source tree this crate was compiled from: `core/wipe/../..`.
         pub fn workspace_root() -> PathBuf {
             let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-            p.pop(); // core
-            p.pop(); // repo
+            p.pop();
+            p.pop();
             p
         }
 
@@ -1850,8 +1294,6 @@ pub(crate) mod stub {
                     root.display()
                 )));
             }
-            // A root of "/" or "/Users" would contain the whole machine. Depth is a
-            // sanity floor on the *root*, not a containment test on the target.
             if root.components().count() < 3 {
                 return Err(Refusal::RootTooShallow(root));
             }
@@ -1861,8 +1303,6 @@ pub(crate) mod stub {
             Ok(root)
         }
 
-        /// The only way this file produces a writable path. Every clause is a
-        /// conjunct and there is no disjunction on the allow path.
         pub fn authorize_write(target: &Path) -> Result<PathBuf, Refusal> {
             let root = scratch_root()?;
             let parent = target
@@ -1897,8 +1337,6 @@ pub(crate) mod stub {
         }
     }
 
-    /// A raw image file behind [`SectorIo`]. Test-only, and every writable
-    /// descriptor it holds came through [`guard::authorize_write`].
     #[cfg(unix)]
     pub struct ScratchImage {
         file: std::fs::File,
@@ -1909,7 +1347,6 @@ pub(crate) mod stub {
 
     #[cfg(unix)]
     impl ScratchImage {
-        /// Open an existing file inside the authorised scratch root.
         pub fn open(path: &std::path::Path, sector_bytes: u32) -> Result<Self, String> {
             use std::io::Seek;
             let resolved = guard::authorize_write(path).map_err(|r| r.to_string())?;
@@ -2032,10 +1469,6 @@ pub(crate) mod stub {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::stub::MemDevice;
@@ -2048,10 +1481,6 @@ mod tests {
         Telemetry::start(cfg.telemetry_spec(&dev.identify(), &caps), NullSink, None)
     }
 
-    // -- the sponge -------------------------------------------------------
-
-    /// Known-answer tests. Every vector was produced by CPython 3.11 `hashlib`
-    /// (OpenSSL's Keccak) on this machine and pasted in; none is recalled.
     #[test]
     fn shake128_matches_known_answers() {
         let mut out = [0u8; 32];
@@ -2067,7 +1496,6 @@ mod tests {
             "5881092dd818bf5cf8a3ddb793fbcba74097d5c526a6d35f97b83351940f2cc8"
         );
 
-        // 200 bytes crosses the 168-byte rate: this is the squeeze-side refill.
         let mut long = [0u8; 200];
         shake128(&[b""], &mut long);
         assert_eq!(hex(&long), concat!(
@@ -2080,8 +1508,6 @@ mod tests {
             "ef58538b8d23f877"
         ));
 
-        // 768 bytes of input crosses the rate on the absorb side, four times over,
-        // and is fed in three separate parts to exercise the streaming absorb.
         let block: Vec<u8> = (0u16..256).map(|v| v as u8).collect();
         let mut out64 = [0u8; 64];
         shake128(&[&block, &block, &block], &mut out64);
@@ -2091,9 +1517,6 @@ mod tests {
         ));
     }
 
-    /// The same permutation through a different rate (136) and a different domain
-    /// pad (0x06). A Keccak-f[1600] bug that survived both parameterisations would
-    /// have to be consistent across two sponges.
     #[test]
     fn sha3_256_matches_known_answers() {
         assert_eq!(
@@ -2106,10 +1529,6 @@ mod tests {
         );
     }
 
-    // -- entropy ----------------------------------------------------------
-
-    /// Cross-implementation check of the estimator against `fixtures/corpus.py`'s
-    /// `shannon_bits_per_byte`, on inputs whose Python answers were measured here.
     #[test]
     fn entropy_agrees_with_the_python_estimator() {
         assert_eq!(shannon_bits_per_byte(b"AAAB"), 0.8112781244591328);
@@ -2118,8 +1537,6 @@ mod tests {
         assert_eq!(shannon_bits_per_byte(&[7u8; 4096]), 0.0);
         assert_eq!(shannon_bits_per_byte(&[]), 0.0);
 
-        // 64 KiB of SHAKE-128 output. Checks the sponge and the estimator at once:
-        // Python measured 7.9971305194862525 over hashlib's bytes for this input.
         let mut buf = vec![0u8; 65536];
         shake128(&[b"entropy-vector"], &mut buf);
         let h = shannon_bits_per_byte(&buf);
@@ -2141,8 +1558,6 @@ mod tests {
         assert_eq!(hist.shannon_bits_per_byte(), 8.0);
     }
 
-    // -- pattern generation ------------------------------------------------
-
     #[test]
     fn seed_from_run_id_is_deterministic_and_domain_separated() {
         let a = Seed::from_run_id("run-2026-09-03-001");
@@ -2156,9 +1571,6 @@ mod tests {
         assert_ne!(hex(&bare), a.hex(), "domain prefix is not being absorbed");
     }
 
-    /// The template shortcut in [`PatternGen`] must produce exactly what the general
-    /// [`shake128`] entry point produces for the same header. This is the test that
-    /// catches an off-by-one in the padding offsets.
     #[test]
     fn pattern_gen_equals_a_direct_shake128_of_the_header() {
         let seed = Seed::from_run_id("template-check");
@@ -2221,7 +1633,6 @@ mod tests {
             .fill_sector(1, &mut b);
         assert_ne!(a, b, "lba does not separate");
 
-        // Same seed, same method, different sector size: different bytes.
         let mut c = vec![0u8; 512];
         PatternGen::new(&s1, Method::SeededRandom, 1, 4096)
             .unwrap()
@@ -2272,7 +1683,6 @@ mod tests {
         }
         assert!(Method::ThreePass.legacy_shape().is_some());
         assert!(Method::SeededRandom.legacy_shape().is_none());
-        // Every medium defaults to one seeded pass; see the doc for why.
         for m in [
             Medium::Rotational,
             Medium::SolidState,
@@ -2281,14 +1691,11 @@ mod tests {
         ] {
             assert_eq!(Method::default_for_medium(m), Method::SeededRandom);
         }
-        // The wire spellings are the device layer's, character for character.
         assert_eq!(Medium::Rotational.as_str(), "rotational");
         assert_eq!(Medium::SolidState.as_str(), "solid-state");
         assert_eq!(Medium::Image.as_str(), "image");
         assert_eq!(Medium::Unknown.as_str(), "unknown");
     }
-
-    // -- the write loop ---------------------------------------------------
 
     #[test]
     fn zero_fill_writes_zeros_and_drops_entropy_to_zero() {
@@ -2323,13 +1730,12 @@ mod tests {
 
         assert_eq!(d1.data, d2.data, "same seed must give the same medium");
         assert_ne!(d1.data, d3.data, "a different seed must give a different medium");
-        // rule 6 in one line: the wiped image has one hash for one seed.
         assert_eq!(hex(&sha3_256(&[&d1.data])), hex(&sha3_256(&[&d2.data])));
     }
 
     #[test]
     fn the_seeded_pass_raises_entropy() {
-        let mut dev = MemDevice::new(512, 2048); // 1 MiB
+        let mut dev = MemDevice::new(512, 2048);
         let cfg = WipeConfig::new(Method::SeededRandom, Seed::from_run_id("entropy"));
         let mut tm = null_telemetry(&dev, &cfg);
         overwrite(&mut dev, &cfg, &mut tm).unwrap();
@@ -2378,9 +1784,6 @@ mod tests {
         ));
     }
 
-    /// `WindowsBlock` and an unarmed `LinuxBlock` cannot state a sector size, and the
-    /// device layer makes `capabilities()` fallible rather than let them invent 512.
-    /// The wipe layer has to carry that failure through, not paper over it.
     #[test]
     fn a_device_that_cannot_state_its_geometry_is_refused() {
         let mut dev = MemDevice::new(512, 64);
@@ -2410,7 +1813,6 @@ mod tests {
 
     #[test]
     fn a_partial_final_chunk_is_written_and_no_more() {
-        // 2049 sectors against a 2048-sector chunk: one full chunk and one sector.
         let mut dev = MemDevice::new(512, 2049);
         let cfg = WipeConfig::new(Method::SeededRandom, Seed::from_run_id("tail"));
         let mut tm = null_telemetry(&dev, &cfg);
@@ -2421,8 +1823,6 @@ mod tests {
         gen.fill_sector(2048, &mut last);
         assert_eq!(&dev.data[2048 * 512..], &last[..]);
     }
-
-    // -- chunk adaptation, which is what holds the 20 Hz floor --------------
 
     #[test]
     fn adapt_chunk_shrinks_grows_and_holds() {
@@ -2438,13 +1838,10 @@ mod tests {
         assert_eq!(adapt_chunk(64, 1_000, 0, min, max), 64, "no target: no change");
     }
 
-    /// The engine end of the >= 20 Hz claim: against a device slow enough that a
-    /// full 1 MiB chunk would take longer than the emit period, the loop must shrink
-    /// the chunk rather than let frames go silent.
     #[test]
     fn a_slow_device_shrinks_the_chunk() {
         let mut dev = MemDevice::new(512, 4096);
-        dev.ns_per_sector = 20_000; // 2048 sectors -> ~41 ms, four times the target
+        dev.ns_per_sector = 20_000;
         let cfg = WipeConfig::new(Method::ZeroFill, Seed::from_run_id("slow"));
         let mut tm = null_telemetry(&dev, &cfg);
         let rep = overwrite(&mut dev, &cfg, &mut tm).unwrap();
@@ -2458,11 +1855,6 @@ mod tests {
         assert!(p.chunk_resizes > 0);
     }
 
-    // -- telemetry contract ------------------------------------------------
-
-    /// Every sector appears in the delivered stream, and the head bytes carried by a
-    /// frame are the bytes that were actually written — which is only true if
-    /// `wrote` is called after the write, as `telemetry.rs` requires.
     #[test]
     fn telemetry_covers_every_sector_and_carries_written_bytes() {
         let mut dev = MemDevice::new(512, 300);
@@ -2475,7 +1867,7 @@ mod tests {
         let mut tm = Telemetry::start(
             cfg.telemetry_spec(&dev.identify(), &caps),
             CollectSink::new(),
-            Some(Duration::ZERO), // emit on every chunk: deterministic
+            Some(Duration::ZERO),
         );
         overwrite(&mut dev, &cfg, &mut tm).unwrap();
 
@@ -2500,8 +1892,6 @@ mod tests {
         assert!(frames >= 5, "only {} frames for 5 chunks", frames);
         assert!(covered.iter().all(|&c| c), "the sector map would have holes");
     }
-
-    // -- crypto erase ------------------------------------------------------
 
     #[test]
     fn crypto_erase_transform_round_trips_while_the_key_lives() {
@@ -2550,14 +1940,11 @@ mod tests {
                 object_id: "secret.docx".to_string()
             }
         );
-        // Destroying twice is not an error and zeroes nothing the second time.
         assert_eq!(c.destroy_key().key_bytes_zeroed, 0);
     }
 
     #[test]
     fn the_ciphertext_is_noise_and_the_wrong_key_recovers_nothing() {
-        // A worst case for the demonstration: highly compressible plaintext, so any
-        // structure surviving into the ciphertext would show up in the entropy.
         let plain: Vec<u8> = std::iter::repeat(b"CLASSIFIED ")
             .take(6000)
             .flat_map(|s| s.iter().copied())
@@ -2583,8 +1970,6 @@ mod tests {
         );
         assert_ne!(cipher, plain);
 
-        // Chance alone gives 1/256 = 0.00390625. Anything much above that would be
-        // structure leaking through the keystream.
         assert!(
             rep.residual_plaintext_match_fraction < 0.01,
             "residual match {:.6}",
@@ -2602,12 +1987,6 @@ mod tests {
         assert_eq!(a.key_fingerprint_hex().len(), 16);
     }
 
-    /// The flush at the end of a pass is real work the instrument cannot see, and on
-    /// the fixture it is 30-45 ms of `fsync` after a 100 ms zero-fill pass. Without a
-    /// forced frame in front of it the worst inter-frame gap measured 53.2 ms, over
-    /// the 50 ms the 20 Hz floor allows. This asserts the frame exists, without
-    /// depending on a clock: the emit period is set long enough that no periodic
-    /// frame can fire, so the only frame that can appear is the forced one.
     #[test]
     fn a_frame_is_forced_before_the_flush() {
         let mut dev = MemDevice::new(512, 2048);
@@ -2618,8 +1997,6 @@ mod tests {
             CollectSink::new(),
             Some(Duration::from_secs(600)),
         );
-        // run_pass only: no end_pass, no finish. Any Progress event here is the one
-        // forced ahead of the flush.
         run_pass(&mut dev, &cfg, 1, &mut tm).unwrap();
         let frames: Vec<_> = tm
             .sink()
@@ -2649,11 +2026,6 @@ mod tests {
     }
 }
 
-/// Tests for the write guard in front of the measurement runs.
-///
-/// The clauses that need a scratch root skip loudly rather than pass quietly when
-/// `SENTINELWIPE_WIPE_SCRATCH` is unset, because a guard test that silently does
-/// nothing is worse than no guard test: it prints `ok`.
 #[cfg(all(test, unix))]
 mod guard_tests {
     use super::stub::guard::{self, Refusal};
@@ -2669,9 +2041,6 @@ mod guard_tests {
         }
     }
 
-    /// Containment is ancestry under `(st_dev, st_ino)`, and this is the case a
-    /// string prefix gets wrong: `.../core` is not an ancestor of `.../core-x`, but
-    /// `"…/core".is_prefix_of("…/core-x")` is true.
     #[test]
     fn containment_is_inode_ancestry_and_not_a_string_prefix() {
         let ws = guard::workspace_root();
@@ -2681,10 +2050,6 @@ mod guard_tests {
         assert!(guard::inode_contained(&src, &src), "a directory contains itself");
         assert!(!guard::inode_contained(&src, &ws), "containment is not symmetric");
 
-        // The string-prefix trap, with real paths: "…/core" is a prefix of the
-        // string "…/core/wipe" and also of the string "…/coreX", and only one of
-        // those is contained. The second path need not exist for the point to hold —
-        // a non-existent path is never contained, which is itself the safe answer.
         let core = ws.join("core");
         let impostor = ws.join("coreX");
         assert!(core.to_string_lossy().len() < impostor.to_string_lossy().len());
@@ -2697,7 +2062,6 @@ mod guard_tests {
         let Some(_root) = root_or_skip("the_guard_refuses_the_source_workspace") else {
             return;
         };
-        // The one file in this project that must never be opened for writing.
         let fixture = guard::workspace_root().join("out").join("fixture.img");
         match guard::authorize_write(&fixture) {
             Ok(p) => panic!("guard authorised {}", p.display()),
@@ -2706,7 +2070,6 @@ mod guard_tests {
                 assert!(msg.starts_with("REFUSED"), "{}", msg);
             }
         }
-        // And the source tree generally.
         assert!(guard::authorize_write(&guard::workspace_root().join("core").join("x.img")).is_err());
     }
 
@@ -2738,10 +2101,6 @@ mod guard_tests {
         assert!(guard::inode_contained(&root, ok.parent().unwrap()));
     }
 
-    /// A device node inside the scratch root would still be refused. This cannot be
-    /// constructed without privilege, so what is asserted is the classification, not
-    /// a live refusal: `/dev/null` is a character device and is outside any scratch
-    /// root, so it is refused twice over and the test says which clause fired first.
     #[test]
     fn a_device_node_is_never_a_target() {
         let dev_null = PathBuf::from("/dev/null");

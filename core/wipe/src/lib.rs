@@ -1,75 +1,3 @@
-//! The wipe driver: method dispatch, telemetry, read-back verification, and the
-//! behavioural timing audit, composed into one job that emits one JSON report.
-//!
-//! # What this file is
-//!
-//! `passes.rs` writes patterns, `verify.rs` reads them back, `audit.rs` judges a
-//! duration and `telemetry.rs` publishes the stream. None of them knows what a
-//! device is. This file is the only one that does: it binds
-//! [`sentinelwipe_device::Device`] to the rest of the crate through [`DeviceIo`],
-//! chooses a method from the medium the device reported, runs the job, and
-//! assembles [`JobReport`].
-//!
-//! # The seam this closes
-//!
-//! Until this file, the Windows-parity claim was true inside `core/device` and
-//! nowhere above it: `passes.rs` declared its own mirror trait [`passes::SectorIo`]
-//! because `core/wipe` had no dependency on `core/device` to bind to, and its own
-//! doc called that "the largest remaining integration risk". [`DeviceIo`] is the
-//! adapter that doc specifies, written as a newtype rather than the blanket impl it
-//! sketched — a blanket `impl<D: Device> SectorIo for D` overlaps `passes.rs`'s
-//! existing `impl<T: SectorIo + ?Sized> SectorIo for &mut T`, because `&mut T` is a
-//! fundamental type and this crate cannot prove `&mut T: Device` never holds. The
-//! newtype has the same effect, no coherence hazard, and one visible construction
-//! site. The whole driver is generic over `D: Device` and
-//! [`the_driver_binds_to_the_device_trait_and_nothing_below_it`] runs it over
-//! `&mut dyn Device`, so object safety is exercised rather than asserted.
-//!
-//! # Five signature deltas, all resolved here and nowhere else
-//!
-//! The device layer's build report named five differences between `Device` and
-//! `SectorIo`. Four are mechanical and [`DeviceIo`] absorbs them: the redundant
-//! sector count is gone from the trait as shipped, `flush` is spelled `sync` on
-//! both sides, `capabilities` is fallible on both sides, and
-//! `model`/`serial`/`is_physical_medium` all have homes in
-//! [`passes::DeviceIdentity`].
-//!
-//! The fifth is not mechanical and is the reason [`MediumProfile`] exists.
-//! `sentinelwipe_device::Support` has four states — `Claimed`, `NotClaimed`,
-//! `Unknown`, `Simulated` — and `passes::Capabilities` deliberately carries none of
-//! them. Flattening `Simulated` to a boolean would erase the word exactly where the
-//! certificate reads it, which is operator decision 3's failure case. So the
-//! overwrite path takes the flattened geometry it needs through `SectorIo`, and the
-//! sanitize path reads the device's own `Capabilities::support()` directly and
-//! copies the four-state spelling into the report field itself. Grep this file for
-//! `Support`: it is never converted to a `bool`.
-//!
-//! # What the driver refuses to claim
-//!
-//! * A firmware sanitize against anything that is not a real controller is
-//!   **simulated**, the word is in the operation name and in its own field, and
-//!   [`audit::audit`] demotes it to `UNVERIFIED_SIMULATED` even when the arithmetic
-//!   passes. The medium is never reported sanitized on the strength of a firmware
-//!   command; only a read-back-verified overwrite reaches
-//!   [`Outcome::VerifiedOnSample`] or [`Outcome::VerifiedWholeMedium`], and which of
-//!   the two it reaches is decided by how much of the medium was read back.
-//! * A sanitize command's effect on the medium is **measured**, not assumed: the
-//!   driver takes a strided digest of the medium before and after the command and
-//!   publishes both. A command that returns success having changed nothing says so
-//!   in `medium_unchanged`, alongside the timing verdict that says the same thing a
-//!   second way.
-//! * Sampled verification is published with its coverage fraction and its own
-//!   disclaimer sentence, carried verbatim from `verify.rs`.
-//!
-//! # Report
-//!
-//! [`JobReport::to_json`] emits `sentinelwipe.wipe.report/1`. It is a **sibling** of
-//! `docs/output_schema.md`, not an edit to it: the carve schema is frozen and this
-//! document does not touch it. It follows its conventions exactly — six decimal
-//! places on every float with no exceptions and no scientific notation, unsigned
-//! integers for bytes and counts, `null` as a real value meaning "not measured"
-//! and never a stand-in for zero, LF, two-space indent, trailing newline.
-
 pub mod audit;
 pub mod passes;
 pub mod telemetry;
@@ -93,32 +21,14 @@ use crate::passes::{
 use crate::telemetry::{EventSink, Telemetry};
 use crate::verify::{SamplingPolicy, VerifiedWipeReport, VerifyReport};
 
-/// The report schema this driver emits. A sibling of the frozen
-/// `sentinelwipe.carve.report/1`, never a replacement for it.
 pub const REPORT_SCHEMA: &str = "sentinelwipe.wipe.report/1";
 
-/// Default calibration probe: 32 MiB, clamped to the medium.
-///
-/// The probe exists so the behavioural audit judges the overwrite against a
-/// throughput sample the overwrite did not produce. It writes the **final pass's
-/// pattern** to the first sectors before any pass runs, so every byte it writes is
-/// overwritten again by pass 1 and the medium's final state — and therefore the
-/// certificate — is unchanged by its presence. 32 MiB because
-/// [`audit::MIN_PROBE_BYTES`] is 1 MiB and a probe near that floor measures the
-/// write-back cache; 32 MiB is the size the audit module's own measurements used.
 pub const DEFAULT_PROBE_BYTES: u64 = 32 << 20;
 
-/// Sectors in the strided sample that witnesses whether a firmware command changed
-/// the medium. Small on purpose: this is a witness, not a verification, and
-/// [`verify`] is where verification lives.
 pub const SANITIZE_WITNESS_SECTORS: u64 = 256;
 
-/// Domain separator for the medium witness digest.
 pub const WITNESS_DOMAIN: &[u8] = b"SENTINELWIPE/sanitize-witness/v1";
 
-/// What a firmware sanitize against anything that is not a real controller is, and
-/// is not. Reproduced in [`SanitizeReport::limits`] so it cannot be dropped between
-/// here and a slide.
 pub const SANITIZE_SIMULATION_LIMITS: &str = "\
 SIMULATED. No ATA SECURITY ERASE UNIT and no NVMe Sanitize command was issued, \
 because the target is not a physical controller. The operation was timed and \
@@ -127,28 +37,12 @@ by reading the medium back; it wrote nothing. Nothing in this block is evidence 
 that any data was destroyed. The data-destroying operation in this report is the \
 overwrite, and its evidence is the read-back verification.";
 
-/// Why a medium's overwrite says nothing about blocks the host cannot address.
-/// Applied when the detected medium reports hidden regions.
 pub const HIDDEN_REGION_LIMIT: &str = "\
 The detected medium has host-invisible regions (over-provisioning, remapped and \
 retired blocks). A full-capacity overwrite reaches every addressable sector and \
 no unaddressable one, so no Purge claim is made and none is supported by anything \
 in this report.";
 
-// ---------------------------------------------------------------------------
-// The adapter: the one place this crate names the device layer
-// ---------------------------------------------------------------------------
-
-/// Map a device-layer error onto the wipe layer's error, preserving the reason code.
-///
-/// [`DeviceError::Refused`] is the case that matters. [`WipeError`] has no `Refused`
-/// variant and `passes.rs` is not this task's file to change, so a refusal arrives as
-/// [`WipeError::Unsupported`] carrying the guard's own code as the first token of the
-/// string. That is lossy in the type and lossless in the text: a refusal that reaches
-/// an audit line still carries the same code as the matching row of
-/// `fixtures/guard.py`'s red-team table, and [`refusal_code`] recovers it. Stated
-/// here rather than papered over — it is the one place the two error vocabularies do
-/// not line up.
 pub fn map_device_error(op: &'static str, lba: u64, e: DeviceError) -> WipeError {
     match e {
         DeviceError::Refused { code, detail } => {
@@ -193,11 +87,6 @@ pub fn map_device_error(op: &'static str, lba: u64, e: DeviceError) -> WipeError
     }
 }
 
-/// Recover a guard reason code from a [`WipeError`] that carries one.
-///
-/// The inverse of the lossy arm of [`map_device_error`]. Returns the leading
-/// `DENY_*` / `ALLOW_*` / `DEVICE_*` token of an `Unsupported` message, or `None`
-/// when the error is not a refusal.
 pub fn refusal_code(e: &WipeError) -> Option<&str> {
     match e {
         WipeError::Unsupported(s) => {
@@ -212,7 +101,6 @@ pub fn refusal_code(e: &WipeError) -> Option<&str> {
     }
 }
 
-/// Four variants to four variants, same wire spellings on both sides.
 pub fn map_medium(kind: MediumKind) -> Medium {
     match kind {
         MediumKind::Rotational => Medium::Rotational,
@@ -222,14 +110,6 @@ pub fn map_medium(kind: MediumKind) -> Medium {
     }
 }
 
-/// A [`Device`] presented as the [`SectorIo`] the passes and verification take.
-///
-/// It converts and it does not decide. Every value it produces comes from a
-/// device-layer accessor: `model` and `serial` from `Identity::model_or_unknown()`
-/// and `serial_or_unknown()`, geometry from the fallible `Device::capabilities`,
-/// medium from a four-arm match. Nothing here invents a number, and in particular
-/// nothing here substitutes a plausible sector size for one the device did not
-/// report — that is why `capabilities` is fallible on both sides.
 pub struct DeviceIo<D: Device> {
     inner: D,
 }
@@ -251,11 +131,6 @@ impl<D: Device> DeviceIo<D> {
         self.inner
     }
 
-    /// The device's own capability report, four-state [`Support`] intact.
-    ///
-    /// The sanitize path reads this rather than [`SectorIo::capabilities`], because
-    /// the flattened form does not carry `Simulated` and operator decision 3 puts
-    /// that word in the field itself.
     pub fn device_capabilities(&self) -> Result<dev::Capabilities, WipeError> {
         Device::capabilities(&self.inner).map_err(|e| map_device_error("capabilities", 0, e))
     }
@@ -301,11 +176,6 @@ impl<D: Device> SectorIo for DeviceIo<D> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Medium detection and method dispatch
-// ---------------------------------------------------------------------------
-
-/// What the device said it is. Every field is copied from a device-layer accessor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediumProfile {
     pub kind: String,
@@ -316,12 +186,8 @@ pub struct MediumProfile {
     pub is_physical_medium: bool,
     pub medium: Medium,
     pub medium_kind: MediumKind,
-    /// `MediumKind::has_hidden_regions()`. True for solid-state and for unknown,
-    /// and it is what forces [`HIDDEN_REGION_LIMIT`] onto the report.
     pub has_hidden_regions: bool,
     pub sector_bytes: u32,
-    /// `None` when the device did not determine one. Never filled in with the
-    /// logical size — that substitution would be a fabricated measurement.
     pub physical_sector_bytes: Option<u32>,
     pub sector_count: u64,
     pub capacity_bytes: u64,
@@ -358,7 +224,6 @@ impl MediumProfile {
         })
     }
 
-    /// One line for a header: `image file unknown unknown [image]`.
     pub fn describe(&self) -> String {
         format!(
             "{} {} {} [{}]",
@@ -370,31 +235,15 @@ impl MediumProfile {
     }
 }
 
-/// The method the driver chose, and the sentence that says why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Dispatch {
     pub method: Method,
-    /// The firmware primitive appropriate to this medium, or `None` when there is
-    /// none. `None` is not a failure: on magnetic media and on an image file there
-    /// is no controller primitive that would add anything to a full-capacity
-    /// overwrite, and attempting one to have something to print would be theatre.
     pub sanitize: Option<SanitizePrimitive>,
-    /// Why. Goes on the certificate verbatim.
     pub rationale: String,
-    /// `true` when the caller named the method rather than the driver detecting it.
     pub method_was_requested: bool,
-    /// `true` when the caller named the sanitize primitive.
     pub sanitize_was_requested: bool,
 }
 
-/// Choose by detected medium, with the caller's explicit choices overriding.
-///
-/// The dispatch is deliberately small, because the honest version is small. Every
-/// medium's overwrite is [`Method::SeededRandom`]: one full-capacity pass, the same
-/// NIST SP 800-88 category as three, and there is no measurement anywhere in this
-/// project supporting a claim that a second pass removes residue a first did not.
-/// What actually varies by medium is whether a *controller* primitive is the right
-/// operation, and that is what the `sanitize` field carries.
 pub fn dispatch(
     profile: &MediumProfile,
     transport: Transport,
@@ -475,19 +324,6 @@ pub fn dispatch(
     }
 }
 
-// ---------------------------------------------------------------------------
-// The medium witness: did the command actually touch anything?
-// ---------------------------------------------------------------------------
-
-/// A strided digest over the medium, used to witness whether an operation changed
-/// it.
-///
-/// It reads `sectors` sectors spread evenly across the whole capacity and absorbs
-/// them, with the domain string and the geometry, into SHAKE-128. It is a
-/// **witness, not a verification**: it proves a change where one happened and it
-/// cannot prove the absence of one. The verification in this project is
-/// [`verify::verify_pass`] and [`verify::verify_pass_exhaustive`], and the coverage
-/// each achieved is published per run.
 pub fn medium_witness<D>(io: &mut D, sectors: u64) -> Result<String, WipeError>
 where
     D: SectorIo + ?Sized,
@@ -507,7 +343,6 @@ where
     k.absorb(&n.to_le_bytes());
     let mut buf = vec![0u8; caps.sector_bytes as usize];
     for i in 0..n {
-        // Evenly spread, first and last sector always included.
         let lba = if n == 1 {
             0
         } else {
@@ -522,91 +357,36 @@ where
     Ok(hex(&out))
 }
 
-// ---------------------------------------------------------------------------
-// The sanitize path — simulated on anything that is not a real controller
-// ---------------------------------------------------------------------------
-
-/// What one firmware sanitize attempt did, and what it did not.
-///
-/// Every field that could be read as a sanitization claim is qualified in the field
-/// itself, per operator decision 3: `operation` carries the word `simulated`,
-/// `device_support` carries the four-state [`Support`] spelling straight from the
-/// device's own capability report, and `limits` carries
-/// [`SANITIZE_SIMULATION_LIMITS`] verbatim.
 #[derive(Debug, Clone)]
 pub struct SanitizeReport {
     pub primitive: &'static str,
-    /// The operation name a human reads. Contains `simulated` whenever
-    /// `simulated` is true, so no consumer can render the name without the caveat.
     pub operation: String,
-    /// True whenever the device's own [`Support`] for this primitive is not
-    /// [`Support::Claimed`]. Never inferred from the medium and never set by hand.
     pub simulated: bool,
-    /// `Support::as_str()`: `claimed`, `not-claimed`, `unknown` or `simulated`.
-    /// There is no `verified` spelling in that vocabulary by construction — a
-    /// capability report taken beforehand cannot assert that a sanitize worked.
     pub device_support: &'static str,
     pub claim_source: &'static str,
-    /// What the command returned. Recorded for the reader, and read by nothing.
     pub device_reported_success: bool,
     pub measured_ns: u128,
-    /// The capacity the command claimed to have sanitized.
     pub bytes_claimed: u64,
     pub witness_before: String,
     pub witness_after: String,
-    /// Measured, not assumed: the strided witness digest is identical before and
-    /// after. On a simulated command this is `true` and is the second, independent
-    /// statement that nothing was destroyed — the first being the timing verdict.
     pub medium_unchanged: bool,
-    /// What the driver did with the result. A sanitize is never the basis of this
-    /// report's sanitization claim; see [`Outcome`].
     pub disposition: &'static str,
     pub limits: &'static str,
     pub audit: AuditReport,
-    /// The operation exactly as it was presented to the audit, kept so the verdict
-    /// can be retaken against a stronger baseline later in the job without
-    /// re-measuring anything. [`SanitizeReport::reaudit`] is the only user.
     operation_record: Operation,
 }
 
 impl SanitizeReport {
-    /// Retake the verdict against a baseline that did not exist when the command
-    /// ran.
-    ///
-    /// The sanitize is attempted **before** the overwrite passes, so at the moment
-    /// it is timed the only measured throughput available is the calibration probe.
-    /// By the end of the job a stronger sample exists — a completed pass over this
-    /// same medium — and this retakes the verdict against the faster of the two.
-    ///
-    /// Faster baseline means a *smaller* expected minimum, which makes the detector
-    /// **harder** to fire, so this can only ever move a verdict toward the device's
-    /// favour. Nothing is re-measured: `measured_ns` is the figure the stopwatch
-    /// recorded and it is not touched.
     pub fn reaudit(&mut self, baseline: &Baseline) {
         self.audit = audit(&self.operation_record, Some(baseline));
         self.disposition = disposition_for(&self.audit, self.simulated);
     }
 
-    /// The baseline source the shipped verdict was actually taken against.
-    /// Never a source the audit did not use.
     pub fn baseline_source(&self) -> Option<&'static str> {
         self.audit.baseline.as_ref().map(|b| b.source().as_str())
     }
 }
 
-/// What the driver does with a sanitize result. Extracted so a verdict retaken
-/// against a stronger baseline cannot leave a stale sentence beside it.
-///
-/// **This matches on the verdict, not on a boolean narrowing of it.** `audit.rs`'s
-/// module doc is explicit that "we could not tell" and "we caught it lying" must not
-/// land in the same bucket, and `disposition` is the field a certificate reader
-/// actually reads — so collapsing five states to two here would undo the typed
-/// verdict above it. The measured defect this replaces: an `else` branch that
-/// asserted "the command returned success faster than this device's own measured
-/// throughput makes physically possible" for `UNVERIFIED_NO_BASELINE`, where no
-/// throughput was measured at all, and for `NOT_APPLICABLE`, where duration carries
-/// no information about the operation. Both sentences were fabricated measurement
-/// claims, which is CLAUDE.md rules 1 and 2 in one line.
 fn disposition_for(report: &AuditReport, simulated: bool) -> &'static str {
     if simulated {
         return "NOT_A_SANITIZATION_CLAIM: no firmware command was transmitted, so the \
@@ -644,29 +424,6 @@ fn disposition_for(report: &AuditReport, simulated: bool) -> &'static str {
     }
 }
 
-/// Issue the firmware command, or the honest analogue of it.
-///
-/// **The return value says whether a command was actually transmitted**, and that
-/// — not the device's capability report — is what makes a record simulated.
-/// `Ok(None)` means no primitive left this process; `Ok(Some(rc))` would carry a
-/// real controller's return code.
-///
-/// There is no ioctl path in this build, on any platform, so this returns `None`
-/// for every device. That is the honest answer and it is why the value is derived
-/// here rather than inferred upstream: the previous version set `simulated` from
-/// `Support::Claimed`, so a `LinuxBlock` device whose ATA IDENTIFY claimed the
-/// primitive produced a record reading `simulated: false` and
-/// `device_reported_success: true` about a command that was never issued, four
-/// fields above a `limits` string beginning "SIMULATED. No ATA SECURITY ERASE UNIT
-/// and no NVMe Sanitize command was issued". One record cannot say both.
-///
-/// What it does instead is the strongest honest analogue, and the caller measures
-/// it rather than trusting this sentence: the capability report is read and one
-/// sector of the medium is read as a status read would be. It writes nothing.
-///
-/// When an ioctl path is written, it returns `Some(rc)` on the branch that actually
-/// transmitted, and every `simulated` field in the report follows from that one
-/// value.
 fn issue_sanitize<D: Device>(
     io: &mut DeviceIo<D>,
     _primitive: SanitizePrimitive,
@@ -674,25 +431,9 @@ fn issue_sanitize<D: Device>(
     let caps = io.device_capabilities()?;
     let mut status = vec![0u8; caps.logical_sector_bytes as usize];
     SectorIo::read_sectors(io, 0, &mut status)?;
-    // No controller command was transmitted. Rule 5 exists because a return code is
-    // worth nothing; a return code for a command that was never sent is worth less.
     Ok(None)
 }
 
-/// The workload a primitive presents to the behavioural audit.
-///
-/// Key destruction does not move the medium's bytes, so its duration is not a
-/// function of capacity. Judging a crypto erase against full-capacity host write
-/// time reports every honest one as a timing lie — measured: an NVMe SANITIZE
-/// (crypto erase) against a 256 MiB medium and an honest 1.07 GB/s baseline came
-/// back `UNVERIFIED_TIMING` at 292 ns against an expected minimum of 240,000,000 ns,
-/// for an operation that is *supposed* to be instant. [`Workload::CryptoErase`] is
-/// what `audit.rs` wrote for exactly this case and it was constructed nowhere
-/// outside that module's own tests until this mapping existed.
-///
-/// Everything else erases media and is timed. TRIM/DEALLOCATE stays on the timed
-/// side deliberately: it is a mapping change whose relationship to the bytes is
-/// device-specific, and the conservative direction is to keep the detector armed.
 fn workload_for(primitive: SanitizePrimitive, capacity_bytes: u64) -> Workload {
     match primitive {
         SanitizePrimitive::AtaSanitizeCryptoScramble
@@ -702,7 +443,6 @@ fn workload_for(primitive: SanitizePrimitive, capacity_bytes: u64) -> Workload {
     }
 }
 
-/// Human name for a primitive, carrying `(simulated)` when it is.
 fn sanitize_operation_name(p: SanitizePrimitive, simulated: bool) -> String {
     let base = match p {
         SanitizePrimitive::AtaSecureErase => "ATA SECURITY ERASE UNIT",
@@ -724,13 +464,6 @@ fn sanitize_operation_name(p: SanitizePrimitive, simulated: bool) -> String {
     }
 }
 
-/// Attempt one firmware sanitize, time it, witness its effect, and audit it.
-///
-/// The order is the argument. The witness digest is taken **before** the command so
-/// a command that did change the medium cannot be reported as one that did not; the
-/// command is timed with nothing else inside the stopwatch; the witness is taken
-/// again; and only then is the duration handed to [`audit::audit`], which has never
-/// seen the return code.
 pub fn attempt_sanitize<D: Device>(
     io: &mut DeviceIo<D>,
     primitive: SanitizePrimitive,
@@ -748,15 +481,7 @@ pub fn attempt_sanitize<D: Device>(
     let measured_ns = t.elapsed().as_nanos();
     let witness_after = medium_witness(io, SANITIZE_WITNESS_SECTORS)?;
 
-    // SIMULATED IS A PROPERTY OF WHAT WAS SENT, NOT OF WHAT THE DEVICE CLAIMS.
-    // `support` is recorded beside it — a device may claim a primitive we still
-    // cannot issue — but it does not decide this field. Operator decision 3: the
-    // word `simulated` belongs in the field itself, and it belongs there whenever
-    // no command left this process.
     let simulated = transmitted.is_none();
-    // The return code, when there was one. A simulated command has none, and the
-    // `true` below is the analogue's, published beside `simulated: true` and
-    // `return_code_trusted: false` so it cannot be read as a device's answer.
     let ok = transmitted.unwrap_or(true);
 
     let operation = sanitize_operation_name(primitive, simulated);
@@ -797,11 +522,6 @@ pub fn attempt_sanitize<D: Device>(
     })
 }
 
-// ---------------------------------------------------------------------------
-// The calibration probe
-// ---------------------------------------------------------------------------
-
-/// A write-throughput measurement the audited operation did not produce.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProbeReport {
     pub bytes: u64,
@@ -809,26 +529,11 @@ pub struct ProbeReport {
     pub duration_ns: u128,
     pub sync_ns: u128,
     pub throughput_bytes_per_s: f64,
-    /// The pattern written, which is the *final* pass's pattern. Every byte the
-    /// probe writes is overwritten again by pass 1, so the medium's final state and
-    /// the certificate are identical with and without it. Recorded so that claim can
-    /// be checked rather than believed.
     pub pattern: &'static str,
     pub admitted: bool,
     pub refusal: Option<&'static str>,
 }
 
-/// Write `bytes` of the final pass's pattern to the head of the medium and time it.
-///
-/// This runs **before** any pass, and it is the reason the behavioural audit's
-/// judgement of the overwrite is not self-referential. Auditing an overwrite against
-/// a baseline computed from that same overwrite gives a ratio of exactly 1.0 by
-/// construction and proves nothing; the probe is a separate measurement of the same
-/// I/O path, so a fabricated pass duration cannot move it.
-///
-/// It is destructive, and that is not a cost here: it writes only to a target the
-/// caller has already authorized for a full-capacity overwrite, and every byte it
-/// writes is overwritten again by pass 1.
 pub fn calibration_probe<D>(
     io: &mut D,
     cfg: &WipeConfig,
@@ -892,18 +597,9 @@ where
     })
 }
 
-// ---------------------------------------------------------------------------
-// The job
-// ---------------------------------------------------------------------------
-
-/// How the medium was verified.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerifyMode {
-    /// Read back `sectors_per_mib` sectors per MiB. Fast, and supports a claim only
-    /// about the sectors it read.
     Sampled,
-    /// Read back every sector. The only mode that supports a statement about the
-    /// whole medium.
     Exhaustive,
 }
 
@@ -916,35 +612,20 @@ impl VerifyMode {
     }
 }
 
-/// Everything the driver needs that is not the device and not the sink.
 #[derive(Debug, Clone)]
 pub struct JobSpec {
-    /// The run identifier the pattern seed is derived from. Same id, same seed,
-    /// same bytes on the medium — CLAUDE.md rule 6.
     pub run_id: String,
-    /// `None` dispatches by detected medium.
     pub method: Option<Method>,
-    /// `None` dispatches by detected medium. `Some` forces an attempt, which on a
-    /// medium that does not claim the primitive is simulated and labelled so.
     pub sanitize: Option<SanitizePrimitive>,
     pub verify_mode: VerifyMode,
     pub sampling: SamplingPolicy,
-    /// Whole-medium Shannon entropy before and after. Two full reads of the medium;
-    /// off for a job that does not need the figure.
     pub measure_entropy: bool,
     pub probe_bytes: u64,
-    /// Run the per-object crypto-erase demonstration over the head of the medium
-    /// **before** the wipe, so it operates on real plaintext.
     pub crypto_erase_demo_bytes: u64,
     pub telemetry_period: Option<Duration>,
-    /// The target as the operator named it, and as the write authority resolved it.
-    /// Supplied by the caller because the driver holds a `Device` and a `Device` is
-    /// not required to have a path.
     pub target_named: String,
     pub target_resolved: String,
-    /// The write authority's own allow code and policy payload, when there is one.
     pub authorization: Option<Authorization>,
-    /// The exact command that reproduces this run.
     pub command: String,
 }
 
@@ -972,42 +653,18 @@ impl JobSpec {
     }
 }
 
-/// The write authority's evidence, copied onto the report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Authorization {
-    /// The guard's own allow code, e.g. `ALLOW_FILE`.
     pub decision_code: String,
-    /// `policy-payload:<bytes>`. Deliberately **not** a digest: `guard.rs` carries
-    /// no hash primitive, so it publishes the exact bytes `fixtures/guard.py` feeds
-    /// to SHA-256. A consumer holding SHA-256 hashes the part after the prefix and
-    /// gets the digest the Python guard publishes. Never print this as if it were
-    /// one.
     pub policy_digest: String,
     pub roots: Vec<String>,
     pub require_confirmation: bool,
 }
 
-/// The job's one-line answer, **carrying the coverage its evidence had**.
-///
-/// Three states, not two, and the reason is the same one `audit.rs` gives for its
-/// five-state verdict. `outcome.code` is the one structured field a UI or a
-/// certificate template binds a green light to, and before this split a 0.1953%
-/// sampled run and a 100% exhaustive run produced byte-identical outcome fields:
-/// `OVERWRITE_VERIFIED_BY_READ_BACK`, `sanitized: true`, exit 0, for both. "Sanitize"
-/// is a whole-medium word in NIST SP 800-88 vocabulary, and a whole-medium impression
-/// formed from a structured field backed by 1,024 of 524,288 sectors is exactly the
-/// over-claim CLAUDE.md rule 1 exists to prevent. The prose said so correctly; the
-/// field did not, and a consumer reads the field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
-    /// Every sector of the medium was read back after every pass and every one
-    /// carried its pattern. The only outcome that supports a whole-medium statement.
     VerifiedWholeMedium,
-    /// Every pass was written and every *sampled* sector carried its pattern. A
-    /// statement about the sectors read and about nothing else; the coverage
-    /// fraction and the size of the largest unsampled run are published beside it.
     VerifiedOnSample,
-    /// The passes ran; at least one read-back did not confirm its pattern.
     NotVerified,
 }
 
@@ -1020,21 +677,15 @@ impl Outcome {
         }
     }
 
-    /// Whether every pass's read-back confirmed its pattern. Deliberately NOT the
-    /// whole of `outcome`: it says the evidence held, never how much of the medium
-    /// the evidence covered.
     pub fn passes_verified(&self) -> bool {
         !matches!(self, Outcome::NotVerified)
     }
 
-    /// True only for [`Outcome::VerifiedWholeMedium`]. This is the predicate a
-    /// consumer wanting a whole-medium claim must read.
     pub fn is_whole_medium_claim(&self) -> bool {
         matches!(self, Outcome::VerifiedWholeMedium)
     }
 }
 
-/// Everything one job produced.
 #[derive(Debug, Clone)]
 pub struct JobReport {
     pub run_id: String,
@@ -1050,36 +701,12 @@ pub struct JobReport {
     pub crypto_erase: Option<crate::passes::CryptoEraseReport>,
     pub wipe: VerifiedWipeReport,
     pub verify_mode: VerifyMode,
-    /// The audit of the overwrite job, judged against the calibration probe — a
-    /// sample the overwrite did not produce.
     pub overwrite_audit: AuditReport,
-    /// The baseline the sanitize was judged against: the fastest of the calibration
-    /// probe and the first completed overwrite pass. `None` when neither sample was
-    /// admissible, in which case the audit reports `UNVERIFIED_NO_BASELINE` and
-    /// never `VERIFIED_TIMING`.
     pub sanitize_baseline_source: Option<&'static str>,
-    /// True when a completed overwrite pass existed but was NOT promoted into the
-    /// sanitize's baseline, because `overwrite_audit` did not verify it. A sample
-    /// this report calls physically impossible may not become this report's
-    /// definition of physically possible.
     pub observed_pass_baseline_withheld: bool,
     pub telemetry: telemetry::Summary,
     pub telemetry_period_ms: u64,
-    /// The longest stretch of this job during which the write loop was, by
-    /// construction, not writing: a pass's closing `fsync` plus the read-back
-    /// sweep that follows it. Measured, and published beside `max_gap_ms` because
-    /// it is the explanation for it.
-    ///
-    /// A telemetry frame is emitted from a `wrote` call, so nothing can emit
-    /// during a blocking `fsync` or during a verification sweep that writes
-    /// nothing. Emitting one anyway would be a progress bar rather than an
-    /// instrument, which `telemetry.rs` refuses on purpose. So the 20 Hz floor is
-    /// a property of the *write* stream, and a gap that spans one of these
-    /// intervals is not a stalled engine. This field is what lets a reader tell
-    /// the two apart instead of taking that on trust.
     pub longest_uninstrumented_interval_ns: u128,
-    /// `None` when the entropy measurement was not asked for. Never `0.0`: a zero is
-    /// what a zero-fill measures, and the two must be distinguishable.
     pub entropy_before: Option<f64>,
     pub entropy_after: Option<f64>,
     pub entropy_bytes_measured: Option<u64>,
@@ -1093,13 +720,7 @@ impl JobReport {
         self.wipe.wipe.throughput_bytes_per_s()
     }
 
-    /// The coverage of the least-verified pass. The figure a whole-report claim has
-    /// to rest on, since a three-pass job is no better verified than its weakest
-    /// read-back.
     pub fn min_coverage_fraction(&self) -> f64 {
-        // No verification at all is 0.0 coverage, never 1.0. The empty case is the
-        // one where an accidental identity element would publish a whole-medium
-        // figure for a medium nothing read.
         if self.wipe.verifications.is_empty() {
             return 0.0;
         }
@@ -1112,28 +733,6 @@ impl JobReport {
     }
 }
 
-/// Run one job end to end against a device, through the [`Device`] trait only.
-///
-/// The order is the argument, and every step of it is measured:
-///
-/// 1. **Read the medium's identity and geometry.** A capability report that fails
-///    its own invariants is refused rather than believed.
-/// 2. **Whole-medium entropy, before.** Over every byte, with the same estimator
-///    `fixtures/corpus.py` used for the manifest's figure, so the two may be
-///    subtracted.
-/// 3. **Crypto-erase demonstration**, if asked for, over real plaintext read from
-///    the head of the medium. Read-only, and labelled a demonstration in every field
-///    it emits.
-/// 4. **Calibration probe.** A write-throughput sample the overwrite did not
-///    produce, laying down the final pass's pattern so pass 1 erases it again.
-/// 5. **Firmware sanitize**, if the dispatch selected or the caller named one.
-///    Timed, witnessed by a strided digest of the medium before and after, and
-///    audited. Simulated on anything that is not a real controller.
-/// 6. **The overwrite**, pass by pass, with telemetry, each pass read back before
-///    the next overwrites it.
-/// 7. **Whole-medium entropy, after.**
-/// 8. **The audits.** The overwrite against the probe; the sanitize against the
-///    faster of the probe and the first completed pass.
 pub fn run_job<D, S>(
     device: D,
     spec: &JobSpec,
@@ -1146,7 +745,6 @@ where
     let t_job = Instant::now();
     let mut io = DeviceIo::new(device);
 
-    // 1 --------------------------------------------------------------- profile
     let profile = MediumProfile::read(&io)?;
     let transport = io.device_identity().transport;
     if !profile.writable {
@@ -1158,7 +756,6 @@ where
     let disp = dispatch(&profile, transport, spec.method, spec.sanitize);
     let cfg = WipeConfig::new(disp.method, spec.seed());
 
-    // 2 -------------------------------------------------------- entropy before
     let (entropy_before, entropy_bytes) = if spec.measure_entropy {
         let (e, n) = verify::medium_entropy(&mut io, cfg.chunk_sectors_max)?;
         (Some(e), Some(n))
@@ -1166,7 +763,6 @@ where
         (None, None)
     };
 
-    // 3 ------------------------------------------------- crypto-erase demo
     let crypto_erase = if spec.crypto_erase_demo_bytes > 0 {
         let sb = profile.sector_bytes as u64;
         let sectors = (spec.crypto_erase_demo_bytes / sb)
@@ -1193,7 +789,6 @@ where
         None
     };
 
-    // 4 ----------------------------------------------------- calibration probe
     let probe = calibration_probe(&mut io, &cfg, spec.probe_bytes)?;
     let probe_sample = ThroughputSample::new(
         probe.bytes,
@@ -1203,7 +798,6 @@ where
     let probe_baseline = probe_sample.as_ref().ok().copied().map(Baseline::from_sample);
     let probe_refusal = probe_sample.as_ref().err().copied();
 
-    // 5 ----------------------------------------------------- firmware sanitize
     let sanitize = match disp.sanitize {
         Some(p) => Some(attempt_sanitize(
             &mut io,
@@ -1214,7 +808,6 @@ where
         None => None,
     };
 
-    // 6 ------------------------------------------------------------- overwrite
     let tspec = cfg.telemetry_spec(&SectorIo::identify(&io), &SectorIo::capabilities(&io)?);
     let mut tm = Telemetry::start(tspec, sink, spec.telemetry_period);
     let wipe = match spec.verify_mode {
@@ -1228,8 +821,6 @@ where
             return Err(e);
         }
     };
-    // The outcome carries the coverage of its own evidence. `all_passes_verified`
-    // says the read-back held; the verify mode says how much of the medium it read.
     let outcome = if !wipe.all_passes_verified {
         Outcome::NotVerified
     } else if spec.verify_mode == VerifyMode::Exhaustive {
@@ -1242,14 +833,12 @@ where
         Outcome::NotVerified => "aborted:read-back did not confirm every pass",
     });
 
-    // 7 --------------------------------------------------------- entropy after
     let entropy_after = if spec.measure_entropy {
         Some(verify::medium_entropy(&mut io, cfg.chunk_sectors_max)?.0)
     } else {
         None
     };
 
-    // 8 -------------------------------------------------------------- audits
     let overwrite_op = Operation {
         label: format!("host overwrite: {}", disp.method.label()),
         workload: Workload::Overwrite {
@@ -1268,24 +857,6 @@ where
         ),
     };
 
-    // The sanitize was judged against the probe alone, because it ran before the
-    // passes did. By now a stronger sample exists — a completed pass over this same
-    // medium — so the verdict is retaken against the faster of the two and the
-    // report names the baseline the shipped verdict actually used.
-    //
-    // THE PROMOTION IS GATED ON THE OVERWRITE'S OWN VERDICT, and that gate is not
-    // decoration. Promoting unconditionally let the audit's yardstick for
-    // "physically possible" be a sample the same report had just declared
-    // physically impossible. Measured on an adversarial device that slows host
-    // writes only while the short calibration probe runs: `audit.overwrite`
-    // UNVERIFIED_TIMING at 97,955,750 ns against 4,580,305,000 ns, and then
-    // `audit.sanitize` VERIFIED_TIMING for a 12 ms firmware command that the
-    // honestly measured probe alone rates at a ratio of 0.002620 — one certificate
-    // calling pass 1 implausible and then using pass 1 as the definition of
-    // plausible. This module's threat model is "never trust the drive"; a sample
-    // taken through a device that controls its own timing is not evidence, and a
-    // discarded sample only ever leaves the detector MORE eager, which is the safe
-    // direction.
     let mut strongest = probe_baseline;
     let mut observed_pass_baseline_withheld = false;
     if let Some(p0) = wipe.wipe.passes.first() {
@@ -1319,12 +890,6 @@ where
     ];
     if spec.verify_mode == VerifyMode::Sampled {
         limits.push(crate::verify::SAMPLE_POSITIONS_ARE_PUBLIC.to_string());
-        // The size of the blind spot, measured on this run's own plan rather than
-        // left for a reader to derive from a coverage fraction — or to discover on
-        // stage. A whole planted file can sit between two sample points: measured
-        // on out/fixture.img, a 208,084-byte file restored into an otherwise wiped
-        // image produced PATTERN_CONFIRMED_ON_SAMPLE with zero mismatches while the
-        // project's own carver recovered it byte-exact from the same image.
         let gap = wipe
             .verifications
             .iter()
@@ -1358,9 +923,6 @@ where
         limits.push(c.limits.to_string());
     }
 
-    // The longest interval the driver itself imposed between two `wrote` calls:
-    // a pass's sync, plus the read-back sweep that follows it before the next
-    // pass begins. Measured from the two reports rather than timed separately.
     let mut longest_uninstrumented_interval_ns = 0u128;
     for (i, pass) in wipe.wipe.passes.iter().enumerate() {
         let verify_ns = wipe
@@ -1407,12 +969,6 @@ where
     Ok((report, io.into_inner()))
 }
 
-/// [`verify::wipe_verified`] with the exhaustive read-back instead of the sampled
-/// one.
-///
-/// Same interleaving and the same reason for it: pass *k* is read back before pass
-/// *k+1* overwrites it, so a three-pass method is not certified on the evidence of
-/// its last pass alone.
 pub fn wipe_verified_exhaustive<D, S>(
     io: &mut D,
     cfg: &WipeConfig,
@@ -1463,15 +1019,6 @@ where
     })
 }
 
-// ---------------------------------------------------------------------------
-// The report, on the wire
-// ---------------------------------------------------------------------------
-
-/// Six decimal places, always. `docs/output_schema.md` §2, and there are no
-/// exceptions: not for zero, not for an integer-valued float, not for a large one.
-/// NaN and the infinities cannot reach a report — they are mapped to `0.000000`
-/// here, because a certificate containing `NaN` is a defect and a reader comparing
-/// it against a threshold would be comparing against nothing.
 pub fn fmt6(v: f64) -> String {
     if v.is_nan() || v.is_infinite() {
         return "0.000000".to_string();
@@ -1479,19 +1026,6 @@ pub fn fmt6(v: f64) -> String {
     format!("{:.6}", v)
 }
 
-/// Six decimal places, **truncated toward zero** rather than rounded. For the
-/// entropy fields only, and the reason is a measured defect.
-///
-/// A three-pass wipe measured 7.999999501350531 bits/byte, which [`fmt6`] rounds to
-/// `8.000000` — the unattainable theoretical maximum, printed for a value that is
-/// not it. Worse, the report invites the reader to subtract: `delta` was computed at
-/// full precision, so the document stated 8.000000 − 7.061690 = 0.938309, which is
-/// false by 1e-6. Entropy is the one field where the seventh decimal carries the
-/// meaning — "climbed to 8.0" and "climbed to within 5e-7 of 8.0" are different
-/// claims, and only the second one was measured. Truncation makes the printed value
-/// a lower bound on the measurement, which is the direction that cannot over-claim,
-/// and `delta` is derived from the two printed values so the subtraction a reader is
-/// invited to do checks out exactly.
 pub fn fmt6_trunc(v: f64) -> String {
     if v.is_nan() || v.is_infinite() {
         return "0.000000".to_string();
@@ -1500,15 +1034,10 @@ pub fn fmt6_trunc(v: f64) -> String {
     format!("{:.6}", scaled)
 }
 
-/// Nanoseconds as six-place seconds. Emitted **alongside** the integer, never
-/// instead of it: below a microsecond the seconds field prints `0.000000` and the
-/// integer is what carries the evidence.
 fn ns_s(ns: u128) -> String {
     fmt6(ns as f64 / 1_000_000_000.0)
 }
 
-/// JSON string escaping, `ensure_ascii` style so the output is byte-identical
-/// whatever the locale.
 pub fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -1548,8 +1077,6 @@ fn opt_s(v: Option<&str>) -> String {
 }
 
 impl JobReport {
-    /// The notes block. Load-bearing, not decoration: every one of these is a
-    /// statement a reader needs in order not to over-read a number above it.
     pub fn notes(&self) -> Vec<String> {
         let mut n = vec![
             "Produced by a real wipe run. Every number in this file was measured \
@@ -1624,9 +1151,6 @@ impl JobReport {
                 gap * self.wipe.wipe.sector_bytes as u64,
             ));
         }
-        // The expected minimum is a function of an operator-chosen flag, and the
-        // direction and size of that dependence is measured rather than left for a
-        // reader to infer it is a property of the device.
         n.push(format!(
             "`audit.overwrite.expected_min_duration_ns` is derived from the calibration \
              probe, whose size is the operator-chosen --probe-bytes ({} B here). The \
@@ -1644,8 +1168,6 @@ impl JobReport {
                     fmt6(r / crate::audit::PLAUSIBILITY_THRESHOLD),
                     fmt6(crate::audit::PLAUSIBILITY_THRESHOLD),
                 ),
-                // No ratio exists, and a 0.000000 printed here would be a
-                // measurement claim about a measurement that was never taken.
                 None => format!(
                     "This run has no overwrite ratio at all: the probe was not \
                      admitted as a baseline ({}), so `audit.overwrite` is \
@@ -1680,13 +1202,11 @@ impl JobReport {
         n
     }
 
-    /// One JSON document, `sentinelwipe.wipe.report/1`.
     pub fn to_json(&self) -> String {
         let mut s = String::with_capacity(8192);
         s.push_str("{\n");
         s.push_str(&format!("  \"schema\": {},\n", json_str(REPORT_SCHEMA)));
 
-        // ---- provenance
         s.push_str("  \"provenance\": {\n");
         s.push_str("    \"producer\": \"core/wipe/src/lib.rs::run_job\",\n");
         s.push_str(&format!("    \"command\": {},\n", json_str(&self.command)));
@@ -1702,7 +1222,6 @@ impl JobReport {
         }
         s.push_str("    ]\n  },\n");
 
-        // ---- run
         s.push_str("  \"run\": {\n");
         s.push_str(&format!("    \"run_id\": {},\n", json_str(&self.run_id)));
         s.push_str(&format!("    \"seed_hex\": {},\n", json_str(&self.seed_hex)));
@@ -1721,7 +1240,6 @@ impl JobReport {
         ));
         s.push_str("  },\n");
 
-        // ---- authorization
         match &self.authorization {
             Some(a) => {
                 s.push_str("  \"authorization\": {\n");
@@ -1756,7 +1274,6 @@ impl JobReport {
             None => s.push_str("  \"authorization\": null,\n"),
         }
 
-        // ---- device
         let p = &self.profile;
         s.push_str("  \"device\": {\n");
         s.push_str(&format!("    \"kind\": {},\n", json_str(&p.kind)));
@@ -1793,7 +1310,6 @@ impl JobReport {
         s.push_str(&format!("    \"writable\": {}\n", p.writable));
         s.push_str("  },\n");
 
-        // ---- dispatch
         let d = &self.dispatch;
         s.push_str("  \"dispatch\": {\n");
         s.push_str(&format!(
@@ -1835,10 +1351,7 @@ impl JobReport {
         ));
         s.push_str("  },\n");
 
-        // ---- entropy
         s.push_str("  \"entropy_bits_per_byte\": {\n");
-        // Truncated, not rounded, and `delta` is the difference of the two printed
-        // values — see fmt6_trunc. The three numbers in this block subtract exactly.
         let e_before = self.entropy_before.map(|v| fmt6_trunc(v));
         let e_after = self.entropy_after.map(|v| fmt6_trunc(v));
         s.push_str(&format!(
@@ -1874,7 +1387,6 @@ impl JobReport {
         );
         s.push_str("  },\n");
 
-        // ---- probe
         let pr = &self.probe;
         s.push_str("  \"calibration_probe\": {\n");
         s.push_str(&format!("    \"bytes\": {},\n", pr.bytes));
@@ -1901,7 +1413,6 @@ impl JobReport {
         );
         s.push_str("  },\n");
 
-        // ---- sanitize
         match &self.sanitize {
             Some(sa) => {
                 s.push_str("  \"sanitize\": {\n");
@@ -1965,7 +1476,6 @@ impl JobReport {
             None => s.push_str("  \"sanitize\": null,\n"),
         }
 
-        // ---- crypto erase
         match &self.crypto_erase {
             Some(c) => {
                 s.push_str("  \"crypto_erase\": {\n");
@@ -2013,7 +1523,6 @@ impl JobReport {
             None => s.push_str("  \"crypto_erase\": null,\n"),
         }
 
-        // ---- overwrite
         let w = &self.wipe.wipe;
         s.push_str("  \"overwrite\": {\n");
         s.push_str(&format!("    \"method\": {},\n", json_str(w.method_label)));
@@ -2091,7 +1600,6 @@ impl JobReport {
         ));
         s.push_str("  },\n");
 
-        // ---- verification
         s.push_str("  \"verification\": {\n");
         s.push_str(&format!(
             "    \"mode\": {},\n",
@@ -2101,10 +1609,6 @@ impl JobReport {
             "    \"all_passes_verified\": {},\n",
             self.wipe.all_passes_verified
         ));
-        // The coverage of the WEAKEST pass, published at the top level so no
-        // consumer has to walk `passes[]` to learn what the verdict covered. The
-        // minimum, not the maximum and not the mean: a claim is only as good as the
-        // least-verified pass behind it.
         s.push_str(&format!(
             "    \"coverage_fraction\": {},\n",
             fmt6(self.min_coverage_fraction())
@@ -2190,7 +1694,6 @@ impl JobReport {
         }
         s.push_str("    ]\n  },\n");
 
-        // ---- audit
         s.push_str("  \"audit\": {\n");
         s.push_str(&format!(
             "    \"schema\": {},\n",
@@ -2232,7 +1735,6 @@ impl JobReport {
         ));
         s.push_str("  },\n");
 
-        // ---- telemetry
         let t = &self.telemetry;
         s.push_str("  \"telemetry\": {\n");
         s.push_str(&format!(
@@ -2271,7 +1773,6 @@ impl JobReport {
         );
         s.push_str("  },\n");
 
-        // ---- limits and outcome
         s.push_str("  \"limits\": [\n");
         for (i, l) in self.limits.iter().enumerate() {
             s.push_str(&format!(
@@ -2291,9 +1792,6 @@ impl JobReport {
             "    \"passes_verified\": {},\n",
             self.outcome.passes_verified()
         ));
-        // `sanitized` is the field a template binds a green light to, so it carries
-        // the coverage question rather than hiding it: true only when every sector
-        // of the medium was read back. A sampled run says so in `code` and here.
         s.push_str(&format!(
             "    \"whole_medium_claim\": {},\n",
             self.outcome.is_whole_medium_claim()
@@ -2338,9 +1836,6 @@ impl JobReport {
     }
 }
 
-/// Re-indent an already-rendered JSON object so it nests cleanly. The first line is
-/// left alone (it follows a key on the same line); every later line gains `n`
-/// spaces, and the trailing newline is dropped.
 fn indent_block(src: &str, n: usize) -> String {
     let pad = " ".repeat(n);
     let body = src.trim_end_matches('\n');
@@ -2355,24 +1850,6 @@ fn indent_block(src: &str, n: usize) -> String {
     out
 }
 
-// ---------------------------------------------------------------------------
-// Runtime device selection
-// ---------------------------------------------------------------------------
-
-/// A [`Device`] chosen at runtime, borrowed rather than owned.
-///
-/// This is the type that makes the Windows-parity claim true **above** the trait
-/// boundary rather than only inside `core/device`. The driver is generic over
-/// `D: Device` and takes it by value, and `&mut dyn Device` cannot itself implement
-/// `Device` from this crate — the orphan rule forbids it, since both the trait and
-/// `&mut _` are foreign here. This newtype is local, so the impl is legal, and it
-/// lets one binary hold an `ImageFile`, a `LinuxBlock` or a `WindowsBlock` behind
-/// the same pointer and hand it to [`run_job`].
-///
-/// `Device` is object-safe by construction and that is asserted in `core/device`;
-/// what this adds is that the *wipe layer* actually goes through the vtable, which
-/// [`tests::the_driver_runs_a_whole_job_through_a_dyn_device`] exercises by running
-/// a complete job over one.
 pub struct DynDevice<'a>(pub &'a mut dyn Device);
 
 impl<'a> Device for DynDevice<'a> {
@@ -2393,10 +1870,6 @@ impl<'a> Device for DynDevice<'a> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2404,20 +1877,13 @@ mod tests {
         sanitize_table, ClaimSource, Identity, SanitizePrimitive, Support, WindowsBlock,
     };
 
-    /// An in-memory [`Device`]. Nothing in this file touches a path, and no test in
-    /// this module opens a file: the driver is generic over `Device` precisely so
-    /// its behaviour can be measured without a medium anyone owns.
     struct MemDisk {
         data: Vec<u8>,
         sector_bytes: u32,
         medium: MediumKind,
         transport: Transport,
         writable: bool,
-        /// Accept every write, return `Ok`, and change nothing. The device that
-        /// lies, and the reason `outcome` reads verification rather than a return
-        /// code.
         ignore_writes: bool,
-        /// Report the primitive as genuinely claimed rather than simulated.
         claims_sanitize: Option<SanitizePrimitive>,
         caps_error: bool,
         writes: u64,
@@ -2426,14 +1892,10 @@ mod tests {
     impl MemDisk {
         fn new(sectors: u64) -> MemDisk {
             let sector_bytes = 512u32;
-            // Not zeros: a medium that starts at zero entropy cannot show entropy
-            // climbing, and every test below that reads an entropy figure would be
-            // reading an artefact of the double.
             let mut data = vec![0u8; sectors as usize * sector_bytes as usize];
             let mut k = crate::passes::Keccak::shake128();
             k.absorb(b"MemDisk/plaintext");
             k.squeeze(&mut data);
-            // Flatten it toward text-like entropy so `before` is not already 8.0.
             for b in data.iter_mut() {
                 *b = 0x20 + (*b % 0x40);
             }
@@ -2486,10 +1948,6 @@ mod tests {
             let overrides: Vec<(SanitizePrimitive, Support, ClaimSource)> = match self
                 .claims_sanitize
             {
-                // A `Claimed` support needs a real source; the device layer's
-                // `check_invariants` refuses a claim sourced `not-probed` as an
-                // assertion without evidence, and the driver refuses the device
-                // rather than believing it. Found by that check, not by reading it.
                 Some(p) => vec![
                     (
                         SanitizePrimitive::Overwrite,
@@ -2551,7 +2009,6 @@ mod tests {
                 });
             }
             self.writes += 1;
-            // The whole point of this branch: success, and nothing moved.
             if !self.ignore_writes {
                 self.data[off..off + buf.len()].copy_from_slice(buf);
             }
@@ -2571,14 +2028,8 @@ mod tests {
         s
     }
 
-    // ---- the seam -------------------------------------------------------
-
     #[test]
     fn the_driver_runs_a_whole_job_through_a_dyn_device() {
-        // Not a compile-time assertion about object safety: a complete job — probe,
-        // sanitize, overwrite, read-back, audit, report — driven entirely through a
-        // vtable. If `Device` were not object-safe, or if the driver reached past
-        // the trait for anything, this would not build.
         let mut disk = MemDisk::new(16 << 10);
         let mut sp = spec();
         sp.sanitize = Some(SanitizePrimitive::AtaSecureErase);
@@ -2591,9 +2042,6 @@ mod tests {
 
     #[test]
     fn the_windows_stub_satisfies_the_bound_and_is_refused_with_its_own_words() {
-        // The parity claim, exercised where it matters: `WindowsBlock` is accepted
-        // by the driver's bound and refused by the driver's preflight, carrying the
-        // device layer's own message rather than a panic or an invented 512.
         let e = run_job(WindowsBlock::stub("\\\\.\\PhysicalDrive0"), &spec(), telemetry::NullSink)
             .err()
             .expect("a stub with no geometry cannot be wiped");
@@ -2612,7 +2060,6 @@ mod tests {
             .err()
             .expect("a non-writable medium is refused");
         assert!(format!("{e}").contains("not writable"), "{e}");
-        // Nothing moved, asserted rather than assumed.
         let _ = before;
     }
 
@@ -2628,7 +2075,6 @@ mod tests {
         );
         assert_eq!(refusal_code(&e), Some("DENY_NOT_ALLOWLISTED"));
         assert!(format!("{e}").contains("outside every root"));
-        // And a non-refusal does not pretend to carry one.
         assert_eq!(
             refusal_code(&WipeError::Unsupported("device is asleep".to_string())),
             None
@@ -2641,8 +2087,6 @@ mod tests {
         assert_eq!(map_medium(MediumKind::SolidState), Medium::SolidState);
         assert_eq!(map_medium(MediumKind::Image), Medium::Image);
         assert_eq!(map_medium(MediumKind::Unknown), Medium::Unknown);
-        // Same wire spelling on both sides, so a report does not change vocabulary
-        // halfway across the seam.
         for (k, m) in [
             (MediumKind::Rotational, Medium::Rotational),
             (MediumKind::SolidState, Medium::SolidState),
@@ -2652,8 +2096,6 @@ mod tests {
             assert_eq!(k.as_str(), m.as_str(), "spellings diverged for {k:?}");
         }
     }
-
-    // ---- dispatch -------------------------------------------------------
 
     fn profile_for(m: MediumKind, t: Transport) -> MediumProfile {
         let disk = MemDisk::new(1 << 10).medium(m, t);
@@ -2703,8 +2145,6 @@ mod tests {
         }
     }
 
-    // ---- operator decision 3 -------------------------------------------
-
     #[test]
     fn a_simulated_sanitize_can_never_be_reported_verified() {
         let mut disk = MemDisk::new(8 << 10);
@@ -2741,26 +2181,11 @@ mod tests {
         assert!(json.contains("\"simulated\": true"));
         assert!(json.contains("\"device_support\": \"simulated\""));
         assert!(json.contains("crypto_erase_simulated_demonstration"));
-        // And the overwrite, which really wrote every sector, does not carry it.
         assert!(!report.wipe.wipe.simulated);
     }
 
     #[test]
     fn a_claimed_primitive_is_still_simulated_because_no_command_was_transmitted() {
-        // `device_support` is NOT a constant — this device claims the primitive and
-        // the record says so — but `simulated` is not derived from it. It is derived
-        // from whether a firmware command was actually transmitted, and none is, on
-        // any device, because this build has no ioctl path.
-        //
-        // The defect this replaces: `simulated = support != Support::Claimed`, so a
-        // device whose ATA IDENTIFY claimed the primitive produced a record reading
-        // `simulated: false` and `device_reported_success: true` about a command
-        // that was never issued — four fields above a `limits` string beginning
-        // "SIMULATED. No ATA SECURITY ERASE UNIT and no NVMe Sanitize command was
-        // issued". `LinuxBlock` parses exactly this claim out of ATA IDENTIFY and
-        // NVMe Identify, so the contradiction was one `--features linux-block` away
-        // from shipping, and reachable today through the library API the Tauri layer
-        // calls.
         let mut disk = MemDisk::new(8 << 10).claiming(SanitizePrimitive::AtaSecureErase);
         let mut sp = spec();
         sp.sanitize = Some(SanitizePrimitive::AtaSecureErase);
@@ -2776,13 +2201,9 @@ mod tests {
             "the device's own claim is still recorded, separately and unaltered"
         );
         assert!(sa.operation.contains("simulated"));
-        // A record that says `simulated` may never also make a sanitization claim,
-        // whatever the arithmetic did.
         assert_ne!(sa.audit.severity(), crate::audit::Severity::Verified);
         assert!(sa.disposition.starts_with("NOT_A_SANITIZATION_CLAIM"));
     }
-
-    // ---- the witness ----------------------------------------------------
 
     #[test]
     fn the_medium_witness_notices_a_change_and_is_therefore_not_vacuous() {
@@ -2790,7 +2211,6 @@ mod tests {
         let before = medium_witness(&mut io, 64).expect("witness");
         let again = medium_witness(&mut io, 64).expect("witness");
         assert_eq!(before, again, "the witness must be stable on a still medium");
-        // One byte, in the last sector, which is in the sample by construction.
         let caps = SectorIo::capabilities(&io).unwrap();
         let last = caps.sector_count - 1;
         let mut sector = vec![0u8; caps.sector_bytes as usize];
@@ -2812,8 +2232,6 @@ mod tests {
         assert!(sa.medium_unchanged);
         assert_eq!(sa.witness_before, sa.witness_after);
     }
-
-    // ---- the audit ------------------------------------------------------
 
     #[test]
     fn the_overwrite_is_never_audited_against_a_baseline_it_produced() {
@@ -2837,7 +2255,7 @@ mod tests {
     fn a_probe_too_small_to_measure_leaves_the_audit_unverified_and_never_verified() {
         let mut disk = MemDisk::new(8 << 10);
         let mut sp = spec();
-        sp.probe_bytes = 1024; // far below audit::MIN_PROBE_BYTES
+        sp.probe_bytes = 1024;
         let (report, _) =
             run_job(DynDevice(&mut disk), &sp, telemetry::NullSink).expect("job runs");
         assert!(!report.probe.admitted);
@@ -2868,12 +2286,8 @@ mod tests {
         );
     }
 
-    // ---- the outcome ----------------------------------------------------
-
     #[test]
     fn a_device_that_returns_success_and_writes_nothing_is_not_reported_sanitized() {
-        // Every `write_sectors` returns Ok. The return code says the wipe worked.
-        // The read-back says it did not, and the outcome follows the read-back.
         let mut disk = MemDisk::new(4 << 10).ignoring_writes();
         let mut sp = spec();
         sp.probe_bytes = 2 << 20;
@@ -2914,7 +2328,6 @@ mod tests {
         assert_eq!(v.verdict.code(), "PATTERN_CONFIRMED_WHOLE_MEDIUM");
         assert_eq!(v.sectors_unverified, 0);
         assert_eq!(v.coverage_fraction, 1.0);
-        // And the sampled mode does NOT claim that.
         let mut disk2 = MemDisk::new(2 << 10);
         let (r2, _) =
             run_job(DynDevice(&mut disk2), &spec(), telemetry::NullSink).expect("job runs");
@@ -2924,8 +2337,6 @@ mod tests {
         );
         assert!(r2.wipe.verifications[0].sectors_unverified > 0);
     }
-
-    // ---- entropy and reproducibility -----------------------------------
 
     #[test]
     fn entropy_climbs_for_the_seeded_pass_and_collapses_for_zero_fill() {
@@ -2950,9 +2361,6 @@ mod tests {
 
     #[test]
     fn the_calibration_probe_leaves_the_final_medium_byte_identical() {
-        // The probe writes the final pass's pattern before pass 1, so pass 1
-        // overwrites it. If that were not so, the medium — and the certificate —
-        // would depend on the probe size, which is a timing parameter.
         let mk = |probe: u64| {
             let mut disk = MemDisk::new(8 << 10);
             let mut sp = spec();
@@ -2970,7 +2378,6 @@ mod tests {
 
     #[test]
     fn the_same_run_id_puts_the_same_bytes_on_the_medium() {
-        // CLAUDE.md rule 6, at the level this crate controls.
         let run = |id: &str| {
             let mut disk = MemDisk::new(4 << 10);
             let mut sp = spec();
@@ -2981,8 +2388,6 @@ mod tests {
         assert_eq!(run("alpha"), run("alpha"));
         assert_ne!(run("alpha"), run("beta"));
     }
-
-    // ---- the report -----------------------------------------------------
 
     #[test]
     fn the_report_is_parseable_and_every_float_carries_six_decimal_places() {
@@ -2999,8 +2404,6 @@ mod tests {
         assert!(!json.contains("NaN") && !json.contains("Infinity"));
         assert!(!json.to_lowercase().contains("e-0"), "no scientific notation");
 
-        // Structural check without a JSON parser: balanced braces and brackets, and
-        // every bare number that has a decimal point has exactly six places.
         let (mut br, mut bk, mut in_str, mut esc) = (0i32, 0i32, false, false);
         let mut token = String::new();
         let mut checked = 0usize;
@@ -3041,8 +2444,6 @@ mod tests {
         assert_eq!(bk, 0, "unbalanced brackets");
         assert!(checked >= 12, "only {checked} floats were checked");
 
-        // `null` is a value with a meaning, and it is used where nothing was
-        // measured rather than a zero being invented.
         assert!(json.contains("\"physical_sector_bytes\": null"));
         assert!(json.contains("\"legacy_shape\": null"));
     }
@@ -3059,8 +2460,6 @@ mod tests {
         assert!(json.contains("\"before\": null"));
         assert!(json.contains("\"after\": null"));
         assert!(json.contains("\"delta\": null"));
-        // A zero-fill run, by contrast, reports a measured 0.000000 — the two must
-        // be distinguishable in the wire format.
         let mut d2 = MemDisk::new(2 << 10);
         let mut s2 = spec();
         s2.method = Some(Method::ZeroFill);
@@ -3082,7 +2481,6 @@ mod tests {
             .limits
             .iter()
             .any(|l| l == crate::verify::SAMPLING_IS_NOT_PROOF));
-        // A solid-state medium dispatches a controller primitive of its own accord.
         assert_eq!(
             report.dispatch.sanitize,
             Some(SanitizePrimitive::NvmeSanitizeBlockErase)
@@ -3118,7 +2516,6 @@ mod tests {
         let (report, _) = run_job(DynDevice(&mut disk), &sp, sink).expect("job runs");
         assert!(report.telemetry.events > 0, "no telemetry was emitted");
         assert_eq!(report.telemetry_period_ms, 1);
-        // The verdict is max_gap, not achieved_hz. Both are published either way.
         let json = report.to_json();
         assert!(json.contains("\"met_rate_floor\""));
         assert!(json.contains("\"max_gap_ms\""));
@@ -3127,10 +2524,6 @@ mod tests {
 
     #[test]
     fn the_gap_the_driver_itself_imposes_is_measured_and_published() {
-        // A missed rate floor must come with the measurement that explains it,
-        // not with a bare `false`. The interval is the pass sync plus the
-        // read-back sweep after it: real time, during which nothing was written
-        // and so nothing could honestly be emitted.
         let mut disk = MemDisk::new(32 << 10);
         let mut sp = spec();
         sp.method = Some(Method::ThreePass);
@@ -3158,15 +2551,8 @@ mod tests {
         assert!(json.contains("\"longest_uninstrumented_interval_ns\""));
     }
 
-    // ---- coverage is in the outcome, not only in the prose ---------------
-
     #[test]
     fn a_sampled_run_and_an_exhaustive_run_do_not_produce_the_same_outcome_field() {
-        //! The measured defect: `"code": "OVERWRITE_VERIFIED_BY_READ_BACK"` and
-        //! `"sanitized": true` for a 0.195%-coverage sampled run AND for a 100%
-        //! exhaustive one — byte-identical outcome fields, so the one structured
-        //! field a UI binds a green light to carried no coverage information at all.
-        //! "Sanitized" is a whole-medium word in SP 800-88 vocabulary.
         let mut a = MemDisk::new(8 << 10);
         let (sampled, _) =
             run_job(DynDevice(&mut a), &spec(), telemetry::NullSink).expect("job runs");
@@ -3192,8 +2578,6 @@ mod tests {
         assert!(jb.contains("\"whole_medium_claim\": true"));
         assert!(ja.contains("\"sanitized_scope\": \"sampled_sectors_only\""));
         assert!(jb.contains("\"sanitized_scope\": \"whole_medium\""));
-        // And the coverage is at the top level of `verification`, so no consumer
-        // has to walk passes[] to learn what the verdict covered.
         assert!(ja.contains("\"largest_unsampled_run_sectors\""));
         for j in [&ja, &jb] {
             let v = j.split("\"verification\": {").nth(1).expect("verification block");
@@ -3216,7 +2600,6 @@ mod tests {
         assert!(limit.contains(&format!("{gap} sectors")), "{limit}");
         assert!(limit.contains("PATTERN_CONFIRMED_ON_SAMPLE"));
         assert!(limit.contains("a_region_left_unwiped_between_sample_points"));
-        // An exhaustive run has no blind spot and must not publish the sentence.
         let mut d2 = MemDisk::new(16 << 10);
         let mut sp = spec();
         sp.verify_mode = VerifyMode::Exhaustive;
@@ -3224,16 +2607,8 @@ mod tests {
         assert!(!ex.limits.iter().any(|l| l.contains("BLIND SPOT")));
     }
 
-    // ---- the audit's own honesty ----------------------------------------
-
     #[test]
     fn a_crypto_erase_is_not_judged_against_full_capacity_write_time() {
-        //! `Workload::CryptoErase` exists because key destruction is constant time
-        //! by design; before the primitive was mapped to it, `attempt_sanitize`
-        //! built `MediaSanitize` for every primitive and a genuine crypto erase was
-        //! GUARANTEED to be reported as a timing lie — measured: 292 ns against an
-        //! expected minimum of 240,000,000 ns, UNVERIFIED_TIMING, for an operation
-        //! that is supposed to be instant.
         for p in [
             SanitizePrimitive::NvmeSanitizeCryptoErase,
             SanitizePrimitive::NvmeFormatCryptoErase,
@@ -3247,20 +2622,12 @@ mod tests {
             let sa = report.sanitize.expect("a sanitize was attempted");
             assert_eq!(sa.audit.workload.kind_str(), "crypto_erase", "{p:?}");
             assert_eq!(sa.audit.work_bytes, None, "{p:?}");
-            // NOT_APPLICABLE, not UNVERIFIED_TIMING: there is no expected minimum
-            // to report for an operation whose duration is not a function of
-            // capacity, and `audit()` reaches that arm before it reaches the
-            // simulated demotion. The record still carries `simulated: true` and
-            // the disposition still refuses to make a sanitization claim, so
-            // operator decision 3 holds through this path too.
             assert_eq!(sa.audit.code(), "NOT_APPLICABLE", "{p:?}");
             assert_ne!(sa.audit.code(), "UNVERIFIED_TIMING", "{p:?}");
             assert_ne!(sa.audit.severity(), crate::audit::Severity::Verified, "{p:?}");
             assert!(sa.simulated, "{p:?}");
             assert!(sa.disposition.starts_with("NOT_A_SANITIZATION_CLAIM"), "{p:?}");
         }
-        // The control: a media sanitize IS timed against capacity, so the mapping
-        // above is a distinction and not a blanket exemption.
         let mut disk = MemDisk::new(8 << 10);
         let mut sp = spec();
         sp.sanitize = Some(SanitizePrimitive::AtaSanitizeBlockErase);
@@ -3283,10 +2650,6 @@ mod tests {
             device_reported_success: true,
             baseline: None,
         };
-        // The defect: one sentence — "the command returned success faster than this
-        // device's own measured throughput makes physically possible" — was emitted
-        // for UNVERIFIED_NO_BASELINE, where no throughput was measured at all, and
-        // for NOT_APPLICABLE, where duration carries no information.
         let no_baseline = disposition_for(
             &base(Verdict::UnverifiedNoBaseline {
                 measured_ns: 5,
@@ -3311,7 +2674,6 @@ mod tests {
         assert!(na.starts_with("TIMING_CARRIES_NO_INFORMATION"), "{na}");
         assert!(!na.contains("physically possible"), "{na}");
 
-        // The two that DO make a claim still make it, and they are distinct.
         let fired = disposition_for(
             &base(Verdict::UnverifiedTiming { measured_ns: 1, expected_min_ns: 1 << 40 }),
             false,
@@ -3322,7 +2684,6 @@ mod tests {
             false,
         );
         assert!(ok.starts_with("TIMING_CONSISTENT"));
-        // Five verdicts, five sentences: no two collapse.
         let all = [no_baseline, na, fired, ok, disposition_for(&base(
             Verdict::UnverifiedSimulated { measured_ns: 1, expected_min_ns: 2 },
         ), true)];
@@ -3335,14 +2696,9 @@ mod tests {
 
     #[test]
     fn a_pass_the_audit_refused_is_not_promoted_into_the_sanitize_baseline() {
-        //! One certificate may not call pass 1 implausible and then use pass 1 as
-        //! the definition of plausible. Here the probe is refused outright (below
-        //! MIN_PROBE_BYTES), so `audit.overwrite` is UNVERIFIED_NO_BASELINE — and
-        //! the completed pass, which would otherwise have become the sanitize's
-        //! yardstick, is withheld and said to be withheld.
         let mut disk = MemDisk::new(8 << 10);
         let mut sp = spec();
-        sp.probe_bytes = 4096; // refused: below_min_probe_bytes
+        sp.probe_bytes = 4096;
         sp.sanitize = Some(SanitizePrimitive::AtaSecureErase);
         let (report, _) =
             run_job(DynDevice(&mut disk), &sp, telemetry::NullSink).expect("job runs");
@@ -3359,8 +2715,6 @@ mod tests {
         let json = report.to_json();
         assert!(json.contains("\"observed_pass_baseline_withheld\": true"));
 
-        // The control: when the overwrite audit DOES verify the pass, the pass is
-        // promoted, so the gate is a gate and not a blanket refusal.
         let mut d2 = MemDisk::new(8 << 10);
         let mut sp2 = spec();
         sp2.sanitize = Some(SanitizePrimitive::AtaSecureErase);
@@ -3376,9 +2730,6 @@ mod tests {
 
     #[test]
     fn a_measured_entropy_below_eight_never_prints_as_eight() {
-        // 7.999999501350531 is a real measurement from a three-pass wipe of the
-        // fixture. Rounded it prints 8.000000, the unattainable maximum, and the
-        // report's own before/after/delta then fail to subtract.
         assert_eq!(fmt6_trunc(7.999999501350531), "7.999999");
         assert_eq!(fmt6(7.999999501350531), "8.000000", "the rounding is still there");
         assert_eq!(fmt6_trunc(0.0), "0.000000");
@@ -3409,8 +2760,6 @@ mod tests {
                 .unwrap()
         };
         let (b, a, d) = (num("before"), num("after"), num("delta"));
-        // The arithmetic the reader is invited to do checks out on the PRINTED
-        // values, which is the only arithmetic they can actually perform.
         assert!((a - b - d).abs() < 1e-12, "before {b} after {a} delta {d}");
         assert!(a <= report.entropy_after.unwrap(), "the printed value over-states");
     }

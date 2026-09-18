@@ -1,23 +1,10 @@
-//! Ed25519 over the canonical bytes — and an honest account of what that buys.
-//!
-//! A signature demonstrates that the certificate has not been altered since it
-//! was signed. It does NOT demonstrate who signed it: that requires a chain of
-//! custody for the public key, and in this build the key is generated locally
-//! on the operator's machine with no custody story at all. The certificate
-//! carries that statement inside its signed bytes (certificate.rs `custody`),
-//! and docs/standards_map.md carries it as its own row. Every claim here is
-//! ed25519-dalek's; there is no custom crypto and no hand-rolled anything.
-
 use crate::jcs::{canonical, JcsError, Value};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SignError {
     Canon(JcsError),
-    /// The signed envelope is structurally wrong: a field missing or mistyped.
     Envelope(&'static str),
-    /// The bytes verify against nothing: the certificate was altered since
-    /// signing, or the signature/key are not what they claim.
     Invalid,
 }
 
@@ -45,11 +32,6 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// Wrap a certificate in a signed envelope. The signature covers the
-/// certificate's canonical bytes — all of it, both regions, custody and scope
-/// included. The envelope itself cannot be inside the signature (a signature
-/// cannot sign itself), which is why nothing in the envelope carries meaning
-/// beyond "here is the document, here is the proof".
 pub fn sign(certificate: &Value, key: &SigningKey) -> Result<Value, SignError> {
     let bytes = canonical(certificate)?;
     let sig: Signature = key.sign(&bytes);
@@ -70,9 +52,6 @@ pub fn sign(certificate: &Value, key: &SigningKey) -> Result<Value, SignError> {
     ]))
 }
 
-/// Verify a signed envelope. Returns the certificate's canonical bytes on
-/// success, so a caller can chain them (the Merkle leaf is these exact bytes,
-/// never a re-serialisation).
 pub fn verify(envelope: &Value) -> Result<Vec<u8>, SignError> {
     let cert = envelope
         .get("certificate")
@@ -103,9 +82,6 @@ pub fn verify(envelope: &Value) -> Result<Vec<u8>, SignError> {
     Ok(bytes)
 }
 
-/// The first path where two documents disagree — the diagnostic behind the
-/// forge demo: "signature invalid" alone teaches nothing; the offending field,
-/// named, is the argument.
 pub fn first_divergence(a: &Value, b: &Value, path: &str) -> Option<String> {
     match (a, b) {
         (Value::Obj(pa), Value::Obj(pb)) => {
@@ -196,8 +172,6 @@ mod tests {
         let original = cert();
         let signed = sign(&original, &key).unwrap();
 
-        // The forge the instrument's button performs: whole_medium_claim
-        // false -> true, in the presented copy only.
         let mut forged = original.clone();
         if let Value::Obj(pairs) = &mut forged {
             for (k, v) in pairs.iter_mut() {
@@ -220,9 +194,6 @@ mod tests {
                 }
             }
         }
-        // Both directions, per the phase order: the corrupted case fails AND
-        // the clean case still passes, so a verifier that rejects everything
-        // cannot pass this test.
         assert_eq!(verify(&presented), Err(SignError::Invalid));
         assert!(verify(&signed).is_ok());
 
@@ -291,6 +262,4 @@ mod tests {
     }
 }
 
-/// Re-exported so `core/verify` uses the exact key type this crate signs
-/// with — one dalek version in the tree, by construction.
 pub use ed25519_dalek::SigningKey as SigningKeyReexport;

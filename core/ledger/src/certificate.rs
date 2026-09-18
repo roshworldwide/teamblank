@@ -1,30 +1,5 @@
-//! The two-region certificate — architecture.md D8 made executable.
-//!
-//! Inputs are TYPED, never re-parsed from the engine's JSON: the reports carry
-//! floats as display renderings, and every one of them is either a ratio of
-//! integers the engine already holds or a six-decimal string it already
-//! printed. The builder accepts only those forms, so a float cannot enter the
-//! signed payload through any door — jcs::Value has no variant for it and this
-//! module has no conversion to it.
-//!
-//! The split, per D8:
-//!   deterministic_core    reproduces byte-identically from a fresh clone at
-//!                         the same fixture seed. Carries the reproducibility
-//!                         assertion.
-//!   measurement_envelope  physical observations of real hardware. Signed, and
-//!                         explicitly NOT asserted repeatable — a baseline that
-//!                         did not move between runs would mean it was not
-//!                         being measured.
-//!
-//! Both regions are inside the signature. Timing is the field most worth
-//! forging, because it is the evidence that the drive lied; what is scoped is
-//! the reproducibility CLAIM, never the integrity claim, and the certificate
-//! names on its own face which fields carry which.
-
 use crate::jcs::{JcsError, Value};
 
-/// An exact rational, stored REDUCED — canon_vectors' carrier rule: 1024/524288
-/// and 1/512 are the same bytes. Denominator strictly positive; sign on n.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Ratio {
     n: i64,
@@ -60,11 +35,6 @@ fn gcd(mut a: u64, mut b: u64) -> u64 {
     a.max(1)
 }
 
-/// A measured continuous value as the engine's own six-decimal rendering,
-/// verbatim. No parse, no arithmetic, no rounding step for two languages to
-/// disagree about: Python rounds half-even, Rust half-away-from-zero, and the
-/// exact .5 at the sixth decimal is where a scaled-integer scheme would emit
-/// two different signatures over one untouched document (D8).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dec6(String);
 
@@ -93,15 +63,11 @@ impl Dec6 {
     }
 }
 
-/// Everything the deterministic core carries. Byte-identical from a fresh
-/// clone at the same fixture seed.
 pub struct CoreInput {
     pub run_id: String,
     pub target: String,
     pub method: String,
     pub nist_category: String,
-    /// Present-and-null beats absent: a host-overwrite run has no firmware
-    /// witness, and the certificate must say "no witness" rather than nothing.
     pub medium_witness_before: Option<String>,
     pub medium_witness_after: Option<String>,
     pub medium_unchanged: Option<bool>,
@@ -114,7 +80,6 @@ pub struct CoreInput {
     pub passes_verified: bool,
 }
 
-/// Physical observations of this machine on this run.
 pub struct EnvelopeInput {
     pub baseline_source: String,
     pub probe_bytes: i64,
@@ -171,9 +136,6 @@ pub fn build(core: &CoreInput, env: &EnvelopeInput) -> Result<Value, JcsError> {
         ("entropy_bits_per_byte_after".into(), env.entropy_after.value()),
     ])?;
 
-    // The custody statement is INSIDE the signed document, on the
-    // certificate's own face, because the honest version of "tamper-proof" is
-    // two separate claims and this build provides exactly one of them.
     let custody = Value::obj(vec![
         (
             "key_custody".into(),
@@ -260,14 +222,9 @@ mod tests {
 
     #[test]
     fn the_d8_rationals_reduce_to_the_documented_exact_forms() {
-        // D8's table, verified rather than transcribed:
         assert_eq!(Ratio::new(1024, 524_288).unwrap().parts(), (1, 512));
         assert_eq!(Ratio::new(1000, 431_059_458_000).unwrap().parts(), (1, 431_059_458));
-        // structural_breach_point (0.75-0.65)/0.35 = (10/100)/(35/100):
         assert_eq!(Ratio::new(10, 35).unwrap().parts(), (2, 7));
-        // headroom = breach_point - worst_rejected = 2/7 - 1/4, common
-        // denominator 28: (2*4 - 1*7)/28 = 1/28. The first version of this
-        // assertion tried to be clever in one expression and asserted 159/490.
         assert_eq!(Ratio::new(2 * 4 - 1 * 7, 28).unwrap().parts(), (1, 28));
         assert_eq!(Ratio::new(-3, -6).unwrap().parts(), (1, 2));
         assert_eq!(Ratio::new(3, -6).unwrap().parts(), (-1, 2));
@@ -292,9 +249,7 @@ mod tests {
         let bytes = canonical(&cert).unwrap();
         assert_eq!(canonical(&parse(&bytes).unwrap()).unwrap(), bytes);
         let text = String::from_utf8(bytes).unwrap();
-        // The reduced carrier, in the signed bytes themselves:
         assert!(text.contains("\"coverage\":{\"d\":512,\"n\":1}"), "{text}");
-        // No float syntax anywhere outside strings — the profile held.
         assert!(!text.contains("0.001953"));
     }
 
@@ -308,8 +263,6 @@ mod tests {
         );
         assert!(cert.get("deterministic_core").is_some());
         assert!(cert.get("measurement_envelope").is_some());
-        // Timing lives in the envelope AND is inside the same document the
-        // signature covers — the D5 conflict resolved the D8 way.
         assert!(cert
             .get("measurement_envelope")
             .and_then(|e| e.get("timing_ratio"))
@@ -326,7 +279,6 @@ mod tests {
 
     #[test]
     fn determinism_holds_across_reordered_construction() {
-        // Two logically identical certificates, built fresh, one canonical form.
         let a = canonical(&build(&core(), &envelope()).unwrap()).unwrap();
         let b = canonical(&build(&core(), &envelope()).unwrap()).unwrap();
         assert_eq!(a, b);

@@ -1,15 +1,3 @@
-//! The carve report emitter — every byte of `sentinelwipe.carve.report/1`.
-//!
-//! Moved verbatim out of main.rs so `core/verify` can embed the SAME report
-//! the binary emits, produced by the same code, in its evidence bundle.
-//! Phase 4 step 5 requires the post-wipe carve to run with byte-identical
-//! parameters; a bundle whose reports came from a different emitter than the
-//! demo's would reintroduce exactly the drift the one-binding design removes.
-//! Nothing was rewritten in the move except visibility, and one seam: `emit`
-//! now takes `EmitMeta` — the narrow view of the invocation it always read —
-//! with the reproducing command as a plain string from whichever caller
-//! knows it.
-
 use crate::carve::{sha256_hex, CarveOpts, CarveReport, Recovered};
 use crate::confidence::{
     entropy_band, kind_defines_footer, size_bounds, ENTROPY_UNKNOWN, MIN_ENTROPY_SAMPLE,
@@ -67,10 +55,6 @@ pub fn relative_label(image: &Path, explicit: Option<&str>) -> String {
     base
 }
 
-// ===========================================================================
-// main
-// ===========================================================================
-
 
 pub fn kind_of(s: &str) -> Option<Kind> {
     match s {
@@ -93,8 +77,6 @@ pub struct PlantedFile {
     first_offset: u64,
 }
 
-/// One record's tie to ground truth: (path, manifest kind, expected_recoverable,
-/// sha256_matches).
 type Match = (String, String, String, bool);
 
 pub struct GroundTruth {
@@ -104,13 +86,8 @@ pub struct GroundTruth {
     pub contiguous: u64,
     pub bifragment: u64,
     pub unreachable: Vec<(String, String, String)>,
-    /// Per record index into `report.records`, the manifest entry it matched.
     pub matches: Vec<Option<Match>>,
-    /// Planted files an ADMITTED record reproduced byte for byte.
     pub recovered_exact: u64,
-    /// Records matched to a planted file by offset whose bytes are NOT that
-    /// file's. A recovery wearing a success label; counted so it cannot hide
-    /// behind a row count.
     pub false_positives: u64,
     sha256_matches_planted: u64,
 }
@@ -138,11 +115,6 @@ impl GroundTruth {
             })
             .collect();
 
-        // Match by DIGEST first: that is the only join that proves the recovered
-        // bytes ARE the planted file. Only when no digest matches does the
-        // record fall back to a kind-and-offset join, and that join exists
-        // precisely so a wrong-bytes recovery at a right offset is visible as
-        // `sha256_matches: false` rather than as a missing row.
         let mut matches: Vec<Option<Match>> = Vec::with_capacity(report.records.len());
         let mut exact_recovered: Vec<bool> = vec![false; planted.len()];
         let mut false_positives = 0u64;
@@ -184,9 +156,6 @@ impl GroundTruth {
                 .count() as u64
         };
 
-        // Why each unreachable file is unreachable, DERIVED from its manifest
-        // row rather than asserted by name. A carver that names its own failures
-        // from a list would be reciting, not reporting.
         let mut unreachable = Vec::new();
         for f in files {
             if f.get("expected_recoverable").map(|v| v.s()) != Some("unrecoverable-by-design") {
@@ -244,12 +213,6 @@ impl GroundTruth {
     }
 }
 
-// ===========================================================================
-// The report writer. Hand-rolled: CLAUDE.md forbids serde.
-// ===========================================================================
-
-/// EVERY float goes through here: exactly six decimal places, per schema §2, so
-/// no field is silently more precise than another and the file is byte-stable.
 pub fn f(x: f64) -> String {
     let s = format!("{x:.6}");
     if s == "-0.000000" {
@@ -334,14 +297,6 @@ impl W {
         self.b.push_str(&format!("\"{k}\": {}{t}\n", f(v)));
         self
     }
-    /// A float that may have no measurement behind it.
-    ///
-    /// The post-wipe carve is the demo's proof frame and it is EXPECTED to find
-    /// nothing, so every margin field derived from the admitted or rejected
-    /// population has an empty case.  Emitting 0.0 there would put a number on
-    /// screen that no measurement produced, which CLAUDE.md rule 2 forbids, and
-    /// it is worse than absent: a renderer cannot tell 0.0 "measured" from 0.0
-    /// "there was nothing to measure".  `null` cannot be misread.
     pub fn kv_of(&mut self, n: usize, k: &str, v: Option<f64>, comma: bool) -> &mut W {
         match v {
             Some(x) => self.kv_f(n, k, x, comma),
@@ -361,10 +316,6 @@ impl W {
     }
 }
 
-/// min / max / mean over a population, with the empty case defined rather than
-/// left to produce `Infinity` — which schema §2 forbids and no JSON parser
-/// accepts. A reader must read `n` before touching the other three; the report
-/// says so in `provenance.notes` when a population is empty.
 pub fn stats(v: &[f64]) -> (usize, f64, f64, f64) {
     if v.is_empty() {
         return (0, 0.0, 0.0, 0.0);
@@ -378,7 +329,6 @@ pub fn stats(v: &[f64]) -> (usize, f64, f64, f64) {
 }
 
 #[allow(clippy::too_many_arguments)]
-/// The narrow view of the invocation the report needs.
 pub struct EmitMeta<'a> {
     pub opts: &'a CarveOpts,
     pub phase: &'a str,
@@ -421,7 +371,6 @@ pub fn emit(
     w.line(0, "{");
     w.kv_s(2, "schema", SCHEMA, true);
 
-    // ---- provenance ------------------------------------------------------
     w.line(2, "\"provenance\": {");
     w.kv_s(4, "producer", "core/carve/src/main.rs (carve)", true);
     w.kv_s(4, "command", cli.command, true);
@@ -597,7 +546,6 @@ pub fn emit(
     w.line(4, "]");
     w.line(2, "},");
 
-    // ---- run -------------------------------------------------------------
     w.line(2, "\"run\": {");
     w.kv_s(4, "phase", cli.phase, true);
     w.kv_s(4, "image_path", image_label, true);
@@ -616,7 +564,6 @@ pub fn emit(
     }
     w.line(2, "},");
 
-    // ---- policy ----------------------------------------------------------
     w.line(2, "\"policy\": {");
     w.kv_s(
         4,
@@ -640,8 +587,6 @@ pub fn emit(
         W_SIGNATURE + W_STRUCTURE + W_ENTROPY + W_SIZE,
         true,
     );
-    // The gate the run ACTUALLY used, which is what a score is re-derivable
-    // against years later. It defaults to confidence::MIN_CONFIDENCE.
     w.kv_f(4, "min_confidence", cli.opts.min_confidence, true);
     w.kv_f(4, "non_structure_ceiling", NON_STRUCTURE_CEILING, true);
     w.kv_f(4, "structural_breach_point", STRUCTURAL_BREACH_POINT, true);
@@ -655,7 +600,6 @@ pub fn emit(
     w.kv_f(4, "entropy_unknown", ENTROPY_UNKNOWN, false);
     w.line(2, "},");
 
-    // ---- kind_policy -----------------------------------------------------
     w.line(2, "\"kind_policy\": {");
     for (i, k) in KINDS.iter().enumerate() {
         let b = entropy_band(*k);
@@ -680,7 +624,6 @@ pub fn emit(
     }
     w.line(2, "},");
 
-    // ---- counts ----------------------------------------------------------
     w.line(2, "\"counts\": {");
     w.kv_u(4, "records", recs.len() as u64, true);
     w.kv_u(4, "admitted", an as u64, true);
@@ -723,7 +666,6 @@ pub fn emit(
     w.line(4, "}");
     w.line(2, "},");
 
-    // ---- score_distribution ----------------------------------------------
     w.line(2, "\"score_distribution\": {");
     for (name, (n, mn, mx, me), comma) in [
         ("admitted", (an, amin, amax, amean), true),
@@ -740,13 +682,6 @@ pub fn emit(
     }
     w.line(2, "},");
 
-    // ---- margin ----------------------------------------------------------
-    //
-    // Every field here except structural_breach_point describes a MEASURED
-    // population.  When that population is empty -- which is the normal and
-    // desired post-wipe result -- there is no margin to report and the field is
-    // null, not zero.  `admitted_n` and `rejected_n` are carried so a renderer
-    // can branch before reading, the way score_distribution's `n` already works.
     let has_a = an > 0;
     let has_r = rn > 0;
     let opt = |ok: bool, v: f64| if ok { Some(v) } else { None };
@@ -768,8 +703,6 @@ pub fn emit(
         opt(has_r, worst_struct),
         true,
     );
-    // Derived from the weights and the gate alone, so it is defined even with
-    // nothing on the disk.
     w.kv_f(4, "structural_breach_point", STRUCTURAL_BREACH_POINT, true);
     w.kv_of(
         4,
@@ -785,7 +718,6 @@ pub fn emit(
     );
     w.line(2, "},");
 
-    // ---- ground_truth ----------------------------------------------------
     match gt {
         None => {
             w.kv_os(2, "ground_truth", None, true);
@@ -875,7 +807,6 @@ pub fn emit(
         }
     }
 
-    // ---- candidates ------------------------------------------------------
     w.line(2, "\"candidates\": [");
     for (i, r) in recs.iter().enumerate() {
         w.line(4, "{");
@@ -972,11 +903,6 @@ pub fn emit(
     w.line(0, "}");
     w.b
 }
-
-/// `provenance.command`: the invocation that reproduces this report, with every
-/// non-default option spelled out. The post-wipe carve is expected to differ
-/// from the pre-wipe one in `--phase` and in nothing else, and this string is
-/// how that is checked rather than asserted.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Json {
@@ -1139,8 +1065,3 @@ impl P<'_> {
         }
     }
 }
-
-// ===========================================================================
-// Tests
-// ===========================================================================
-

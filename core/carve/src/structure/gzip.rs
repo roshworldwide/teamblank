@@ -1,73 +1,7 @@
-//! GZIP structure validation, including a hand-rolled DEFLATE inflater.
-//!
-//! Garfinkel, "Carving contiguous and fragmented files with fast object
-//! validation", DFRWS 2007. GZIP is where this fixture punishes a lazy
-//! validator hardest. `1F 8B 08` is three bytes, and the manifest's measured
-//! `residue_signature_false_positives.GZIP` is 13 -- thirteen hits in free
-//! space that a signature scanner would report as files. Twelve of the thirteen
-//! die on the header alone, because RFC 1952 reserves the top three bits of FLG
-//! and random bytes set at least one of them 87.5% of the time. The thirteenth,
-//! at image offset 173,564,124, has FLG = 0x00: a clean header by inspection.
-//! It is rejected only by inflating what follows and finding it is not a
-//! DEFLATE stream. That single decoy is the entire argument for the code below.
-//!
-//! ## WHAT IS CHECKED, and what is not -- stated exactly
-//!
-//! The task allowed a structural-only validator provided the gap was named. It
-//! is not needed: this module implements RFC 1951 inflate in full -- stored
-//! (BTYPE 00), fixed-Huffman (01) and dynamic-Huffman (10) blocks, the
-//! code-length alphabet with its 16/17/18 repeat codes, and all 29 length and
-//! 30 distance codes -- so the member body is genuinely decompressed and the
-//! trailer's CRC-32 and ISIZE are checked against real output bytes. No
-//! decompression crate is used; CLAUDE.md's dependency rule forbids one and the
-//! canonical-Huffman decoder here is the classic count/offset walk described in
-//! Mark Adler's `puff.c`, reimplemented, about 40 lines.
-//!
-//! Consequently EVERY byte of a validated member is verified: the header by
-//! field, the compressed body by inflating it, and the output by a CRC-32 the
-//! producer computed independently. The only unverified bytes are MTIME, XFL
-//! and OS, which are informational fields carrying no integrity guarantee in
-//! the format itself -- the fixture pins them to 0, 0 and 255 for
-//! reproducibility, and this validator does not require those values because
-//! requiring them would be fitting the carver to its own test data.
-//!
-//! Not checked, and named rather than glossed: a multi-member GZIP file. RFC
-//! 1952 section 2.2 permits members to be concatenated; `end` is reported at
-//! the first member's trailer, so a concatenated stream carves as its first
-//! member. No object in this corpus is multi-member.
-//!
-//! ## RUBRIC -- how `score` is derived
-//!
-//! Five independent checks, fixed weights, summing to exactly 1.00.
-//!
-//!   0.15  header_fields    magic 1F 8B, CM == 8 (deflate), and FLG's reserved
-//!                          bits 5-7 all clear
-//!   0.10  optional_fields  FEXTRA's XLEN in bounds; FNAME and FCOMMENT
-//!                          NUL-terminated within 1024 bytes and free of
-//!                          control characters; FHCRC, when present, matching
-//!                          the low 16 bits of the header's own CRC-32
-//!   0.35  inflate          the DEFLATE stream decoded to a BFINAL block's
-//!                          end-of-block symbol with no invalid code, no
-//!                          distance reaching behind the start of output, and
-//!                          no over-subscribed Huffman table
-//!   0.25  crc_match        CRC-32 of the inflated bytes equals the trailer
-//!   0.15  isize_match      inflated length mod 2^32 equals ISIZE
-//!
-//! ## VALIDITY GATE -- separate from the score
-//!
-//! `valid` requires header_fields, inflate, crc_match and isize_match. The
-//! optional-field term grades only: a member with an odd FNAME is still a
-//! member if its data checks out.
-
 use super::{clamp01, crc32, le_u32, Validation};
 
-/// Ceiling on decompressed output. A carving bound: the largest planted GZIP in
-/// `out/fixture.img` inflates to 262,286 bytes. Without it, a residue candidate
-/// that happens to inflate could be walked into an allocation the size of the
-/// image inside a bifragment search.
 pub const MAX_INFLATE_BYTES: usize = 64 * 1024 * 1024;
 
-/// Ceiling on compressed input consumed by one member.
 pub const MAX_MEMBER_BYTES: usize = 64 * 1024 * 1024;
 
 const W_HEADER: f64 = 0.15;
@@ -111,7 +45,6 @@ pub struct GzipReport {
     pub blocks: usize,
 }
 
-/// `data` starts AT the 1F 8B magic.
 pub fn validate(data: &[u8]) -> Validation {
     analyze(data).validation
 }
@@ -130,8 +63,6 @@ pub fn analyze(data: &[u8]) -> GzipReport {
         blocks: 0,
     };
 
-    // RFC 1952 section 2.3: a member is at least a 10-byte header, a
-    // compressed body and an 8-byte trailer.
     if data.len() < 18 {
         r.validation = Validation::reject(format!(
             "gzip: {} bytes available, a member needs at least 18",
@@ -152,7 +83,6 @@ pub fn analyze(data: &[u8]) -> GzipReport {
     let reserved = flg & 0xE0;
     let header_ok = cm == 8 && reserved == 0;
     if !header_ok {
-        // Twelve of this fixture's thirteen GZIP residue decoys stop here.
         r.rubric.header_fields = 0.0;
         r.validation = Validation::reject(if cm != 8 {
             format!("gzip: CM is {}, RFC 1952 defines only 8 (deflate)", cm)
@@ -166,7 +96,6 @@ pub fn analyze(data: &[u8]) -> GzipReport {
     }
     r.rubric.header_fields = W_HEADER;
 
-    // ---- optional header fields, RFC 1952 section 2.3.1.2 ------------------
     const FTEXT: u8 = 0x01;
     const FHCRC: u8 = 0x02;
     const FEXTRA: u8 = 0x04;
@@ -262,12 +191,10 @@ pub fn analyze(data: &[u8]) -> GzipReport {
     r.header_bytes = pos;
     r.rubric.optional_fields = if opt_ok { W_OPTIONAL } else { 0.0 };
 
-    // ---- inflate -----------------------------------------------------------
     let body = &data[pos..data.len().min(pos + MAX_MEMBER_BYTES)];
     let inflated = match inflate(body, MAX_INFLATE_BYTES) {
         Ok(i) => i,
         Err(e) => {
-            // The one FLG-clean residue decoy in this fixture arrives here.
             r.validation = Validation::reject(format!(
                 "gzip: header parsed over {} bytes but the DEFLATE stream failed: {}",
                 pos, e
@@ -281,7 +208,6 @@ pub fn analyze(data: &[u8]) -> GzipReport {
     r.inflated_bytes = inflated.out.len() as u64;
     r.blocks = inflated.blocks;
 
-    // ---- trailer, RFC 1952 section 2.3.1 -----------------------------------
     let trailer_at = pos + inflated.consumed;
     if trailer_at + 8 > data.len() {
         r.validation = Validation::reject(format!(
@@ -334,28 +260,13 @@ pub fn analyze(data: &[u8]) -> GzipReport {
     r
 }
 
-// ===========================================================================
-// RFC 1951 inflate
-// ===========================================================================
-//
-// Hand-rolled because CLAUDE.md forbids a decompression dependency and because
-// a validator that cannot decompress cannot check the CRC, which is the only
-// check that kills the FLG-clean residue decoy. The canonical-Huffman decoder
-// is the counts/symbols walk from Mark Adler's `puff.c`: for each code length
-// 1..15, accumulate one bit and test whether the code falls inside that
-// length's range. No lookup tables, no allocation per symbol.
-
-/// What a completed inflate produced.
 #[derive(Debug, Clone)]
 pub struct Inflated {
     pub out: Vec<u8>,
-    /// Bytes of `input` the stream consumed, byte-aligned upward, which is
-    /// where a GZIP trailer begins.
     pub consumed: usize,
     pub blocks: usize,
 }
 
-/// RFC 1951 section 3.2.5, length codes 257..285.
 const LEN_BASE: [u16; 29] = [
     3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
     163, 195, 227, 258,
@@ -363,7 +274,6 @@ const LEN_BASE: [u16; 29] = [
 const LEN_EXTRA: [u8; 29] = [
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
 ];
-/// RFC 1951 section 3.2.5, distance codes 0..29.
 const DIST_BASE: [u16; 30] = [
     1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
     2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
@@ -372,15 +282,12 @@ const DIST_EXTRA: [u8; 30] = [
     0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
     13,
 ];
-/// RFC 1951 section 3.2.7, the order the code-length code lengths arrive in.
 const CLEN_ORDER: [usize; 19] = [
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ];
 
 struct Huffman {
-    /// counts[n] = how many symbols use an n-bit code, n in 1..=15.
     counts: [u16; 16],
-    /// symbols ordered by code length then by symbol value.
     symbols: Vec<u16>,
 }
 
@@ -395,8 +302,6 @@ fn build_huffman(lengths: &[u8]) -> Result<Huffman, String> {
     if counts[0] as usize == lengths.len() {
         return Err("Huffman table has no codes".to_string());
     }
-    // Over-subscription check: a set of code lengths must not describe more
-    // codes than a binary tree of that depth can hold.
     let mut left: i32 = 1;
     for n in 1..16 {
         left <<= 1;
@@ -421,7 +326,6 @@ fn build_huffman(lengths: &[u8]) -> Result<Huffman, String> {
 
 struct BitReader<'a> {
     data: &'a [u8],
-    /// index of the next byte to pull into the accumulator
     pos: usize,
     acc: u32,
     nbits: u32,
@@ -432,7 +336,6 @@ impl<'a> BitReader<'a> {
         BitReader { data, pos: 0, acc: 0, nbits: 0 }
     }
 
-    /// `need` bits, least significant first (RFC 1951 section 3.1.1).
     fn bits(&mut self, need: u32) -> Result<u32, String> {
         while self.nbits < need {
             if self.pos >= self.data.len() {
@@ -456,8 +359,6 @@ impl<'a> BitReader<'a> {
         self.nbits = 0;
     }
 
-    /// Bytes consumed, rounded up to the byte the next field would start at.
-    /// After any `bits` call `nbits` is below 8, so this is exact.
     fn consumed(&self) -> usize {
         self.pos - (self.nbits / 8) as usize
     }
@@ -486,7 +387,6 @@ impl<'a> BitReader<'a> {
 }
 
 fn fixed_tables() -> (Huffman, Huffman) {
-    // RFC 1951 section 3.2.6.
     let mut ll = [0u8; 288];
     for (i, l) in ll.iter_mut().enumerate() {
         *l = match i {
@@ -503,7 +403,6 @@ fn fixed_tables() -> (Huffman, Huffman) {
     )
 }
 
-/// Inflate a raw DEFLATE stream. Stops at the end of the first BFINAL block.
 pub fn inflate(input: &[u8], max_out: usize) -> Result<Inflated, String> {
     let mut br = BitReader::new(input);
     let mut out: Vec<u8> = Vec::new();
@@ -515,7 +414,6 @@ pub fn inflate(input: &[u8], max_out: usize) -> Result<Inflated, String> {
         blocks += 1;
         match btype {
             0 => {
-                // Stored, section 3.2.4.
                 br.align();
                 let p = br.pos;
                 if p + 4 > input.len() {
@@ -542,7 +440,6 @@ pub fn inflate(input: &[u8], max_out: usize) -> Result<Inflated, String> {
                 let (lit, dist) = if btype == 1 {
                     fixed_tables()
                 } else {
-                    // Dynamic, section 3.2.7.
                     let hlit = br.bits(5)? as usize + 257;
                     let hdist = br.bits(5)? as usize + 1;
                     let hclen = br.bits(4)? as usize + 4;
@@ -664,13 +561,6 @@ pub fn inflate(input: &[u8], max_out: usize) -> Result<Inflated, String> {
 mod tests {
     use super::*;
 
-    // ---- inflate, cross-checked against zlib's ENCODER ---------------------
-    //
-    // These streams were produced by CPython's zlib (an independent
-    // implementation) and pasted here with their expected output. A decoder
-    // that agrees with them is agreeing with someone else's encoder, which is
-    // the only form of self-test worth having.
-
     const DYNAMIC_STREAM: &[u8] = &[
         0xED, 0xCC, 0x41, 0x0A, 0x80, 0x30, 0x0C, 0x04, 0xC0, 0xAF, 0xE4, 0x6B,
         0x25, 0xAE, 0x12, 0x4C, 0x5B, 0x48, 0x96, 0x82, 0xBE, 0xDE, 0x43, 0x5F,
@@ -711,7 +601,6 @@ mod tests {
 
     #[test]
     fn inflate_stored_block() {
-        // BFINAL=1 BTYPE=00, then LEN=5, NLEN=~5, then the bytes.
         let s: Vec<u8> = [0x01u8, 0x05, 0x00, 0xFA, 0xFF]
             .iter()
             .copied()
@@ -724,7 +613,6 @@ mod tests {
 
     #[test]
     fn inflate_multiple_blocks() {
-        // A non-final stored block followed by the final fixed block.
         let mut s: Vec<u8> = vec![0x00, 0x05, 0x00, 0xFA, 0xFF];
         s.extend_from_slice(b"BLOCK");
         s.extend_from_slice(FIXED_STREAM);
@@ -736,7 +624,6 @@ mod tests {
 
     #[test]
     fn inflate_rejects_reserved_btype() {
-        // BFINAL=1, BTYPE=11 -> 0b111 = 0x07
         assert!(inflate(&[0x07, 0x00, 0x00, 0x00], 4096).is_err());
     }
 
@@ -774,12 +661,8 @@ mod tests {
                 accepted += 1;
             }
         }
-        // Short random streams do occasionally decode to something; what
-        // matters is that the pass is rare and the decoder never panics.
         assert!(accepted < 60, "{} of 500 random streams inflated", accepted);
     }
-
-    // ---- gzip members ------------------------------------------------------
 
     fn member(flg: u8, extra: &[u8], deflate: &[u8], payload: &[u8]) -> Vec<u8> {
         let mut v = vec![0x1F, 0x8B, 0x08, flg, 0, 0, 0, 0, 0x00, 0xFF];
@@ -791,7 +674,6 @@ mod tests {
     }
 
     fn good_member() -> Vec<u8> {
-        // FNAME set, matching the fixture's own header shape.
         member(0x08, b"carve_session.log\0", FIXED_STREAM, FIXED_TEXT.as_bytes())
     }
 
@@ -818,11 +700,8 @@ mod tests {
         assert_eq!(v.end, Some(n as u64));
     }
 
-    // ---- one test per rubric term -----------------------------------------
-
     #[test]
     fn term_header_fields_falls_on_reserved_flag_bits() {
-        // Twelve of the fixture's thirteen GZIP decoys have this shape.
         let mut m = good_member();
         m[3] |= 0x40;
         let r = analyze(&m);
@@ -853,7 +732,6 @@ mod tests {
 
     #[test]
     fn term_optional_fields_holds_for_a_correct_fhcrc() {
-        // FLG = FNAME | FHCRC. Build the header, then stamp the real CRC16.
         let mut head: Vec<u8> = vec![0x1F, 0x8B, 0x08, 0x08 | 0x02, 0, 0, 0, 0, 0x00, 0xFF];
         head.extend_from_slice(b"n\0");
         let c = (crc32(&head) & 0xFFFF) as u16;
@@ -884,8 +762,6 @@ mod tests {
 
     #[test]
     fn term_inflate_falls_on_a_clean_header_over_noise() {
-        // THE decoy shape: FLG = 0x00, so the header is spotless. Only
-        // inflating rejects it. Image offset 173,564,124 in the fixture.
         let mut s: u32 = 0xA5A5_1234;
         let mut m: Vec<u8> = vec![0x1F, 0x8B, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xFF];
         for _ in 0..512 {
@@ -935,8 +811,6 @@ mod tests {
         let s = W_HEADER + W_OPTIONAL + W_INFLATE + W_CRC + W_ISIZE;
         assert!((s - 1.0).abs() < 1e-12, "rubric weights sum to {}", s);
     }
-
-    // ---- rejections --------------------------------------------------------
 
     #[test]
     fn rejects_bare_signature() {

@@ -1,47 +1,4 @@
 #!/usr/bin/env python3
-"""Plant an operator-supplied file in the fixture's free space, for a live demo.
-
-The demo this exists for: a judge types a sentence nobody has seen before, it goes
-into the image, the carver pulls it back out of unallocated space and puts their own
-words on the screen. Then the wipe runs, the carver runs again with identical
-parameters, and it is gone.
-
-That is worth more than the same sequence over a file we prepared, because the one
-thing an evaluator cannot check about a prepared fixture is whether it was prepared to
-succeed.
-
-WHAT THIS DELIBERATELY DOES NOT DO
-----------------------------------
-It does not touch `fixtures/corpus.py` or `fixtures/plan.py`. The seeded corpus is
-exactly forty files and asserts as much in three places, and every measured figure in
-this project — 33 admitted, 28 of 40 recovered, the 0.9000/0.6500 separation, the
-0.0357 binding margin — is a statement about that set. Adding a forty-first file to the
-corpus would move all of them at once and invalidate the documentation silently.
-
-So this is an overlay. It writes into free space *after* the build, records itself in a
-separate sidecar, and is excluded from `counted_set` by construction because the
-planner never knew about it. The forty stay forty.
-
-THE CONTAINER IS A ZIP, AND THAT IS THE INTERESTING PART
---------------------------------------------------------
-docs/architecture.md is careful about a distinction: a confidence score says "this is a
-well-formed object of this type", not "these are the original bytes". For JPEG entropy
-data and MP4 sample data the two genuinely diverge — `handover_briefing.mov` is admitted
-at 0.9000 with a perfect structural score and a different SHA-256.
-
-ZIP is one of the three formats where they nearly coincide, because the CRC-32 covers
-the payload. So when the carver recovers the judge's sentence, the CRC proves the bytes
-are *their* bytes and not merely a plausible ZIP. The demo closes the gap the
-documentation is honest about, instead of walking into it.
-
-SEED IDENTITY
--------------
-`make fixtures` regenerates a byte-identical image from a seed, and the committed digest
-is checked on every build. This tool breaks that by design, so it refuses to run without
-`--i-understand-this-breaks-seed-identity`, prints the old and new digests, and tells
-the operator how to get back. Run `make fixtures` afterwards and the image returns to
-the committed one.
-"""
 
 from __future__ import annotations
 
@@ -65,30 +22,16 @@ DEFAULT_OUT = "out"
 IMAGE_NAME = "fixture.img"
 MANIFEST_NAME = "fixture.manifest.json"
 
-# Leave the first 8 MiB alone. The reserved region, both FATs and the root directory
-# live down there; the planner's own data region starts well above it, and a demo is
-# not the place to discover an off-by-one in someone else's arithmetic.
 FLOOR_BYTES = 8 << 20
 
-# Keep clear of every planted file by a wide margin, so a bifragment search that walks
-# past the end of a neighbour cannot wander into the operator's payload and confuse a
-# figure that is quoted in the documentation.
 CLEARANCE_CLUSTERS = 8
 
 
 class PlantError(RuntimeError):
-    """Refusal. Always says what to do next."""
+    pass
 
-
-# ── free space ──────────────────────────────────────────────────────────────────────
 
 def occupied_ranges(manifest: dict) -> list[tuple[int, int]]:
-    """Every byte range the planner claims, from the extents it published.
-
-    Read from the manifest rather than recomputed from the FAT, because the manifest is
-    what the carver and every test already agree on. Two readings of the same truth is
-    one reading too many.
-    """
     spans: list[tuple[int, int]] = []
     for f in manifest["files"]:
         for e in f["extents"]:
@@ -102,10 +45,6 @@ def occupied_ranges(manifest: dict) -> list[tuple[int, int]]:
 
 
 def largest_free_run(manifest: dict) -> tuple[int, int]:
-    """The biggest contiguous gap between planted extents, cluster-aligned.
-
-    Returns (start, length). Clearance is applied on both sides of every neighbour.
-    """
     cluster = int(manifest["bytes_per_cluster"])
     total = int(manifest["image_bytes"])
     pad = CLEARANCE_CLUSTERS * cluster
@@ -130,20 +69,9 @@ def largest_free_run(manifest: dict) -> tuple[int, int]:
     return best
 
 
-# ── the payload ─────────────────────────────────────────────────────────────────────
-
 def build_container(text: bytes, name: str) -> bytes:
-    """Wrap the operator's bytes in a ZIP, using the fixture's own encoder.
-
-    `fixtures/deflate.py` exists so the corpus does not depend on the linked zlib, whose
-    output varies between builds. Using it here keeps the operator's file byte-identical
-    on any machine that plants the same text, which is the property the sidecar's
-    sha256 claims.
-    """
     return corpus_mod._build_zip([(name, text)])
 
-
-# ── the write ───────────────────────────────────────────────────────────────────────
 
 def plant(image_path: str, manifest_path: str, payload: bytes, out_dir: str,
           source_text: bytes, entry_name: str, quiet: bool = False) -> dict:
@@ -241,8 +169,6 @@ def plant(image_path: str, manifest_path: str, payload: bytes, out_dir: str,
     say("Restore with: make fixtures")
     return sidecar
 
-
-# ── CLI ─────────────────────────────────────────────────────────────────────────────
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(

@@ -1,56 +1,15 @@
-"""The 40-file forensic corpus: real encoders, one seed, no clock.
-
-Phase 2 does structure-aware carving -- a JPEG segment walk to EOI, PNG chunk
-CRCs, a PDF xref that points at a real byte offset, a ZIP central directory, a
-SQLite page header, an MP4 `ftyp` box tree.  A magic header wrapped around
-random bytes would make the carver's structural term untestable, so nothing
-here is a stub: every generator below is a real encoder for its format, and
-every file is checked by an INDEPENDENT decoder before it is believed
-(`sips`, `afinfo`, Info-ZIP `unzip -t`, `gzip -t`, the `sqlite3` module,
-zlib's inflater).
-
-Determinism, per CLAUDE.md rule 6 and docs/architecture.md D1:
-
-  * Every byte descends from the seed through `hashlib.shake_128` in counter
-    mode.  Nothing reads the clock, the host filesystem, a uuid, the locale,
-    or the stdlib pseudo-random module, and there is no PYTHONHASHSEED
-    dependence: nothing iterates a set and no dict ordering reaches the output.
-  * DEFLATE comes from `fixtures/deflate.py`, never from the linked libz --
-    two encoders produced 13,937 and 14,066 bytes for identical input.  `zlib`
-    appears here only as crc32 (a fixed algorithm) and as an inflater used to
-    verify what we wrote.
-  * SQLite databases are laid out page by page from the on-disk format spec
-    rather than built through the `sqlite3` module, because the module's
-    physical layout moves between library versions -- measured, 5 of 35 pages
-    differed between SQLite 3.53.4 and 3.51.0 for identical statements.  The
-    module is then used as the independent reader.
-  * Every format field that normally carries a timestamp, a host name, a
-    process id or a library version is pinned: gzip MTIME/OS, ZIP DOS
-    date/time, PDF /CreationDate and /ID, PNG (tIME omitted entirely),
-    QuickTime mvhd/tkhd/mdhd creation times, the SQLite header's
-    version-valid-for and write-library fields.
-
-Container note, MEASURED on this machine: CoreAudio dispatches on the file
-extension.  The same bytes -- major brand `qt  `, a 16-bit PCM (`sowt`) track --
-open under `afinfo` as `.mov` and are refused as `.mp4` or `.m4a`
-("AudioFileOpenURL failed").  The five files in the MP4 family are therefore
-named `.mov` so their structural validity is checkable by a decoder we did not
-write.  The carver is unaffected: its signature is the `ftyp` atom at offset 4
-and the box tree beneath it, which are the same in both containers.
-"""
-
 from __future__ import annotations
 
 import hashlib
 import math
 import struct
-import zlib  # crc32 / adler32 / inflate ONLY. Compression is fixtures/deflate.py.
+import zlib
 from collections import Counter
 from dataclasses import dataclass
 
-try:  # imported as a package member (from fixtures import corpus)
+try:
     from .deflate import deflate_raw, zlib_wrap
-except ImportError:  # imported as a top-level module (sys.path has fixtures/)
+except ImportError:
     from deflate import deflate_raw, zlib_wrap
 
 __all__ = [
@@ -60,19 +19,7 @@ __all__ = [
 ]
 
 
-# --------------------------------------------------------------------------
-# 1 · determinism primitives
-# --------------------------------------------------------------------------
-
 class DetRandom:
-    """SHAKE-128 in counter mode. Same seed and label -> same bytes, anywhere.
-
-    The stdlib pseudo-random module is reproducible for its raw bit source but
-    not for shuffle, sample and choices, whose algorithms have changed between
-    CPython releases.  A sponge in counter mode is bit-exact on every platform
-    that has hashlib, and it is auditable in fifteen lines.
-    """
-
     __slots__ = ("_key", "_ctr", "_buf", "_pos")
 
     BLOCK = 64
@@ -103,8 +50,6 @@ class DetRandom:
         return bytes(out)
 
     def below(self, n: int) -> int:
-        """Uniform int in [0, n) by rejection sampling. No float arithmetic,
-        so no rounding mode can differ between builds."""
         if n <= 0:
             raise ValueError("n must be positive")
         if n == 1:
@@ -118,7 +63,6 @@ class DetRandom:
                 return v
 
     def between(self, lo: int, hi: int) -> int:
-        """Uniform int in [lo, hi], both ends included."""
         return lo + self.below(hi - lo + 1)
 
     def pick(self, seq):
@@ -126,23 +70,6 @@ class DetRandom:
 
 
 def shannon_bits_per_byte(data: bytes) -> float:
-    """Shannon entropy of the byte histogram. The whole-image figure in the
-    manifest is this function's output, so the demo's entropy line traces to a
-    measurement rather than to an assertion.
-
-    Two determinism details, both deliberate:
-
-    * The histogram is exact integer counting, and it is written into a
-      fixed 256-slot list, so nothing depends on iteration order. Counter is
-      the C-level counter and is twice as fast as a Python loop over 268 MB.
-    * math.fsum, not a running subtraction. fsum is exactly rounded and
-      order-independent, so the only floating-point freedom left in the
-      result is math.log2 itself. MEASURED on the shipped image: the value is
-      7.061690499603866 and the nearest 6-decimal rounding boundary is
-      3.96e-10 away, while a worst-case 1-ULP log2 disagreement across 256
-      terms moves it by ~2e-13. The rounded value in the manifest therefore
-      cannot flip on a different libm, which is what rule 5 requires of it.
-    """
     if not data:
         return 0.0
     counts = [0] * 256
@@ -151,10 +78,6 @@ def shannon_bits_per_byte(data: bytes) -> float:
     n = len(data)
     return math.fsum(-(c / n) * math.log2(c / n) for c in counts if c)
 
-
-# --------------------------------------------------------------------------
-# 2 · prose
-# --------------------------------------------------------------------------
 
 _VOCAB = (
     "sector cluster extent residue platter spindle allocation journal inode "
@@ -175,9 +98,6 @@ _HEADINGS = (
 
 
 def _prose(rnd: DetRandom, target_bytes: int, title: str) -> str:
-    """English-shaped ASCII. The letter distribution puts byte entropy near
-    4.2 bits/byte, far from the 7.9+ of the compressed formats. That spread is
-    the whole reason the confidence function's entropy term is testable."""
     parts = ["SENTINELWIPE FIXTURE RECORD -- %s\n" % title, "=" * 72 + "\n\n"]
     total = sum(len(p) for p in parts)
     section = 0
@@ -203,19 +123,7 @@ def _build_txt(rnd: DetRandom, target_bytes: int, title: str) -> bytes:
     return _prose(rnd, target_bytes, title).encode("ascii")
 
 
-# --------------------------------------------------------------------------
-# 3 · synthetic imagery
-# --------------------------------------------------------------------------
-
 def _photo_rgb(rnd: DetRandom, width: int, height: int, noise: int) -> bytes:
-    """Photograph-like RGB: a smooth bilinear field plus sensor-like grain.
-
-    Integer arithmetic only -- no libm, because `cos` is not required to be
-    correctly rounded and a last-ulp difference would move quantised JPEG
-    coefficients.  A pure gradient compresses to almost nothing and would leave
-    PNG entropy near 1 bit/byte; real photographs carry grain, and the grain is
-    also what gives the JPEG encoder non-trivial AC coefficients to code.
-    """
     gw, gh = 9, 9
     lattice = [[tuple(rnd.bytes(3)) for _ in range(gw)] for _ in range(gh)]
     grain = rnd.bytes(width * height * 3)
@@ -245,10 +153,6 @@ def _photo_rgb(rnd: DetRandom, width: int, height: int, noise: int) -> bytes:
     return bytes(out)
 
 
-# --------------------------------------------------------------------------
-# 4 · PNG
-# --------------------------------------------------------------------------
-
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
 
@@ -267,26 +171,13 @@ def _paeth(a: int, b: int, c: int) -> int:
 
 def _build_png(pixels: bytes, width: int, height: int, text: dict,
                idat_chunk_size: int | None) -> bytes:
-    """Truecolour 8-bit PNG, filter type rotated per scanline.
-
-    `idat_chunk_size` is the knob the extent planner needs.  None emits ONE
-    opaque IDAT holding the whole zlib stream; an integer splits it into chunks
-    of that many bytes.  The contrast matters and is invisible unless both
-    shapes are on the disk: a single-IDAT PNG gives the carver one length field
-    to trust, while a PNG cut into 8192-byte IDATs gives it a chunk boundary
-    every two clusters, and the cost of validating a candidate extent order
-    moves by roughly an order of magnitude between the two.  The old generator
-    hardcoded 32768 and neither case was representable.
-
-    No tIME chunk: it would be a clock reference. tEXt is ASCII and carries none.
-    """
     bpp = 3
     stride = width * bpp
     raw = bytearray()
     prev = bytes(stride)
     for y in range(height):
         line = pixels[y * stride:(y + 1) * stride]
-        ftype = (0, 1, 2, 3, 4)[y % 5]  # deterministic rotation, all 5 exercised
+        ftype = (0, 1, 2, 3, 4)[y % 5]
         enc = bytearray(stride)
         for i in range(stride):
             a = line[i - bpp] if i >= bpp else 0
@@ -309,7 +200,7 @@ def _build_png(pixels: bytes, width: int, height: int, text: dict,
 
     out = bytearray(_PNG_SIG)
     out += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
-    for k in sorted(text):  # sorted: dict insertion order never reaches the bytes
+    for k in sorted(text):
         out += _png_chunk(b"tEXt",
                           k.encode("latin-1") + b"\x00" + text[k].encode("latin-1"))
     stream = zlib_wrap(bytes(raw))
@@ -321,16 +212,6 @@ def _build_png(pixels: bytes, width: int, height: int, text: dict,
     out += _png_chunk(b"IEND", b"")
     return bytes(out)
 
-
-# --------------------------------------------------------------------------
-# 5 · JPEG -- baseline sequential, integer only
-# --------------------------------------------------------------------------
-#
-# The forward DCT is libjpeg's `jpeg_fdct_islow` (jfdctint.c) reimplemented in
-# Python.  It is fixed-point integer, so no call reaches libm.  A float DCT
-# built from math.cos would be a cross-platform hazard: cos is not required to
-# be correctly rounded, and a last-ulp difference flips a quantised coefficient
-# and changes every byte after it in the entropy-coded stream.
 
 _CONST_BITS = 13
 _PASS1_BITS = 2
@@ -354,7 +235,6 @@ _ZIGZAG = (
     58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 )
 
-# ITU-T T.81 Annex K.1 sample quantisation tables (the quality-50 baseline).
 _QUANT_LUMA_50 = (
     16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55,
     14, 13, 16, 24, 40, 57, 69, 56, 14, 17, 22, 29, 51, 87, 80, 62,
@@ -368,7 +248,6 @@ _QUANT_CHROMA_50 = (
     99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
 )
 
-# ITU-T T.81 Annex K.3 sample Huffman tables.
 _DC_LUMA_BITS = (0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0)
 _DC_CHROMA_BITS = (0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0)
 _DC_VALS = tuple(range(12))
@@ -410,14 +289,12 @@ _AC_CHROMA_VALS = (
 
 
 def _scale_quant(base, quality: int) -> list[int]:
-    """IJG quality scaling, integer only."""
     q = max(1, min(100, quality))
     scale = 5000 // q if q < 50 else 200 - q * 2
     return [max(1, min(255, (v * scale + 50) // 100)) for v in base]
 
 
 def _huff_table(bits, vals) -> dict:
-    """BITS/HUFFVAL -> {symbol: (code, length)}, per T.81 Annex C."""
     codes = {}
     code = 0
     k = 0
@@ -435,7 +312,6 @@ def _descale(x: int, n: int) -> int:
 
 
 def _fdct_islow(d: list[int]) -> list[int]:
-    """libjpeg jpeg_fdct_islow. Output is scaled up by 8 against a true DCT."""
     for ctr in range(8):
         o = ctr * 8
         t0 = d[o + 0] + d[o + 7]; t7 = d[o + 0] - d[o + 7]
@@ -512,8 +388,6 @@ def _fdct_islow(d: list[int]) -> list[int]:
 
 
 class _JpegBits:
-    """MSB-first bit packer with the mandatory 0xFF -> 0xFF 0x00 stuffing."""
-
     __slots__ = ("out", "acc", "nbits")
 
     def __init__(self) -> None:
@@ -537,7 +411,7 @@ class _JpegBits:
     def flush(self) -> None:
         if self.nbits:
             pad = 8 - self.nbits
-            self.write((1 << pad) - 1, pad)  # pad with 1 bits, per T.81
+            self.write((1 << pad) - 1, pad)
 
 
 def _magnitude(v: int) -> tuple[int, int]:
@@ -560,7 +434,7 @@ def _encode_block(bw: _JpegBits, zz, prev_dc: int, dc_tab: dict, ac_tab: dict) -
             run += 1
             continue
         while run > 15:
-            c, l = ac_tab[0xF0]  # ZRL
+            c, l = ac_tab[0xF0]
             bw.write(c, l)
             run -= 16
         cat, bits = _magnitude(v)
@@ -569,7 +443,7 @@ def _encode_block(bw: _JpegBits, zz, prev_dc: int, dc_tab: dict, ac_tab: dict) -
         bw.write(bits, cat)
         run = 0
     if run > 0:
-        c, l = ac_tab[0x00]  # EOB
+        c, l = ac_tab[0x00]
         bw.write(c, l)
     return zz[0]
 
@@ -580,12 +454,6 @@ def _seg(marker: int, payload: bytes) -> bytes:
 
 def _build_jpeg(pixels: bytes, width: int, height: int, quality: int,
                 comment: bytes) -> bytes:
-    """Packed RGB8 -> baseline sequential JFIF, 4:4:4, Annex K tables.
-
-    4:4:4 (no chroma subsampling) keeps the scan interleave one block per
-    component per MCU, which keeps the entropy-coded stream a single ordered
-    walk the carver's structure check can follow.
-    """
     if len(pixels) != width * height * 3:
         raise ValueError("pixel buffer is %d bytes, expected %d"
                          % (len(pixels), width * height * 3))
@@ -613,21 +481,21 @@ def _build_jpeg(pixels: bytes, width: int, height: int, quality: int,
     dc_c = _huff_table(_DC_CHROMA_BITS, _DC_VALS)
     ac_c = _huff_table(_AC_CHROMA_BITS, _AC_CHROMA_VALS)
 
-    out = bytearray(b"\xFF\xD8")  # SOI
+    out = bytearray(b"\xFF\xD8")
     out += _seg(0xE0, b"JFIF\x00" + bytes([1, 2, 1])
                 + struct.pack(">HH", 72, 72) + b"\x00\x00")
     if comment:
-        out += _seg(0xFE, comment)  # COM
+        out += _seg(0xFE, comment)
     out += _seg(0xDB, bytes([0x00]) + bytes(ql[_ZIGZAG[i]] for i in range(64)))
     out += _seg(0xDB, bytes([0x01]) + bytes(qc[_ZIGZAG[i]] for i in range(64)))
     sof = bytes([8]) + struct.pack(">HH", height, width) + bytes([3])
     sof += bytes([1, 0x11, 0, 2, 0x11, 1, 3, 0x11, 1])
-    out += _seg(0xC0, sof)  # SOF0, baseline
+    out += _seg(0xC0, sof)
     out += _seg(0xC4, bytes([0x00]) + bytes(_DC_LUMA_BITS) + bytes(_DC_VALS))
     out += _seg(0xC4, bytes([0x10]) + bytes(_AC_LUMA_BITS) + bytes(_AC_LUMA_VALS))
     out += _seg(0xC4, bytes([0x01]) + bytes(_DC_CHROMA_BITS) + bytes(_DC_VALS))
     out += _seg(0xC4, bytes([0x11]) + bytes(_AC_CHROMA_BITS) + bytes(_AC_CHROMA_VALS))
-    out += _seg(0xDA, bytes([3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]))  # SOS
+    out += _seg(0xDA, bytes([3, 1, 0x00, 2, 0x11, 3, 0x11, 0, 63, 0]))
 
     bw = _JpegBits()
     pdc = [0, 0, 0]
@@ -665,43 +533,29 @@ def _build_jpeg(pixels: bytes, width: int, height: int, quality: int,
                 pdc[ci] = _encode_block(bw, zz, pdc[ci], dct, act)
     bw.flush()
     out += bw.out
-    out += b"\xFF\xD9"  # EOI
+    out += b"\xFF\xD9"
     return bytes(out)
 
-
-# --------------------------------------------------------------------------
-# 6 · PDF
-# --------------------------------------------------------------------------
 
 def _pdf_esc(s: str) -> str:
     return s.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
 
 def _build_pdf(rnd: DetRandom, title: str, pages: int, blob_bytes: int) -> bytes:
-    """PDF 1.7 with a cross-reference table computed from real object offsets.
-
-    The carver's PDF check looks for `xref`, a trailer carrying /Root, and a
-    `startxref` byte offset that actually lands on the xref keyword.  That only
-    means anything if the offsets come from where the objects really are, which
-    is what the assembly loop below does.  /CreationDate and /ID are normally a
-    clock and a random nonce; both are pinned to the seed here.
-    """
     objs: list[bytes] = []
 
     def add(body: bytes) -> int:
         objs.append(body)
-        return len(objs)  # object numbers are 1-based
+        return len(objs)
 
     font = add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier "
                b"/Encoding /WinAnsiEncoding >>")
-    # An embedded octet-stream: this is where a PDF gets its high-entropy region,
-    # which is what pulls the format off the plain-text end of the entropy scale.
     blob = zlib_wrap(rnd.bytes(blob_bytes))
     attach = add(b"<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream"
                  b" /Filter /FlateDecode /Length " + str(len(blob)).encode()
                  + b" >>\nstream\n" + blob + b"\nendstream")
 
-    pages_obj = add(b"PLACEHOLDER")  # reserved so each /Page can point at it
+    pages_obj = add(b"PLACEHOLDER")
     page_ids = []
     for p in range(pages):
         lines = ["SENTINELWIPE %s -- page %d of %d" % (title, p + 1, pages),
@@ -712,7 +566,7 @@ def _build_pdf(rnd: DetRandom, title: str, pages: int, blob_bytes: int) -> bytes
         for ln in lines:
             ops.append(b"(" + _pdf_esc(ln).encode("latin-1") + b") Tj T*")
         ops.append(b"ET")
-        ops.append(b"0.5 w 54 726 m 558 726 l S")  # a real vector rule
+        ops.append(b"0.5 w 54 726 m 558 726 l S")
         stream = zlib_wrap(b"\n".join(ops) + b"\n")
         cid = add(b"<< /Filter /FlateDecode /Length " + str(len(stream)).encode()
                   + b" >>\nstream\n" + stream + b"\nendstream")
@@ -754,32 +608,15 @@ def _build_pdf(rnd: DetRandom, title: str, pages: int, blob_bytes: int) -> bytes
     return bytes(out)
 
 
-# --------------------------------------------------------------------------
-# 7 · ZIP / DOCX
-# --------------------------------------------------------------------------
-
-# 2026-01-01 00:00:00 as an MS-DOS date/time pair. Frozen: the zipfile module
-# stamps the wall clock into every local header and every central directory
-# entry, which is the most common reason two "identical" ZIPs differ.
 _DOS_TIME = 0x0000
 _DOS_DATE = ((2026 - 1980) << 9) | (1 << 5) | 1
 
-# Version-made-by 0x031E = Unix (3), ZIP spec 3.0. Hardcoded rather than taken
-# from the host: the zipfile module derives it from sys.platform, so a Windows
-# teammate's archive would differ in the central directory.
 _VERSION_MADE_BY = 0x031E
 _VERSION_NEEDED = 20
 _EXTERNAL_ATTR = 0o644 << 16
 
 
 def _build_zip(entries: list[tuple[str, bytes]]) -> bytes:
-    """A ZIP container written field by field.
-
-    The zipfile module's deflated write path routes the payload through the
-    linked libz and would reintroduce exactly the machine dependence
-    fixtures/deflate.py exists to remove, so the container is assembled here
-    instead, field by field, over our own encoder.
-    """
     out = bytearray()
     central = bytearray()
     for name, data in entries:
@@ -787,7 +624,7 @@ def _build_zip(entries: list[tuple[str, bytes]]) -> bytes:
         crc = zlib.crc32(data) & 0xFFFFFFFF
         comp = deflate_raw(data)
         method = 8
-        if len(comp) >= len(data):  # never store an entry larger than its input
+        if len(comp) >= len(data):
             comp, method = data, 0
         offset = len(out)
         out += struct.pack("<IHHHHHIIIHH", 0x04034B50, _VERSION_NEEDED, 0, method,
@@ -883,27 +720,12 @@ def _build_docx(rnd: DetRandom, title: str, paragraphs: int) -> bytes:
     ])
 
 
-# --------------------------------------------------------------------------
-# 8 · SQLite -- pages laid out from the on-disk format spec
-# --------------------------------------------------------------------------
-#
-# The sqlite3 MODULE cannot give byte-identical output across laptops: measured,
-# the same inserts under SQLite 3.53.4 (uv's CPython 3.11) and 3.51.0 (system
-# CPython 3.9) produced databases differing in 5 of 35 pages -- interior b-tree
-# pages, not metadata, so freezing header fields is necessary and nowhere near
-# sufficient. So the pages are laid out here. Scope is deliberately small: table
-# b-trees only, no indices, no overflow pages, no freelist, UTF-8, one interior
-# level. The sqlite3 module is then the INDEPENDENT reader that proves it.
-#
-# Reference: https://sqlite.org/fileformat2.html
-
 _LEAF_TABLE = 0x0D
 _INTERIOR_TABLE = 0x05
-_SQLITE_PINNED_VERSION = 3045000  # 3.45.0, the floor we normalise every build to
+_SQLITE_PINNED_VERSION = 3045000
 
 
 def _varint(n: int) -> bytes:
-    """SQLite big-endian base-128 varint. Only non-negative values occur here."""
     if n == 0:
         return b"\x00"
     if n > 0x7FFFFFFFFFFFFFFF:
@@ -929,8 +751,6 @@ def _int_serial(v: int) -> tuple[int, bytes]:
 
 
 def _record(values) -> bytes:
-    """One row as a SQLite record. Pass None for the INTEGER PRIMARY KEY column:
-    that column is stored as NULL and the real value lives in the cell rowid."""
     types, body = [], bytearray()
     for v in values:
         if v is None:
@@ -950,7 +770,7 @@ def _record(values) -> bytes:
             raise TypeError(type(v))
     tbytes = b"".join(_varint(t) for t in types)
     hlen = len(tbytes) + 1
-    while len(_varint(hlen)) + len(tbytes) != hlen:  # varint width fixpoint
+    while len(_varint(hlen)) + len(tbytes) != hlen:
         hlen = len(_varint(hlen)) + len(tbytes)
     return _varint(hlen) + tbytes + bytes(body)
 
@@ -958,13 +778,11 @@ def _record(values) -> bytes:
 class _SqliteDb:
     def __init__(self, page_size: int = 4096) -> None:
         self.ps = page_size
-        # Page 1 is reserved up front: allocating it later would renumber every
-        # table root already handed out.
         self.pages: list[bytearray] = [bytearray(page_size)]
 
     def _new_page(self) -> int:
         self.pages.append(bytearray(self.ps))
-        return len(self.pages)  # page numbers are 1-based
+        return len(self.pages)
 
     def _write_leaf(self, pageno: int, cells: list[bytes], header_at: int) -> None:
         p = self.pages[pageno - 1]
@@ -975,10 +793,10 @@ class _SqliteDb:
             p[content:content + len(c)] = c
             ptrs.append(content)
         p[header_at] = _LEAF_TABLE
-        struct.pack_into(">H", p, header_at + 1, 0)  # no freeblocks
+        struct.pack_into(">H", p, header_at + 1, 0)
         struct.pack_into(">H", p, header_at + 3, len(cells))
-        struct.pack_into(">H", p, header_at + 5, content & 0xFFFF)  # 0 means 65536
-        p[header_at + 7] = 0                                        # fragmented bytes
+        struct.pack_into(">H", p, header_at + 5, content & 0xFFFF)
+        p[header_at + 7] = 0
         for i, off in enumerate(ptrs):
             struct.pack_into(">H", p, header_at + 8 + 2 * i, off)
 
@@ -1001,7 +819,6 @@ class _SqliteDb:
             struct.pack_into(">H", p, 12 + 2 * i, off)
 
     def add_table(self, rows) -> int:
-        """rows: (rowid, values) in ascending rowid order. Returns the root page."""
         root = self._new_page()
         cells = [_varint(len(r)) + _varint(rid) + r
                  for rid, r in ((rid, _record(vals)) for rid, vals in rows)]
@@ -1025,8 +842,6 @@ class _SqliteDb:
             leaf_pages.append((pn, rows[idx + len(group) - 1][0]))
             idx += len(group)
         if len(leaf_pages) == 1:
-            # One leaf needs no interior level: the root becomes the leaf. The
-            # leaf was the last page allocated, so popping renumbers nothing.
             only = leaf_pages[0][0]
             self.pages[root - 1] = self.pages[only - 1]
             self.pages.pop(only - 1)
@@ -1035,8 +850,6 @@ class _SqliteDb:
         return root
 
     def finish(self, schema) -> bytes:
-        """schema rows: (type, name, tbl_name, rootpage, sql), written into
-        page 1's sqlite_master leaf, which begins after the 100-byte header."""
         cells = []
         for i, row in enumerate(schema, start=1):
             rec = _record(list(row))
@@ -1045,23 +858,23 @@ class _SqliteDb:
         hdr = self.pages[0]
         hdr[0:16] = b"SQLite format 3\x00"
         struct.pack_into(">H", hdr, 16, 1 if self.ps == 65536 else self.ps)
-        hdr[18] = 1   # write version: legacy rollback journal
-        hdr[19] = 1   # read version
-        hdr[20] = 0   # reserved bytes per page
-        hdr[21], hdr[22], hdr[23] = 64, 32, 32  # payload fractions, spec defaults
-        struct.pack_into(">I", hdr, 24, 1)                # change counter
-        struct.pack_into(">I", hdr, 28, len(self.pages))  # database size in pages
-        struct.pack_into(">I", hdr, 32, 0)                # freelist trunk page
-        struct.pack_into(">I", hdr, 36, 0)                # freelist page count
-        struct.pack_into(">I", hdr, 40, len(schema))      # schema cookie
-        struct.pack_into(">I", hdr, 44, 4)                # schema format 4
-        struct.pack_into(">I", hdr, 48, 0)                # default page cache size
-        struct.pack_into(">I", hdr, 52, 0)                # largest root (no autovacuum)
-        struct.pack_into(">I", hdr, 56, 1)                # text encoding: UTF-8
-        struct.pack_into(">I", hdr, 60, 0)                # user version
-        struct.pack_into(">I", hdr, 64, 0)                # incremental vacuum
-        struct.pack_into(">I", hdr, 68, 0)                # application id
-        struct.pack_into(">I", hdr, 92, 1)                # version-valid-for
+        hdr[18] = 1
+        hdr[19] = 1
+        hdr[20] = 0
+        hdr[21], hdr[22], hdr[23] = 64, 32, 32
+        struct.pack_into(">I", hdr, 24, 1)
+        struct.pack_into(">I", hdr, 28, len(self.pages))
+        struct.pack_into(">I", hdr, 32, 0)
+        struct.pack_into(">I", hdr, 36, 0)
+        struct.pack_into(">I", hdr, 40, len(schema))
+        struct.pack_into(">I", hdr, 44, 4)
+        struct.pack_into(">I", hdr, 48, 0)
+        struct.pack_into(">I", hdr, 52, 0)
+        struct.pack_into(">I", hdr, 56, 1)
+        struct.pack_into(">I", hdr, 60, 0)
+        struct.pack_into(">I", hdr, 64, 0)
+        struct.pack_into(">I", hdr, 68, 0)
+        struct.pack_into(">I", hdr, 92, 1)
         struct.pack_into(">I", hdr, 96, _SQLITE_PINNED_VERSION)
         return b"".join(bytes(p) for p in self.pages)
 
@@ -1083,7 +896,6 @@ def _build_sqlite(rnd: DetRandom, rows: int, page_size: int = 4096) -> bytes:
     for i in range(rows):
         custody.append((i + 1, [
             None,
-            # Timestamps come from the row index, never from the clock.
             "2026-01-%02dT%02d:%02d:%02dZ" % (1 + i % 28, i % 24,
                                               (i * 7) % 60, (i * 13) % 60),
             rnd.pick(_ACTORS),
@@ -1105,19 +917,6 @@ def _build_sqlite(rnd: DetRandom, rows: int, page_size: int = 4096) -> bytes:
     ])
 
 
-# --------------------------------------------------------------------------
-# 9 · MP4 / QuickTime -- a real, decodable 16-bit PCM track
-# --------------------------------------------------------------------------
-#
-# A carver's MP4 check is `ftyp` at offset 4 plus a walkable box tree. Writing a
-# fake H.264 track would give a box tree no decoder accepts, so the payload is
-# 16-bit little-endian PCM ('sowt'), a real codec macOS CoreAudio decodes. That
-# makes "structurally valid" an externally checkable claim rather than a
-# self-assessment. See the module docstring for the .mov extension measurement.
-
-# 1904-01-01 to 1970-01-01 is 2082844800 s; 1970-01-01 to 2026-01-01 is
-# 1767225600 s. Pinned, because left to the clock these three boxes would be the
-# loudest nondeterminism in the corpus.
 _QT_EPOCH_2026 = 2082844800 + 1767225600
 _MATRIX_UNITY = struct.pack(">9i", 0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000)
 
@@ -1127,14 +926,8 @@ def _box(kind: bytes, payload: bytes) -> bytes:
 
 
 def _pcm_samples(rnd: DetRandom, frames: int, rate: int) -> bytes:
-    """Two-channel 16-bit LE: a stepped triangle carrier plus dither.
-
-    Integer only. A sine would need libm; a triangle is exactly representable
-    and still a real waveform a decoder renders as a tone. The dither is what
-    lifts the byte entropy off the floor a pure tone would sit on.
-    """
     out = bytearray(frames * 4)
-    period = max(2, rate // 220)  # about 220 Hz
+    period = max(2, rate // 220)
     half = max(1, period // 2)
     dither = rnd.bytes(frames * 2)
     pos = 0
@@ -1170,7 +963,7 @@ def _build_mp4(rnd: DetRandom, frames: int, rate: int = 44100) -> bytes:
                 + _MATRIX_UNITY + struct.pack(">II", 0, 0))
     mdhd = _box(b"mdhd", struct.pack(">BBBB", 0, 0, 0, 0)
                 + struct.pack(">IIII", _QT_EPOCH_2026, _QT_EPOCH_2026, rate, frames)
-                + struct.pack(">HH", 0x55C4, 0))  # 'und'
+                + struct.pack(">HH", 0x55C4, 0))
     hdlr = _box(b"hdlr", struct.pack(">BBBB", 0, 0, 0, 0) + b"mhlr" + b"soun"
                 + b"\x00" * 12 + bytes([12]) + b"SoundHandler")
     smhd = _box(b"smhd", struct.pack(">BBBBhH", 0, 0, 0, 0, 0, 0))
@@ -1178,8 +971,8 @@ def _build_mp4(rnd: DetRandom, frames: int, rate: int = 44100) -> bytes:
                 + _box(b"url ", struct.pack(">BBBB", 0, 0, 0, 1)))
     dinf = _box(b"dinf", dref)
     sowt = _box(b"sowt", b"\x00" * 6 + struct.pack(">H", 1)
-                + struct.pack(">HHI", 0, 0, 0)       # version, revision, vendor
-                + struct.pack(">HHHH", 2, 16, 0, 0)  # channels, bits, compid, packet
+                + struct.pack(">HHI", 0, 0, 0)
+                + struct.pack(">HHHH", 2, 16, 0, 0)
                 + struct.pack(">I", rate << 16))
     stsd = _box(b"stsd", struct.pack(">BBBBI", 0, 0, 0, 0, 1) + sowt)
     stts = _box(b"stts", struct.pack(">BBBBI", 0, 0, 0, 0, 1)
@@ -1196,43 +989,25 @@ def _build_mp4(rnd: DetRandom, frames: int, rate: int = 44100) -> bytes:
         mdia = _box(b"mdia", mdhd + hdlr + minf)
         return _box(b"moov", mvhd + _box(b"trak", tkhd + mdia))
 
-    moov = assemble(0)                    # the size is offset-independent
-    data_off = len(ftyp) + len(moov) + 8  # +8 for the mdat box header
+    moov = assemble(0)
+    data_off = len(ftyp) + len(moov) + 8
     moov = assemble(data_off)
     return ftyp + moov + _box(b"mdat", audio)
 
 
-# --------------------------------------------------------------------------
-# 10 · GZIP
-# --------------------------------------------------------------------------
-
 def _build_gzip(payload: bytes, inner_name: str) -> bytes:
-    """RFC 1952 member. MTIME is forced to 0 and OS to 255 (unknown).
-
-    The gzip module stamps the wall clock into MTIME and the build platform
-    into the OS byte by default; both are nondeterminism, and both are pinned
-    to constants here. XFL is 0
-    (unspecified) because our encoder is neither libz's "maximum" nor its
-    "fastest" setting, and claiming either would be a false statement in a
-    header field.
-    """
     name = inner_name.encode("ascii")
-    head = (bytes([0x1F, 0x8B, 0x08, 0x08])   # magic, CM=deflate, FLG=FNAME
-            + struct.pack("<I", 0)            # MTIME = 0
-            + bytes([0x00, 0xFF])             # XFL = 0, OS = 255 (unknown)
+    head = (bytes([0x1F, 0x8B, 0x08, 0x08])
+            + struct.pack("<I", 0)
+            + bytes([0x00, 0xFF])
             + name + b"\x00")
     return (head + deflate_raw(payload)
             + struct.pack("<II", zlib.crc32(payload) & 0xFFFFFFFF,
                           len(payload) & 0xFFFFFFFF))
 
 
-# --------------------------------------------------------------------------
-# 11 · the corpus
-# --------------------------------------------------------------------------
-
 @dataclass(frozen=True)
 class CorpusFile:
-    """One planted file. `sha256` is of `data`, and is what recovery is scored against."""
     name: str
     kind: str
     data: bytes
@@ -1241,62 +1016,49 @@ class CorpusFile:
 
 KINDS = ("TXT", "GZIP", "PNG", "JPEG", "PDF", "DOCX", "SQLITE", "MP4")
 
-# name, kind, per-kind build arguments. Order is the corpus order and is stable.
-# Sizes are chosen so the smallest file is comfortably multi-cluster at a 4 KiB
-# cluster (the floor measured below is 12 clusters), which every fragmentation
-# case needs: a 3-fragment plan cannot be expressed in fewer than 3 clusters.
 _PLAN: tuple[tuple[str, str, dict], ...] = (
-    # ---- TXT: the low-entropy anchor, near 4.3 bits/byte
     ("evidence_log_2026-01-14.txt", "TXT", {"target": 40960, "title": "EVIDENCE LOG"}),
     ("interview_transcript_raw.txt", "TXT", {"target": 61440, "title": "INTERVIEW TRANSCRIPT"}),
     ("sector_survey_notes.txt", "TXT", {"target": 81920, "title": "SECTOR SURVEY NOTES"}),
     ("operator_handover.txt", "TXT", {"target": 114688, "title": "OPERATOR HANDOVER"}),
     ("wipe_command_history.txt", "TXT", {"target": 163840, "title": "WIPE COMMAND HISTORY"}),
 
-    # ---- GZIP: DEFLATE over prose, so entropy sits at the top of the scale
     ("audit_trail.log.gz", "GZIP", {"payload": 196608, "inner": "audit_trail.log"}),
     ("dmesg_capture.log.gz", "GZIP", {"payload": 262144, "inner": "dmesg_capture.log"}),
     ("controller_dump.bin.gz", "GZIP", {"payload": 327680, "inner": "controller_dump.bin"}),
     ("carve_session.log.gz", "GZIP", {"payload": 393216, "inner": "carve_session.log"}),
     ("imaging_transcript.txt.gz", "GZIP", {"payload": 458752, "inner": "imaging_transcript.txt"}),
 
-    # ---- PNG: the IDAT chunk-size knob. None = one opaque IDAT.
     ("sector_map_01.png", "PNG", {"w": 224, "h": 224, "noise": 26, "idat": None}),
     ("sector_map_02.png", "PNG", {"w": 256, "h": 256, "noise": 30, "idat": 8192}),
     ("sector_map_03.png", "PNG", {"w": 256, "h": 256, "noise": 34, "idat": 8192}),
     ("seizure_photo_a.png", "PNG", {"w": 288, "h": 288, "noise": 22, "idat": None}),
     ("entropy_heatmap.png", "PNG", {"w": 240, "h": 240, "noise": 38, "idat": 8192}),
 
-    # ---- JPEG
     ("seizure_photo_b.jpg", "JPEG", {"w": 320, "h": 320, "noise": 24, "q": 92}),
     ("drive_label_macro.jpg", "JPEG", {"w": 288, "h": 288, "noise": 30, "q": 94}),
     ("bench_setup_wide.jpg", "JPEG", {"w": 352, "h": 288, "noise": 26, "q": 90}),
     ("platter_surface_01.jpg", "JPEG", {"w": 256, "h": 256, "noise": 40, "q": 95}),
     ("evidence_bag_seal.jpg", "JPEG", {"w": 304, "h": 304, "noise": 28, "q": 93}),
 
-    # ---- PDF
     ("chain_of_custody.pdf", "PDF", {"pages": 10, "blob": 24576, "title": "CHAIN OF CUSTODY"}),
     ("acquisition_worksheet.pdf", "PDF", {"pages": 8, "blob": 32768, "title": "ACQUISITION WORKSHEET"}),
     ("standards_checklist.pdf", "PDF", {"pages": 12, "blob": 16384, "title": "STANDARDS CHECKLIST"}),
     ("examiner_affidavit.pdf", "PDF", {"pages": 6, "blob": 40960, "title": "EXAMINER AFFIDAVIT"}),
     ("disposal_certificate.pdf", "PDF", {"pages": 14, "blob": 20480, "title": "DISPOSAL CERTIFICATE"}),
 
-    # ---- DOCX
     ("sanitization_report.docx", "DOCX", {"paras": 900, "title": "SANITIZATION REPORT"}),
     ("incident_summary.docx", "DOCX", {"paras": 1400, "title": "INCIDENT SUMMARY"}),
     ("lab_procedure_v3.docx", "DOCX", {"paras": 700, "title": "LAB PROCEDURE V3"}),
     ("custody_addendum.docx", "DOCX", {"paras": 1100, "title": "CUSTODY ADDENDUM"}),
     ("media_inventory.docx", "DOCX", {"paras": 1800, "title": "MEDIA INVENTORY"}),
 
-    # ---- SQLITE
     ("custody_ledger.db", "SQLITE", {"rows": 1100}),
     ("sector_index.db", "SQLITE", {"rows": 700}),
     ("device_registry.db", "SQLITE", {"rows": 900}),
     ("carve_results.db", "SQLITE", {"rows": 1500}),
     ("hash_baseline.db", "SQLITE", {"rows": 1300}),
 
-    # ---- MP4 family. Named .mov: measured, CoreAudio dispatches on extension
-    # and refuses these exact bytes as .mp4. See the module docstring.
     ("bodycam_intake.mov", "MP4", {"frames": 22050}),
     ("bench_capture_01.mov", "MP4", {"frames": 33075}),
     ("drive_teardown.mov", "MP4", {"frames": 44100}),
@@ -1306,18 +1068,6 @@ _PLAN: tuple[tuple[str, str, dict], ...] = (
 
 CORPUS_NAMES = tuple(name for name, _kind, _spec in _PLAN)
 
-# Names are the one thing this module is the authority on, so the two name
-# lists the extent planner needs are published here rather than retyped there.
-# The previous fragmentation table named five files that were not in the corpus
-# and one that could not be built; that class of defect is removed by deriving
-# both lists from _PLAN itself and asserting, in generate_corpus, that they are
-# disjoint and that every name they mention is really generated.
-#
-# The rule is deliberately boring, so no choice reads as cherry-picking:
-#   * the fragmentation ladder draws the LAST file of a kind,
-#   * the deleted-contiguous set draws the FIRST file of a kind.
-# Nothing can therefore land in both.
-
 NAMES_BY_KIND = {}
 for _name, _kind, _spec in _PLAN:
     NAMES_BY_KIND.setdefault(_kind, []).append(_name)
@@ -1325,44 +1075,23 @@ NAMES_BY_KIND = {k: tuple(v) for k, v in NAMES_BY_KIND.items()}
 FIRST_OF_KIND = {k: v[0] for k, v in NAMES_BY_KIND.items()}
 LAST_OF_KIND = {k: v[-1] for k, v in NAMES_BY_KIND.items()}
 
-# The fragmentation ladder, bound to files this module really generates.
-#
-#   FRAG-01  2 frags, gap 1 cluster        floor case; contiguous carving fails
-#   FRAG-02  2 frags, gap 16 clusters      the ordinary real gap
-#   FRAG-03  2 frags, gap 128 clusters     sets and proves the max_gap budget
-#   FRAG-04  2 frags, gap 50 clusters containing FRAG-05 fragment 0
-#   FRAG-05  2 frags, gap 70 clusters containing FRAG-04 fragment 1
-#   FRAG-06  3 frags                       unsolvable by bifragment carving
-#   FRAG-07  2 frags, physically reversed  unsolvable by a forward-only search
-#
-# The KINDS here are fixed by the ladder's design and are not free choices.
-# FRAG-04 and FRAG-05 must be the SAME kind: the point of the mutual interleave
-# is that the decoy sitting in each file's gap carries the same signature as the
-# file being carved. FRAG-06 is a DOCX and FRAG-07 a JPEG, matching the operator
-# decision in docs/architecture.md -- a tri-fragment DOCX and an out-of-order
-# JPEG, both unsolvable by construction, both named on screen at demo time.
 FRAGMENTATION_SLOTS = {
-    "FRAG-01": LAST_OF_KIND["PNG"],    # entropy_heatmap.png,        45 clusters
-    "FRAG-02": LAST_OF_KIND["GZIP"],   # imaging_transcript.txt.gz,  32 clusters
-    "FRAG-03": LAST_OF_KIND["PDF"],    # disposal_certificate.pdf,   12 clusters
-    "FRAG-04": NAMES_BY_KIND["MP4"][-2],  # sealing_procedure.mov,   54 clusters
-    "FRAG-05": NAMES_BY_KIND["MP4"][-1],  # handover_briefing.mov,   17 clusters
-    "FRAG-06": LAST_OF_KIND["DOCX"],   # media_inventory.docx,       20 clusters
-    "FRAG-07": LAST_OF_KIND["JPEG"],   # evidence_bag_seal.jpg,      27 clusters
+    "FRAG-01": LAST_OF_KIND["PNG"],
+    "FRAG-02": LAST_OF_KIND["GZIP"],
+    "FRAG-03": LAST_OF_KIND["PDF"],
+    "FRAG-04": NAMES_BY_KIND["MP4"][-2],
+    "FRAG-05": NAMES_BY_KIND["MP4"][-1],
+    "FRAG-06": LAST_OF_KIND["DOCX"],
+    "FRAG-07": LAST_OF_KIND["JPEG"],
 }
 
-# One contiguous file of each of the eight kinds, offered to the planner for the
-# deleted set: every format is represented, so no carve result can be waved away
-# with "they only deleted the formats that carve easily".
 DELETED_CONTIGUOUS_CANDIDATES = tuple(FIRST_OF_KIND[k] for k in KINDS)
 
 
-_MIN_FILE_BYTES = 4096  # every file must span more than one 4 KiB cluster
+_MIN_FILE_BYTES = 4096
 
 
 def _build_one(seed: str, name: str, kind: str, spec: dict) -> bytes:
-    """One file. The PRNG is labelled with the file name, so adding, removing
-    or reordering a file never shifts the bytes of any other file."""
     rnd = DetRandom(seed, label="%s|%s" % (kind, name))
 
     if kind == "TXT":
@@ -1401,11 +1130,6 @@ def _build_one(seed: str, name: str, kind: str, spec: dict) -> bytes:
 
 
 def generate_corpus(seed: str) -> list[CorpusFile]:
-    """The 40 planted files, in corpus order, derived entirely from `seed`.
-
-    Deterministic: run it twice in two fresh processes and every sha256 matches.
-    Nothing here reads the clock, the host, the locale or the environment.
-    """
     if not isinstance(seed, str):
         raise TypeError("seed must be str, got %r" % type(seed).__name__)
 
@@ -1434,8 +1158,6 @@ def generate_corpus(seed: str) -> list[CorpusFile]:
     absent = [n for n in DELETED_CONTIGUOUS_CANDIDATES if n not in have]
     if absent:
         raise AssertionError("deleted-set candidates name absent files: %s" % absent)
-    # A file in both lists would be counted twice by the planner's deleted set,
-    # silently turning 12 deleted files into 11. Fail the build instead.
     both = sorted(set(FRAGMENTATION_SLOTS.values())
                   & set(DELETED_CONTIGUOUS_CANDIDATES))
     if both:
@@ -1447,11 +1169,6 @@ def generate_corpus(seed: str) -> list[CorpusFile]:
 
 
 def _main(argv) -> int:
-    """Write the corpus to a directory and print the measured table.
-
-    fixtures/build_image.py is the real CLI; this exists so the corpus can be
-    regenerated and handed to external decoders on its own.
-    """
     import os
 
     outdir = argv[1] if len(argv) > 1 else "corpus_out"

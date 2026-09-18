@@ -1,79 +1,9 @@
-//! PNG structure validation: walk the chunk list and verify EVERY CRC-32.
-//!
-//! Garfinkel, "Carving contiguous and fragmented files with fast object
-//! validation", DFRWS 2007. The paper distinguishes validators by how much of
-//! the object they actually cover, and PNG is the strongest case a carver gets:
-//! ISO/IEC 15948 section 5.3 puts a CRC-32 on every chunk, so verifying all of
-//! them covers every byte of the object except the 8-byte signature and the
-//! four length fields, which the walk checks by construction. There is no
-//! residue in this fixture that survives that -- the manifest's measured
-//! `residue_signature_false_positives.PNG` is 0 to begin with, because the PNG
-//! signature is eight bytes and eight bytes do not occur by chance in 134 MB.
-//! The CRC walk is what makes PNG the reliable half of a bifragment search: a
-//! wrong reassembly changes chunk bytes, and a changed byte fails a CRC.
-//!
-//! ## The walk
-//!
-//! 8-byte signature `89 50 4E 47 0D 0A 1A 0A`, then a chunk list. Each chunk is
-//! a big-endian 32-bit payload length, a 4-byte type, the payload, and a
-//! big-endian CRC-32 (polynomial 0xEDB88320, hand-rolled in
-//! `structure::crc32`) computed over the TYPE AND PAYLOAD, not over the length.
-//! IHDR is first, IEND is last and empty, and `end` is one past IEND's CRC.
-//!
-//! ## RUBRIC -- how `score` is derived
-//!
-//! Seven independent checks, fixed weights, summing to exactly 1.00.
-//!
-//!   0.30  crc_integrity     FRACTION of chunks whose CRC-32 verifies. The one
-//!                           genuinely continuous term in this validator and
-//!                           the one that matters: it is a per-chunk measure of
-//!                           how much of a damaged or mis-assembled object
-//!                           survived intact.
-//!   0.15  ihdr_first        IHDR is chunk 0, payload length exactly 13
-//!   0.15  iend_last         IEND is the final chunk, payload length 0, and no
-//!                           further chunk follows it
-//!   0.15  dimension_sanity  1 <= width,height <= 2^31-1, width*height <=
-//!                           2^28 pixels, and a bit-depth/colour-type pair the
-//!                           spec's Table 11.1 actually permits
-//!   0.10  idat_contiguity   at least one IDAT, and all IDATs form one
-//!                           unbroken run (section 5.6 requires it)
-//!   0.10  chunk_names       every chunk type is four ASCII letters, and every
-//!                           chunk whose name marks it CRITICAL (bit 5 of byte
-//!                           0 clear) is one of the four the spec defines
-//!   0.05  zlib_header       the first IDAT opens with a legal RFC 1950 header:
-//!                           CM 8, CINFO <= 7, and (CMF<<8|FLG) % 31 == 0
-//!
-//! ## VALIDITY GATE -- separate from the score
-//!
-//! `valid` requires: the 8-byte signature; IHDR first with length 13; EVERY
-//! chunk CRC correct; at least one IDAT; IEND present, empty and last; and a
-//! legal bit-depth/colour-type pair with in-range dimensions. A single failed
-//! CRC fails the object outright -- unlike JPEG, PNG gives us a checksum, and
-//! declining to enforce it would throw away the strongest evidence in the file.
-//!
-//! ## WHAT IS NOT CHECKED, stated plainly
-//!
-//! The IDAT payload is a zlib (RFC 1950) stream wrapping DEFLATE. This
-//! validator checks the stream's two header bytes and does NOT inflate it, and
-//! does not verify its trailing Adler-32. That is a deliberate cost decision,
-//! not an oversight: the per-chunk CRC-32 already covers every byte the zlib
-//! stream is made of, so inflating would re-verify bytes a stronger check has
-//! already cleared, at roughly 200 KB of work per candidate inside a
-//! bifragment search that calls this thousands of times. An inflater exists in
-//! this crate (`structure::gzip`) if that trade is ever revisited.
-
 use super::{be_u32, clamp01, crc32_update, Validation};
 
-/// Longest PNG this carver will accept. A carving bound: the largest planted
-/// object in `out/fixture.img` is 260,595 bytes.
 pub const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
 
-/// The fixture's PNGs run to 27 chunks at an 8192-byte IDAT split. The cap
-/// stops a candidate whose length fields happen to chain from walking the image.
 pub const MAX_CHUNKS: usize = 65536;
 
-/// Pixel-count plausibility bound. The spec permits 2^31-1 in each dimension;
-/// a carver that accepts a 2-gigapixel header from residue is not validating.
 pub const MAX_PIXELS: u64 = 1 << 28;
 
 pub const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
@@ -126,19 +56,17 @@ pub struct PngReport {
     pub idat_payload_bytes: u64,
 }
 
-/// `data` starts AT the 8-byte PNG signature.
 pub fn validate(data: &[u8]) -> Validation {
     analyze(data).validation
 }
 
-/// ISO/IEC 15948 Table 11.1: which bit depths each colour type permits.
 fn depth_colour_legal(depth: u8, colour: u8) -> bool {
     match colour {
-        0 => matches!(depth, 1 | 2 | 4 | 8 | 16),  // greyscale
-        2 => matches!(depth, 8 | 16),              // truecolour
-        3 => matches!(depth, 1 | 2 | 4 | 8),       // indexed
-        4 => matches!(depth, 8 | 16),              // greyscale + alpha
-        6 => matches!(depth, 8 | 16),              // truecolour + alpha
+        0 => matches!(depth, 1 | 2 | 4 | 8 | 16),
+        2 => matches!(depth, 8 | 16),
+        3 => matches!(depth, 1 | 2 | 4 | 8),
+        4 => matches!(depth, 8 | 16),
+        6 => matches!(depth, 8 | 16),
         _ => false,
     }
 }
@@ -178,8 +106,8 @@ pub fn analyze(data: &[u8]) -> PngReport {
     let mut names_ok = true;
     let mut zlib_ok = false;
 
-    let mut idat_run_closed = false;   // an IDAT run has ended
-    let mut idat_broken = false;       // and another IDAT started after it
+    let mut idat_run_closed = false;
+    let mut idat_broken = false;
     let mut last_was_idat = false;
 
     let mut end: Option<usize> = None;
@@ -206,7 +134,6 @@ pub fn analyze(data: &[u8]) -> PngReport {
             Some(l) => l as usize,
             None => break,
         };
-        // Section 5.3: the length field is at most 2^31-1.
         if len > 0x7FFF_FFFF {
             fail = Some(format!(
                 "png: chunk at offset {} declares length {} which exceeds 2^31-1",
@@ -228,7 +155,6 @@ pub fn analyze(data: &[u8]) -> PngReport {
             None => break,
         };
 
-        // CRC-32 over type and payload, section 5.3.
         let computed = {
             let c = crc32_update(0xFFFF_FFFF, ctype);
             crc32_update(c, payload) ^ 0xFFFF_FFFF
@@ -251,9 +177,6 @@ pub fn analyze(data: &[u8]) -> PngReport {
         if !is_ascii_letters(ctype) {
             names_ok = false;
         } else {
-            // Byte 0 bit 5 clear marks a CRITICAL chunk; the spec defines
-            // exactly four, and an unknown critical chunk means the decoder
-            // (and this carver) cannot claim it understood the object.
             let critical = ctype[0].is_ascii_uppercase();
             if critical && !matches!(ctype, b"IHDR" | b"PLTE" | b"IDAT" | b"IEND") {
                 names_ok = false;
@@ -294,7 +217,6 @@ pub fn analyze(data: &[u8]) -> PngReport {
                 idat_broken = true;
             }
             if r.idat_chunks == 0 && len >= 2 {
-                // RFC 1950 section 2.2.
                 let cmf = payload[0];
                 let flg = payload[1];
                 zlib_ok = (cmf & 0x0F) == 8
@@ -405,9 +327,6 @@ mod tests {
         chunk(b"IHDR", &p)
     }
 
-    /// A PNG whose IDAT payload opens with a legal RFC 1950 header. The
-    /// compressed body is not decoded by this validator and does not need to
-    /// decompress; the module documents that.
     fn good_png() -> Vec<u8> {
         let mut v = SIGNATURE.to_vec();
         v.extend(ihdr(16, 16, 8, 2));
@@ -443,13 +362,9 @@ mod tests {
         assert_eq!(v.end, Some(n as u64));
     }
 
-    // ---- one test per rubric term -----------------------------------------
-
     #[test]
     fn term_crc_integrity_is_a_fraction_and_gates() {
         let mut p = good_png();
-        // Corrupt one byte inside the first IDAT payload; only that chunk's
-        // CRC can fail.
         let idat_at = SIGNATURE.len() + 25 + (12 + 19);
         assert_eq!(&p[idat_at + 4..idat_at + 8], b"IDAT");
         p[idat_at + 9] ^= 0xFF;
@@ -490,7 +405,6 @@ mod tests {
 
     #[test]
     fn term_dimension_sanity_falls_on_an_absurd_header() {
-        // 2^31-1 square is a legal PNG header and an implausible carve.
         let mut v = SIGNATURE.to_vec();
         v.extend(ihdr(0x7FFF_FFFF, 0x7FFF_FFFF, 8, 2));
         v.extend(chunk(b"IDAT", &[0x78, 0x01, 0x01]));
@@ -504,7 +418,6 @@ mod tests {
 
     #[test]
     fn term_dimension_sanity_falls_on_an_illegal_depth_colour_pair() {
-        // Colour type 2 (truecolour) does not permit bit depth 4.
         let mut v = SIGNATURE.to_vec();
         v.extend(ihdr(16, 16, 4, 2));
         v.extend(chunk(b"IDAT", &[0x78, 0x01, 0x01]));
@@ -544,7 +457,7 @@ mod tests {
     fn term_chunk_names_falls_on_an_unknown_critical_chunk() {
         let mut v = SIGNATURE.to_vec();
         v.extend(ihdr(16, 16, 8, 2));
-        v.extend(chunk(b"ZZZZ", b"payload"));   // all-uppercase: critical
+        v.extend(chunk(b"ZZZZ", b"payload"));
         v.extend(chunk(b"IDAT", &[0x78, 0x01, 0x01]));
         v.extend(chunk(b"IEND", b""));
         let r = analyze(&v);
@@ -558,7 +471,7 @@ mod tests {
     fn term_chunk_names_holds_for_an_unknown_ancillary_chunk() {
         let mut v = SIGNATURE.to_vec();
         v.extend(ihdr(16, 16, 8, 2));
-        v.extend(chunk(b"zZzZ", b"payload"));   // lowercase first byte: ancillary
+        v.extend(chunk(b"zZzZ", b"payload"));
         v.extend(chunk(b"IDAT", &[0x78, 0x01, 0x01]));
         v.extend(chunk(b"IEND", b""));
         let r = analyze(&v);
@@ -570,7 +483,7 @@ mod tests {
     fn term_zlib_header_falls_on_a_bad_cmf_flg() {
         let mut v = SIGNATURE.to_vec();
         v.extend(ihdr(16, 16, 8, 2));
-        v.extend(chunk(b"IDAT", &[0x78, 0x02, 0x01])); // 0x7802 % 31 != 0
+        v.extend(chunk(b"IDAT", &[0x78, 0x02, 0x01]));
         v.extend(chunk(b"IEND", b""));
         let r = analyze(&v);
         assert_eq!(r.rubric.zlib_header, 0.0);
@@ -584,8 +497,6 @@ mod tests {
         let s = W_CRC + W_IHDR + W_IEND + W_DIMS + W_IDAT + W_NAMES + W_ZLIB;
         assert!((s - 1.0).abs() < 1e-12, "rubric weights sum to {}", s);
     }
-
-    // ---- rejections --------------------------------------------------------
 
     #[test]
     fn rejects_bare_signature() {

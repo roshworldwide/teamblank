@@ -1,140 +1,16 @@
-//! MP4 / QuickTime structure validation: walk the box tree from ftyp.
-//!
-//! Garfinkel, "Carving contiguous and fragmented files with fast object
-//! validation", DFRWS 2007. MP4 is the paper's other worked example and the
-//! reason is the box tree: every box declares its own size, so the boxes tile
-//! the object end to end and a single wrong byte in any size field derails the
-//! whole chain. That makes the walk a cheap and unusually decisive validator,
-//! and it is also where `end` comes from -- there is no footer to search for.
-//!
-//! This fixture's measured `residue_signature_false_positives.MP4` is 0,
-//! because the scanner's four-byte `ftyp` magic does not occur by chance in
-//! 134 MB of residue. The box walk is therefore not carrying the
-//! false-positive load here; it is carrying the LENGTH, which is what the
-//! bifragment search needs and what the SHA-256 comparison against the
-//! manifest depends on.
-//!
-//! ## Input convention -- read this before calling
-//!
-//! The signature scanner matches the four bytes `ftyp`, which sit at offset 4
-//! of the object, INSIDE the first box's header. This validator wants `data` to
-//! start at the ftyp BOX, meaning the 32-bit size field, so a caller holding a
-//! match at position p must pass `header_at = p - 4`. Being handed the raw
-//! match position is detected and rejected with that instruction in `detail`
-//! rather than silently mis-parsed.
-//!
-//! ## The walk
-//!
-//! ISO/IEC 14496-12 section 4.2. A box is a big-endian 32-bit size, a 4-byte
-//! type, then the payload; the size COUNTS the 8-byte header. Size 1 means a
-//! 64-bit `largesize` follows the type, making the header 16 bytes; size 0
-//! means the box runs to the end of the file, which for a carver is an
-//! unbounded claim and is refused. Container boxes (moov, trak, mdia, minf,
-//! stbl, edts, dinf, udta) hold child boxes that tile their payload exactly.
-//!
-//! The top-level walk stops at the first box whose type is not one the format
-//! places at the top level. That whitelist is what bounds `end` against the
-//! residue that follows the object on disk: without it, four bytes of noise
-//! that happen to read as printable ASCII would extend the object and change
-//! its SHA-256.
-//!
-//! ## RUBRIC -- how `score` is derived
-//!
-//! Six independent checks, fixed weights, summing to exactly 1.00.
-//!
-//!   0.15  ftyp_box        the first box is `ftyp`, at least 16 bytes, with a
-//!                         printable major brand and a compatible-brand list
-//!                         that is a whole number of 4-byte entries
-//!   0.20  tiling          every top-level box declared a size that is at
-//!                         least its header, fit entirely inside the data, and
-//!                         carried a known top-level type; no box used the
-//!                         open-ended size 0
-//!   0.20  moov_tree       FRACTION of the eight boxes a playable track
-//!                         requires -- mvhd, trak, tkhd, mdia, mdhd, minf,
-//!                         stbl, stsd -- found by a recursive descent in which
-//!                         every container's children tile it exactly
-//!   0.15  mdat_present    an `mdat` box exists with a payload longer than 0
-//!   0.20  sample_tables   the stsz/stco cross-check, in two halves of 0.10:
-//!                         the sample sizes sum to no more than the mdat
-//!                         payload, and every chunk offset in stco (or co64)
-//!                         lands inside the mdat payload's byte range
-//!   0.10  payload_exclusivity
-//!                         no `ftyp` box header occurs INSIDE the mdat payload
-//!
-//! `sample_tables` ties the metadata to the media: a box tree can tile
-//! perfectly and still describe chunk offsets that point nowhere.
-//! `payload_exclusivity` is the only check that reaches into the media bytes at
-//! all, and it can say only one thing about them -- that another object does
-//! not start there.
-//!
-//! ## VALIDITY GATE -- separate from the score
-//!
-//! `valid` requires: ftyp first and sane; a clean top-level tiling; a `moov`
-//! containing at least `mvhd` and one `trak`; an `mdat` with a non-empty
-//! payload; and payload exclusivity. The sample-table cross-check grades but
-//! does not gate, because layouts this carver does not model (fragmented MP4,
-//! external data references) legitimately lack a usable stco.
-//!
-//! ## THE LIMIT OF THIS VALIDATOR -- measured, and stated because it matters
-//!
-//! MP4 defines NO checksum over `mdat`. PNG puts a CRC-32 on every chunk and
-//! GZIP puts one on the whole decompressed stream, so a wrong reassembly of
-//! either is caught by arithmetic. MP4 has nothing equivalent: once the box
-//! tree tiles, the media bytes are opaque and unverifiable. The consequence,
-//! measured on `out/fixture.img` rather than reasoned about:
-//!
-//!   /sealing_procedure.mov   read contiguously from its header, the top-level
-//!                            boxes STILL tile exactly to its true 221,041
-//!                            bytes, because the mdat size field is intact and
-//!                            the fragmentation falls inside the payload. Only
-//!                            `payload_exclusivity` rejects it, and only
-//!                            because the 192,400-byte gap it steps over
-//!                            happens to contain /handover_briefing.mov's own
-//!                            ftyp header at image offset 65,943,552.
-//!
-//!   /handover_briefing.mov   read contiguously from its header, the boxes tile
-//!                            exactly to its true 66,689 bytes, the sample
-//!                            tables agree, and the 33,913 wrong bytes it picks
-//!                            up are residue and another file's PCM audio --
-//!                            no ftyp header among them. THIS VALIDATOR
-//!                            ACCEPTS IT, with a score of 1.00, and the bytes
-//!                            it accepts are not the file. No structural check
-//!                            exists that would reject it, and inventing one
-//!                            fitted to this fixture would be worse than
-//!                            saying so.
-//!
-//! The resolution is not available inside a single `validate` call and must be
-//! made by the carve driver, which sees all objects at once: the contiguous
-//! claim for /handover_briefing.mov spans [65,943,552, 66,010,241), which
-//! OVERLAPS the second extent of the correctly recovered /sealing_procedure.mov
-//! at [65,988,608, 66,119,537) by 21,633 bytes. Two recovered objects cannot
-//! own the same bytes. Its true extents, [65,943,552, 65,976,320) and
-//! [66,119,680, 66,153,601), overlap nothing. Cross-object overlap detection
-//! resolves it; structure validation alone cannot, and this module does not
-//! pretend otherwise. Every accepted MP4 reports its unverified mdat byte count
-//! in `detail` for exactly this reason.
-
 use super::{be_u32, be_u64, clamp01, Validation};
 
-/// Longest MP4 this carver will accept. A carving bound: the largest planted
-/// object in `out/fixture.img` is 260,595 bytes.
 pub const MAX_OBJECT_BYTES: usize = 64 * 1024 * 1024;
 
-/// Cap on boxes visited, across the whole tree.
 pub const MAX_BOXES: usize = 100_000;
 
-/// Cap on container nesting.
 pub const MAX_DEPTH: usize = 12;
 
-/// Box types the format places at the top level of a file. The walk stops at
-/// anything else, which is what stops residue from extending the object.
-/// ISO/IEC 14496-12 plus the QuickTime File Format's `pnot`, `wide` and `cmov`.
 const TOP_LEVEL: &[&[u8; 4]] = &[
     b"ftyp", b"styp", b"moov", b"moof", b"mfra", b"mdat", b"free", b"skip", b"wide", b"pnot",
     b"udta", b"uuid", b"meta", b"sidx", b"ssix", b"prft", b"pdin", b"cmov", b"mfro", b"junk",
 ];
 
-/// Boxes whose payload is a list of child boxes.
 const CONTAINERS: &[&[u8; 4]] = &[
     b"moov", b"trak", b"mdia", b"minf", b"stbl", b"edts", b"dinf", b"udta", b"mvex", b"moof",
     b"traf", b"mfra",
@@ -147,7 +23,6 @@ const W_MDAT: f64 = 0.15;
 const W_TABLES: f64 = 0.20;
 const W_EXCLUSIVE: f64 = 0.10;
 
-/// The eight boxes a playable track requires; `moov_tree` is the fraction found.
 const REQUIRED_TREE: [&[u8; 4]; 8] = [
     b"mvhd", b"trak", b"tkhd", b"mdia", b"mdhd", b"minf", b"stbl", b"stsd",
 ];
@@ -182,21 +57,14 @@ pub struct Mp4Report {
     pub major_brand: String,
     pub top_level_boxes: usize,
     pub boxes_visited: usize,
-    /// Byte range of the mdat PAYLOAD, relative to `data[0]`.
     pub mdat_payload: Option<(u64, u64)>,
-    /// Total bytes the sample-size table accounts for.
     pub sample_bytes: Option<u64>,
     pub sample_count: Option<u32>,
     pub chunk_offsets: usize,
     pub tracks: usize,
-    /// Offset, relative to `data[0]`, of an `ftyp` box header found INSIDE the
-    /// mdat payload -- another MP4 object beginning inside this one's media
-    /// data, which means the extent is wrong. `None` when the payload is clean.
     pub foreign_header_at: Option<u64>,
 }
 
-/// `data` starts AT the ftyp BOX -- the 32-bit size field, four bytes before
-/// the `ftyp` the scanner matched.
 pub fn validate(data: &[u8]) -> Validation {
     analyze(data).validation
 }
@@ -204,11 +72,8 @@ pub fn validate(data: &[u8]) -> Validation {
 #[derive(Debug, Clone, Copy)]
 struct BoxHdr {
     kind: [u8; 4],
-    /// 8 normally, 16 for the 64-bit largesize form.
     header: usize,
-    /// total box size including the header
     size: u64,
-    /// the declared size was 0, meaning "to end of file"
     open_ended: bool,
 }
 
@@ -251,8 +116,6 @@ fn is_in(list: &[&[u8; 4]], k: &[u8; 4]) -> bool {
     list.iter().any(|x| *x == k)
 }
 
-/// Recursive descent through a container's payload. Returns false if the
-/// children do not tile the container exactly.
 fn walk_children(
     d: &[u8],
     from: usize,
@@ -298,7 +161,6 @@ fn walk_children(
         let payload_end = end as usize;
 
         if &b.kind == b"stsz" && payload_end >= payload_at + 12 {
-            // ISO/IEC 14496-12 section 8.7.3.
             let sample_size = be_u32(d, payload_at + 4).unwrap_or(0);
             let count = be_u32(d, payload_at + 8).unwrap_or(0);
             let total = if sample_size != 0 {
@@ -312,13 +174,11 @@ fn walk_children(
                     }
                     s
                 } else {
-                    // Truncated entry list: no honest total to report.
                     u64::MAX
                 }
             };
             *stsz = Some((total, count));
         } else if &b.kind == b"stco" && payload_end >= payload_at + 8 {
-            // section 8.7.5, 32-bit chunk offsets
             let n = be_u32(d, payload_at + 4).unwrap_or(0) as usize;
             for i in 0..n.min(1_000_000) {
                 match be_u32(d, payload_at + 8 + 4 * i) {
@@ -392,7 +252,6 @@ pub fn analyze(data: &[u8]) -> Mp4Report {
 
     let limit = data.len().min(MAX_OBJECT_BYTES);
 
-    // ---- top-level tiling --------------------------------------------------
     let mut tiling_ok = true;
     let mut end = 0usize;
     let mut at = 0usize;
@@ -409,8 +268,6 @@ pub fn analyze(data: &[u8]) -> Mp4Report {
             }
         };
         if b.open_ended {
-            // Size 0 claims the rest of the medium. A carver cannot honour an
-            // unbounded claim, so the tiling is not exact.
             tiling_ok = false;
             stop_reason = format!("box '{}' at offset {} declares size 0 (open-ended)",
                                   String::from_utf8_lossy(&b.kind), at);
@@ -441,8 +298,6 @@ pub fn analyze(data: &[u8]) -> Mp4Report {
         if r.top_level_boxes == 0 {
             if &b.kind == b"ftyp" {
                 let payload = &data[at + b.header..box_end];
-                // section 4.3: major_brand(4), minor_version(4), then a list
-                // of 4-byte compatible brands.
                 ftyp_ok = b.size >= 16
                     && payload.len() >= 8
                     && (payload.len() - 8) % 4 == 0
@@ -475,7 +330,6 @@ pub fn analyze(data: &[u8]) -> Mp4Report {
         return r;
     }
 
-    // ---- moov subtree ------------------------------------------------------
     let mut found = [false; 8];
     let mut stsz: Option<(u64, u32)> = None;
     let mut chunk_offsets: Vec<u64> = Vec::new();
@@ -504,15 +358,11 @@ pub fn analyze(data: &[u8]) -> Mp4Report {
     }
 
     let moov_fraction = if moov_range.is_none() || !subtree_ok {
-        // A container whose children do not tile it is not a tree we walked;
-        // reporting a partial score off a broken walk would be a claim we did
-        // not verify.
         0.0
     } else {
         found.iter().filter(|f| **f).count() as f64 / found.len() as f64
     };
 
-    // ---- mdat and the sample-table cross-check -----------------------------
     let mdat_ok = r.mdat_payload.map(|(a, b)| b > a).unwrap_or(false);
 
     let mut tables = 0.0f64;
@@ -525,14 +375,6 @@ pub fn analyze(data: &[u8]) -> Mp4Report {
         }
     }
 
-    // ---- payload exclusivity ----------------------------------------------
-    // Media data is opaque, so the only thing that can be said about it is that
-    // it must not contain the START OF ANOTHER OBJECT. An `ftyp` box header
-    // inside the mdat payload means a second MP4 begins inside this one's media
-    // data, and two files cannot legitimately nest that way. On this fixture it
-    // is the check that rejects the contiguous mis-read of
-    // /sealing_procedure.mov, whose gap swallows /handover_briefing.mov's
-    // header. See the module doc for what it does NOT catch.
     if let Some((m0, m1)) = r.mdat_payload {
         let (a, b) = (m0 as usize, (m1 as usize).min(limit));
         let mut i = a + 4;
@@ -560,7 +402,7 @@ pub fn analyze(data: &[u8]) -> Mp4Report {
     };
     let score = r.rubric.total();
 
-    let moov_ok = subtree_ok && found[0] && found[1] && tracks >= 1; // mvhd and a trak
+    let moov_ok = subtree_ok && found[0] && found[1] && tracks >= 1;
     let gate = ftyp_ok && tiling_ok && moov_ok && mdat_ok && exclusive && end > 0;
 
     r.validation = if gate {
@@ -621,13 +463,11 @@ mod tests {
     }
 
     fn full(payload: &[u8]) -> Vec<u8> {
-        let mut v = vec![0u8, 0, 0, 0]; // version + flags
+        let mut v = vec![0u8, 0, 0, 0];
         v.extend_from_slice(payload);
         v
     }
 
-    /// The same shape the fixture's own writer emits: ftyp, moov holding a
-    /// single audio trak, then mdat. 4-byte samples, one chunk.
     fn good_mp4(samples: u32) -> Vec<u8> {
         let audio: Vec<u8> = (0..samples * 4).map(|i| (i % 251) as u8).collect();
 
@@ -646,9 +486,6 @@ mod tests {
         stsz_p.extend_from_slice(&samples.to_be_bytes());
         let stsz = bx(b"stsz", &stsz_p);
 
-        // stco's single chunk offset depends on the size of moov, which
-        // depends on stco. The offset field is fixed width, so assemble once
-        // with a placeholder and again with the real value.
         let assemble = |chunk_off: u32| -> Vec<u8> {
             let mut stco_p = full(&1u32.to_be_bytes());
             stco_p.extend_from_slice(&chunk_off.to_be_bytes());
@@ -717,19 +554,14 @@ mod tests {
     fn end_stops_at_the_last_top_level_box_not_at_the_slice_end() {
         let mut m = good_mp4(32);
         let n = m.len();
-        // Residue that is not a top-level box type.
         m.extend(std::iter::repeat(0x9Cu8).take(8192));
         let v = validate(&m);
         assert!(v.valid, "detail: {}", v.detail);
         assert_eq!(v.end, Some(n as u64));
     }
 
-    // ---- one test per rubric term -----------------------------------------
-
     #[test]
     fn term_ftyp_box_falls_on_a_short_ftyp() {
-        // A 12-byte ftyp carries a major brand and nothing else: legal-looking,
-        // but below the 16 bytes the format's own field list requires.
         let mut m = Vec::new();
         m.extend(bx(b"ftyp", b"qt  "));
         m.extend(good_mp4(16)[20..].to_vec());
@@ -741,7 +573,6 @@ mod tests {
     #[test]
     fn term_tiling_falls_when_a_size_overruns_the_data() {
         let mut m = good_mp4(32);
-        // Inflate the moov size so it claims more than the object holds.
         let moov_at = 20;
         assert_eq!(&m[moov_at + 4..moov_at + 8], b"moov");
         let big = (m.len() as u32) + 4096;
@@ -765,7 +596,6 @@ mod tests {
 
     #[test]
     fn term_moov_tree_is_a_fraction_of_the_required_boxes() {
-        // ftyp + a moov holding only mvhd + mdat. Two of eight required boxes.
         let mut ftyp_p = b"qt  ".to_vec();
         ftyp_p.extend_from_slice(&0u32.to_be_bytes());
         ftyp_p.extend_from_slice(b"qt  ");
@@ -785,9 +615,8 @@ mod tests {
     #[test]
     fn term_moov_tree_falls_to_zero_when_children_do_not_tile() {
         let mut m = good_mp4(32);
-        // Shrink the trak box by 4 so moov's children no longer tile it.
         let moov_at = 20;
-        let trak_at = moov_at + 8 + 8 + 100; // moov header + mvhd (8 + 4 + 96)
+        let trak_at = moov_at + 8 + 8 + 100;
         assert_eq!(&m[trak_at + 4..trak_at + 8], b"trak", "test fixture offset drifted");
         let sz = u32::from_be_bytes([m[trak_at], m[trak_at + 1], m[trak_at + 2], m[trak_at + 3]]);
         m[trak_at..trak_at + 4].copy_from_slice(&(sz - 4).to_be_bytes());
@@ -812,12 +641,11 @@ mod tests {
     #[test]
     fn term_sample_tables_falls_when_the_chunk_offset_points_outside_mdat() {
         let mut m = good_mp4(32);
-        // Find the stco entry and push it past the end of the object.
         let pos = m
             .windows(4)
             .position(|w| w == b"stco")
             .expect("stco is present");
-        let entry_at = pos + 4 + 4 + 4; // type, version+flags, entry_count
+        let entry_at = pos + 4 + 4 + 4;
         m[entry_at..entry_at + 4].copy_from_slice(&0xFFFF_0000u32.to_be_bytes());
         let r = analyze(&m);
         assert!((r.rubric.sample_tables - W_TABLES / 2.0).abs() < 1e-12,
@@ -830,7 +658,6 @@ mod tests {
     fn term_sample_tables_falls_when_the_sample_sizes_exceed_mdat() {
         let mut m = good_mp4(32);
         let pos = m.windows(4).position(|w| w == b"stsz").expect("stsz is present");
-        // sample_count field: type(4) + version/flags(4) + sample_size(4)
         let count_at = pos + 4 + 4 + 4;
         m[count_at..count_at + 4].copy_from_slice(&9999u32.to_be_bytes());
         let r = analyze(&m);
@@ -841,9 +668,6 @@ mod tests {
 
     #[test]
     fn term_payload_exclusivity_falls_on_a_foreign_ftyp_inside_mdat() {
-        // Splice a second, complete MP4 into the middle of the first one's
-        // media data. This is exactly the shape /sealing_procedure.mov takes
-        // when it is read contiguously across its gap.
         let inner = good_mp4(8);
         let mut m = good_mp4(256);
         let mdat_payload_at = m.len() - (256 * 4);
@@ -863,8 +687,6 @@ mod tests {
 
     #[test]
     fn an_accepted_mp4_states_how_many_bytes_it_could_not_verify() {
-        // MP4 defines no checksum over mdat. Rule 1: the tool never claims more
-        // than it verified, so the acceptance names the gap in its own detail.
         let m = good_mp4(64);
         let v = validate(&m);
         assert!(v.valid);
@@ -877,8 +699,6 @@ mod tests {
         let s = W_FTYP + W_TILING + W_MOOV + W_MDAT + W_TABLES + W_EXCLUSIVE;
         assert!((s - 1.0).abs() < 1e-12, "rubric weights sum to {}", s);
     }
-
-    // ---- rejections --------------------------------------------------------
 
     #[test]
     fn rejects_a_slice_that_starts_at_the_ftyp_magic_instead_of_the_box() {

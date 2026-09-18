@@ -1,37 +1,3 @@
-"""RFC 8785 JSON Canonicalization Scheme, and the numeric policy that makes it safe.
-
-A signature over JSON is worthless unless the bytes are reproducible. Two serialisers
-that disagree about key order, whitespace or float formatting produce two different
-signatures over the same logical certificate, and the verifier then fails on a document
-nobody tampered with.
-
-RFC 8785 settles order, whitespace and string escaping. It does not make floats safe:
-its number rule defers to ECMAScript Number::toString, whose shortest-round-trip
-formatting is the classic source of cross-language canonicalisation bugs, because Rust
-and Python reach it by different routes.
-
-So this module does not implement that rule. It forbids floats instead.
-
-`canonicalize` raises on any float it meets. Every quantity that used to be one is
-carried as the integers it was actually derived from:
-
-    Ratio(n, d)   an exact rational — a rate is bytes over nanoseconds, a coverage is
-                  sectors over sectors, a timing ratio is elapsed over floor. All four
-                  are already integer pairs upstream; rendering them as a decimal was a
-                  lossy display step that had no business happening before signing.
-
-    Decimal6(s)   a fixed six-decimal string, copied verbatim from the engine's own
-                  report, for the few figures with no exact rational behind them.
-                  Entropy is the only one. A string has no rounding step, so Python's
-                  half-even and Rust's half-away-from-zero cannot disagree about it.
-
-The consequence is that the Rust side needs no float formatter at all. Integer
-serialisation is unambiguous in every language, so the two implementations cannot drift
-on the one thing that would be hardest to notice and most expensive to discover late.
-
-Reference: RFC 8785, JSON Canonicalization Scheme (JCS), IETF, June 2020.
-"""
-
 from __future__ import annotations
 
 import json
@@ -43,36 +9,19 @@ from typing import Any
 
 SCHEMA = "sentinelwipe.canon/1"
 
-# JSON's safe integer range. Beyond this a double cannot hold the value exactly, so a
-# consumer that parses into a float would silently lose digits.
 MAX_SAFE_INT = 2**53 - 1
 
-# Exactly six decimal places, optional sign, no exponent.
 _DEC6 = re.compile(r"-?(0|[1-9][0-9]*)\.[0-9]{6}")
 
 
 class CanonError(ValueError):
-    """The payload cannot be canonicalised. Always names the offending path.
-
-    ``kind`` is one of: float | duplicate-key | unsafe-integer | parse | canon —
-    the refusal classes shared with the Rust side through fixtures/jcs_vectors.json.
-    """
-
     def __init__(self, msg: str, kind: str = "canon"):
         super().__init__(msg)
         self.kind = kind
 
 
-# ── numeric carriers ────────────────────────────────────────────────────────────────
-
 @dataclass(frozen=True)
 class Ratio:
-    """An exact rational, carried as the two integers it was measured from.
-
-    `d` must be positive and non-zero. The pair is stored reduced, so that two runs
-    that measure 1024/524288 and 1/512 produce identical bytes.
-    """
-
     n: int
     d: int
 
@@ -94,27 +43,11 @@ class Ratio:
         return {"d": f.denominator, "n": f.numerator}
 
     def as_float(self) -> float:
-        """For display only. Never for signing."""
         return self.n / self.d
 
 
 @dataclass(frozen=True)
 class Decimal6:
-    """A measured continuous value, carried as a fixed six-decimal STRING.
-
-    Matches core/ledger/src/jcs.rs, and the reason is a cross-language hazard rather
-    than taste. The obvious alternative — an integer scaled by 1e6 — needs a rounding
-    step at the boundary, and Python's round() is half-even while Rust's f64::round()
-    is half-away-from-zero. The two agree on every value except an exact .5 at the
-    sixth decimal, where they would produce different bytes, different signatures, and
-    a verification failure on a document nobody touched. The failure would be rare,
-    non-reproducible, and would appear for the first time on someone else's laptop.
-
-    A string copied verbatim from the engine's own report has no rounding step to
-    disagree about. The engine already decided the precision; nothing downstream
-    re-decides it.
-    """
-
     text: str
 
     def __post_init__(self) -> None:
@@ -130,24 +63,13 @@ class Decimal6:
         return self.text
 
     def as_float(self) -> float:
-        """For display only. Never for signing."""
         return float(self.text)
 
 
-# ── UTF-16 ordering ─────────────────────────────────────────────────────────────────
-
 def _utf16_key(s: str) -> tuple[int, ...]:
-    """RFC 8785 §3.2.3 orders keys by UTF-16 code unit, not by code point.
-
-    The two agree across the whole BMP and disagree above U+FFFF, where a code point
-    sorts high but its surrogate pair sorts into the D800–DFFF range. Sorting by code
-    point would be right almost always, which is the worst kind of wrong.
-    """
     b = s.encode("utf-16-be")
     return tuple(int.from_bytes(b[i:i + 2], "big") for i in range(0, len(b), 2))
 
-
-# ── string escaping ─────────────────────────────────────────────────────────────────
 
 _ESCAPES = {
     0x08: "\\b", 0x09: "\\t", 0x0A: "\\n", 0x0C: "\\f", 0x0D: "\\r",
@@ -156,9 +78,6 @@ _ESCAPES = {
 
 
 def _string(s: str) -> str:
-    """Minimal escaping per RFC 8785 §3.2.2.2: the two mandatory escapes, the five
-    short forms, and \\u00xx for everything else below 0x20. Nothing else is escaped —
-    in particular the solidus is left bare and non-ASCII is emitted as itself."""
     out = ['"']
     for ch in s:
         cp = ord(ch)
@@ -171,8 +90,6 @@ def _string(s: str) -> str:
     out.append('"')
     return "".join(out)
 
-
-# ── the serialiser ──────────────────────────────────────────────────────────────────
 
 def _ser(v: Any, path: str) -> str:
     if v is None:
@@ -208,8 +125,6 @@ def _ser(v: Any, path: str) -> str:
         return "[" + ",".join(_ser(x, f"{path}[{i}]") for i, x in enumerate(v)) + "]"
 
     if isinstance(v, dict):
-        # Validate before sorting: _utf16_key would raise AttributeError on a
-        # non-string key, which tells the caller nothing about where the fault is.
         for k in v:
             if not isinstance(k, str):
                 raise CanonError(f"{path}: object key {k!r} is not a string")
@@ -223,15 +138,10 @@ def _ser(v: Any, path: str) -> str:
 
 
 def canonicalize(obj: Any) -> bytes:
-    """Return the RFC 8785 canonical form as UTF-8 bytes. Raises on any float."""
     return _ser(obj, "$").encode("utf-8")
 
 
 def parse(b: bytes) -> Any:
-    """Parse canonical bytes back, restoring Ratio and Fixed6 carriers.
-
-    Present so the round-trip property can be tested: canonicalize(parse(x)) == x.
-    """
     def hook(d: dict) -> Any:
         if set(d) == {"n", "d"} and all(isinstance(x, int) for x in d.values()):
             return Ratio(d["n"], d["d"])
@@ -247,20 +157,7 @@ def _no_floats(s: str) -> Any:
 _FLOAT_LITERAL = re.compile(rb"-?\d+(\.\d+|[eE][-+]?\d+)")
 
 
-# ── the check a caller actually wants ───────────────────────────────────────────────
-
 def assert_no_float_literals(b: bytes) -> None:
-    """Belt and braces: no float syntax survives *outside* a string literal.
-
-    The qualifier is the whole difficulty. Decimal6 carries a measured value as the
-    JSON string "7.061690", so a naive scan for a digit-dot-digit run fires on legal
-    output and the guard gets switched off — which is how a guard stops guarding.
-
-    So this walks the bytes tracking string state, honouring backslash escapes, and
-    scans only the spans between strings. Structural bytes are the only place a number
-    can legally appear, and a fraction or exponent there means a float reached the
-    serialiser through a path the type checks did not cover.
-    """
     spans: list[bytes] = []
     start = 0
     i = 0
@@ -269,15 +166,15 @@ def assert_no_float_literals(b: bytes) -> None:
     while i < n:
         c = b[i]
         if in_str:
-            if c == 0x5C:          # backslash: skip the escaped byte
+            if c == 0x5C:
                 i += 2
                 continue
-            if c == 0x22:          # closing quote
+            if c == 0x22:
                 in_str = False
                 start = i + 1
             i += 1
             continue
-        if c == 0x22:              # opening quote
+        if c == 0x22:
             spans.append(b[start:i])
             in_str = True
         i += 1
@@ -291,22 +188,6 @@ def assert_no_float_literals(b: bytes) -> None:
             raise CanonError(
                 f"float literal {m.group(0)!r} outside a string in canonical output"
             )
-
-# ── the strict boundary parser ──────────────────────────────────────────────────────
-#
-# ``parse`` above is deliberately lenient: it exists so the round-trip property can be
-# tested, and it rides on the stdlib. The stdlib is the wrong tool at a TRUST BOUNDARY:
-# json.loads keeps the last of duplicate keys silently, admits lone-surrogate escapes,
-# and parses fractions (caught here only by the parse_float hook). ``parse_strict`` is
-# the boundary parser: it accepts exactly what ``canonicalize`` emits plus insignificant
-# whitespace, and refuses — never coerces — everything else. It returns PLAIN values;
-# restoring Ratio/Decimal6 carriers stays ``parse``'s job, because a boundary should do
-# one thing.
-#
-# It is pinned to the Rust reference (core/ledger/src/jcs.rs) through
-# fixtures/jcs_vectors.json: 75 messy inputs that must canonicalise to identical bytes,
-# and 13 inputs that must refuse with the same class. Direction of truth is the mirror
-# of the write guard's: there Python was the measured original; here Rust is.
 
 
 class _Strict:
@@ -331,11 +212,11 @@ class _Strict:
         if self.i >= len(self.b):
             raise self.err("unexpected end of input")
         c = self.b[self.i]
-        if c == 0x6E:  # n
+        if c == 0x6E:
             self.eat(b"null", "expected null"); return None
-        if c == 0x74:  # t
+        if c == 0x74:
             self.eat(b"true", "expected true"); return True
-        if c == 0x66:  # f
+        if c == 0x66:
             self.eat(b"false", "expected false"); return False
         if c == 0x22:
             return self.string()
@@ -472,7 +353,6 @@ class _Strict:
 
 
 def parse_strict(b: bytes):
-    """Strict boundary parse: plain values out, refusal (never coercion) on the way in."""
     p = _Strict(b)
     p.ws()
     v = p.value()
@@ -480,4 +360,3 @@ def parse_strict(b: bytes):
     if p.i != len(p.b):
         raise p.err("trailing input after the document")
     return v
-

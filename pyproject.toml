@@ -7,9 +7,6 @@ dependencies = [
     "typer>=0.12",
 ]
 
-# The PDF backend for report.py is an open decision, due at Phase 4, and is
-# deliberately absent rather than guessed. See docs/ai-log/entries/2026-09-02.md.
-
 [project.scripts]
 sentinelwipe = "sentinelwipe.cli:app"
 

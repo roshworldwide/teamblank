@@ -1,67 +1,3 @@
-//! # Sampled read-back verification — what turns a write into a claim
-//!
-//! A write that returned zero is not evidence that the medium changed. The device
-//! reported success; CLAUDE.md rule 5 is that a device's report is not evidence and
-//! rule 1 is that the tool never claims more than it verified. So after each pass
-//! the engine reads sectors back and compares them against the pattern that pass was
-//! supposed to lay down. The pattern is regenerable at any sector from the run seed
-//! alone ([`crate::passes::PatternGen`]), which is what makes this possible without
-//! keeping 256 MiB of expected bytes anywhere.
-//!
-//! ## Sampling is not proof, and the report says so in its own words
-//!
-//! The default reads [`DEFAULT_SECTORS_PER_MIB`] sectors out of every mebibyte, which
-//! at a 512-byte sector is 4 of 2048 — **0.1953% of the medium.** Every artifact this
-//! module emits carries that number, the count of sectors actually read, and
-//! [`SAMPLING_IS_NOT_PROOF`] verbatim. There is no summarising it away: a verdict
-//! field alone would let a reader believe the whole medium was checked.
-//!
-//! What the sample does and does not catch, arithmetically rather than rhetorically
-//! — see [`detection_probability`]:
-//!
-//! | failure | sectors bad, per MiB region | P(detected) at 4/MiB |
-//! |---|---|---|
-//! | a whole region never written | 2048 | 1.000000 |
-//! | a 64 KiB run never written | 128 | 0.2277 |
-//! | one sector never written | 1 | 0.001953 |
-//!
-//! Sampling finds the failure that a wipe actually produces — a range skipped, a
-//! device that ignored writes, a pass that never ran — and is nearly blind to a
-//! single bad sector. That is the honest description of it, and it is why
-//! [`verify_pass_exhaustive`] exists: at fixture scale the whole medium can be read
-//! back for half a second, and a claim about all 524,288 sectors is worth more than
-//! that.
-//!
-//! ## Measured, 2026-09-03, 256 MiB (524,288 sectors) on macOS arm64
-//!
-//! | rate | sectors read | coverage | wall |
-//! |---|---|---|---|
-//! | 1/MiB | 256 | 0.048828% | 0.001 s |
-//! | 4/MiB (default) | 1,024 | 0.195312% | 0.002 s |
-//! | 16/MiB | 4,096 | 0.781250% | 0.007 s |
-//! | 64/MiB | 16,384 | 3.125000% | 0.027 s |
-//! | **exhaustive** | **524,288** | **100%** | **0.480 s** |
-//!
-//! At this size the exhaustive read-back costs half a second against a 0.42 s wipe.
-//! The sampled path saves 0.478 s and buys a materially weaker claim; at a terabyte
-//! the trade reverses and the sampled path is the only one that finishes. Which one a
-//! run uses is the operator's call -- `demo_script.md` is their file -- and this
-//! module's job is to make both figures available and label each verdict with what it
-//! actually covered.
-//!
-//! ## The sample positions are public, and that is a real limit
-//!
-//! Positions are derived from the published run seed, so a third party can reproduce
-//! exactly which sectors we checked and re-check them — which is the point. The cost
-//! is that a *malicious controller* that knows the seed knows which sectors it must
-//! actually write. This module detects incidental failure, not adversarial firmware.
-//! [`SAMPLE_POSITIONS_ARE_PUBLIC`] states it and the report carries it.
-//!
-//! Deriving positions from an unpublished random source would defeat the attack and
-//! break CLAUDE.md rule 6 — the certificate would name different sectors every run
-//! and no two runs would be byte-identical. The trade was taken in favour of
-//! reproducibility, deliberately, and it is written down rather than hidden.
-
 use std::time::Instant;
 
 use crate::passes::{
@@ -70,30 +6,20 @@ use crate::passes::{
 };
 use crate::telemetry::{EventSink, Telemetry};
 
-/// Domain separation for sample-position derivation. Distinct from the pattern
-/// domain, so no sector's position can ever equal a slice of its own contents.
 pub const SAMPLING_DOMAIN: &[u8] = b"SENTINELWIPE/verify-sample/v1";
 
-/// Sectors read back per mebibyte of medium by default: 4 of 2048 at a 512-byte
-/// sector, 0.1953% coverage.
 pub const DEFAULT_SECTORS_PER_MIB: u32 = 4;
 
-/// The region a sampling rate is quoted against.
 pub const MIB: u64 = 1 << 20;
 
-/// Cap on individually recorded mismatches. The count is exact and unbounded; the
-/// list is not, because a certificate that inlines 500,000 mismatch records is a
-/// denial of service against its own reader.
 pub const MAX_RECORDED_MISMATCHES: usize = 64;
 
-/// Carried verbatim in every sampled report. CLAUDE.md rule 1.
 pub const SAMPLING_IS_NOT_PROOF: &str = "\
 SAMPLING IS NOT PROOF OF THE WHOLE MEDIUM. This verdict covers only the sectors the \
 sampling plan named and this run actually read back. Sectors outside the sample were \
 not read after the pass and carry no verification claim from this run. A pass that \
 skipped an unsampled sector would produce this same verdict.";
 
-/// The limit that follows from publishing the seed.
 pub const SAMPLE_POSITIONS_ARE_PUBLIC: &str = "\
 Sample positions are derived from the run seed, which is published in the certificate \
 so a third party can reproduce them. A device whose firmware knew the seed could write \
@@ -101,11 +27,6 @@ only the sampled sectors and pass. This procedure detects incidental failure -- 
 skipped range, an ignored write, a pass that did not run -- and does not detect \
 adversarial firmware.";
 
-// ---------------------------------------------------------------------------
-// The plan
-// ---------------------------------------------------------------------------
-
-/// How much to read back and where the rate is quoted against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SamplingPolicy {
     pub sectors_per_mib: u32,
@@ -130,15 +51,12 @@ impl SamplingPolicy {
     }
 }
 
-/// The arithmetic of one sampling policy against one geometry, computed before a
-/// sector is read so the coverage figure can be shown in advance.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SamplingPlan {
     pub sectors_per_mib: u32,
     pub region_bytes: u64,
     pub sector_bytes: u32,
     pub sector_count: u64,
-    /// Sectors in a full region. The final region may be shorter.
     pub region_sectors: u64,
     pub regions: u64,
     pub sectors_to_sample: u64,
@@ -175,16 +93,6 @@ impl SamplingPlan {
     }
 }
 
-/// The sectors to read back in one region, derived from the seed alone.
-///
-/// Deterministic, duplicate-free, sorted ascending — sorted so the read walks the
-/// medium forward rather than seeking randomly, which on a rotational medium is the
-/// difference between a verification and a punishment.
-///
-/// Uniformity is by rejection, not by `% region_sectors` on a raw draw: the modulo
-/// of a uniform 64-bit value is biased toward low indices whenever the bound does
-/// not divide 2^64, and a sampler biased toward the start of every region is a
-/// sampler that under-reads the end of every region.
 pub fn sample_region(
     seed: &Seed,
     method: Method,
@@ -215,7 +123,7 @@ pub fn sample_region(
         xof.squeeze(&mut word);
         let x = u64::from_le_bytes(word);
         if x >= zone {
-            continue; // rejected, so the modulo below is unbiased
+            continue;
         }
         let lba = region_first_lba + (x % region_sectors);
         if !chosen.contains(&lba) {
@@ -226,12 +134,6 @@ pub fn sample_region(
     chosen
 }
 
-/// Probability that a sample of `k` sectors drawn without replacement from a region
-/// of `region_sectors` contains at least one of `bad` bad sectors.
-///
-/// The hypergeometric complement: `1 - prod_{i<k} (S-b-i)/(S-i)`. This is the
-/// function behind the table in the module header, and it is computed rather than
-/// asserted so a reviewer can put their own numbers in.
 pub fn detection_probability(region_sectors: u64, k: u64, bad: u64) -> f64 {
     if region_sectors == 0 || k == 0 || bad == 0 {
         return 0.0;
@@ -249,31 +151,18 @@ pub fn detection_probability(region_sectors: u64, k: u64, bad: u64) -> f64 {
     1.0 - miss
 }
 
-// ---------------------------------------------------------------------------
-// Findings
-// ---------------------------------------------------------------------------
-
-/// One sector that did not carry the pattern.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Mismatch {
     pub lba: u64,
-    /// Offset within the sector of the first differing byte.
     pub first_diff_offset: u32,
     pub expected: u8,
     pub found: u8,
-    /// How many bytes of the sector differ. A sector that differs in every byte is a
-    /// sector that was never written; a sector differing in three bytes is something
-    /// else, and the certificate should be able to tell them apart.
     pub differing_bytes: u32,
 }
 
-/// The three outcomes. There is no "probably" and no "partial": a mismatch anywhere
-/// in the sample is [`Verdict::PatternMismatch`] for the whole pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    /// Every sampled sector carried the pattern. Says nothing about the rest.
     SampledPatternMatch,
-    /// Every sector of the medium was read back and carried the pattern.
     ExhaustivePatternMatch,
     PatternMismatch,
 }
@@ -292,7 +181,6 @@ impl Verdict {
     }
 }
 
-/// What one verification did, in numbers a certificate can carry unaltered.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifyReport {
     pub mode: &'static str,
@@ -303,38 +191,19 @@ pub struct VerifyReport {
     pub seed_hex: String,
     pub sector_bytes: u32,
     pub sector_count: u64,
-    /// 0 for an exhaustive read-back.
     pub sectors_per_mib: u32,
     pub regions: u64,
     pub sectors_verified: u64,
     pub sectors_unverified: u64,
     pub bytes_verified: u64,
     pub coverage_fraction: f64,
-    /// The longest run of consecutive sectors this plan did NOT sample, measured
-    /// over the sample the run actually read rather than derived from the coverage
-    /// fraction.
-    ///
-    /// This is the size of the blind spot, published so it does not have to be
-    /// discovered. A region of this many sectors left unwiped, positioned between
-    /// two sample points, produces [`Verdict::SampledPatternMatch`] with zero
-    /// mismatches -- measured, in
-    /// `a_region_left_unwiped_between_sample_points_survives_a_confirmed_sample`.
-    /// 0 for an exhaustive read-back, where there is no such run by construction.
     pub largest_unsampled_run_sectors: u64,
     pub mismatched_sectors: u64,
     pub mismatches: Vec<Mismatch>,
     pub mismatches_truncated: bool,
     pub duration_ns: u128,
     pub verdict: Verdict,
-    /// The sentence a human reads. Carries the measured numbers and, for a sampled
-    /// run, [`SAMPLING_IS_NOT_PROOF`] and [`SAMPLE_POSITIONS_ARE_PUBLIC`].
     pub claim: String,
-    /// A digest that pins *which* sectors this run read: SHAKE-128 over the domain
-    /// string followed by every sampled LBA in the order they were read. A third
-    /// party who re-derives the plan from the published seed gets the same 64 hex
-    /// characters, without either side shipping 4,096 integers. For an exhaustive
-    /// read-back it is instead a digest over the marker and the sector count, since
-    /// the sector list is `0..sector_count` and enumerating it proves nothing.
     pub sample_digest_hex: String,
 }
 
@@ -358,9 +227,6 @@ fn claim_text(
     pass: u32,
     passes: u32,
     exhaustive: bool,
-    // Sectors in the longest unsampled run, and the sector size, so the claim
-    // states the size of its own blind spot in bytes rather than leaving a reader
-    // to derive it from the coverage fraction.
     largest_unsampled_run: u64,
     sector_bytes: u32,
 ) -> String {
@@ -403,10 +269,6 @@ fn claim_text(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Verification
-// ---------------------------------------------------------------------------
-
 fn compare_sector(gen: &PatternGen, lba: u64, got: &[u8], expect: &mut [u8]) -> Option<Mismatch> {
     gen.fill_sector(lba, expect);
     let mut first: Option<(u32, u8, u8)> = None;
@@ -428,13 +290,6 @@ fn compare_sector(gen: &PatternGen, lba: u64, got: &[u8], expect: &mut [u8]) -> 
     })
 }
 
-/// Read back the sampling plan's sectors for one 1-based pass and compare each
-/// against the pattern that pass wrote.
-///
-/// Sectors are read one at a time, on purpose: a sampled sector is a point
-/// measurement and reading its neighbours to fill a chunk would mean a device could
-/// satisfy the check by writing only the ranges around the sample points. One sector
-/// per read is slower and is what the claim says happened.
 pub fn verify_pass<D>(
     dev: &mut D,
     cfg: &WipeConfig,
@@ -459,9 +314,6 @@ where
 
     let t0 = Instant::now();
     let k = policy.sectors_per_mib.max(1) as u64;
-    // The blind spot, measured as the sample is taken: the longest run of
-    // consecutive sectors between two sampled LBAs. `prev` starts as None so the
-    // head of the medium counts, and the tail after the last sample is added below.
     let mut prev: Option<u64> = None;
     let mut largest_unsampled_run_sectors = 0u64;
     for region in 0..plan.regions {
@@ -496,7 +348,6 @@ where
         }
     }
     let duration_ns = t0.elapsed().as_nanos();
-    // The tail: every sector after the last sampled one is unsampled too.
     let tail = match prev {
         Some(p) => caps.sector_count.saturating_sub(p).saturating_sub(1),
         None => caps.sector_count,
@@ -551,12 +402,6 @@ where
     })
 }
 
-/// Read back **every** sector and compare it. The only verification in this module
-/// that supports a statement about the whole medium.
-///
-/// Measured at 0.480 s over 524,288 sectors, one sequential read of the image. At
-/// that price the sampled path's 0.478 s saving buys a materially weaker claim; on a
-/// 1 TB drive the trade reverses and the sampled path is the only one that finishes.
 pub fn verify_pass_exhaustive<D>(
     dev: &mut D,
     cfg: &WipeConfig,
@@ -646,12 +491,6 @@ where
     })
 }
 
-/// Exact whole-medium Shannon entropy, read back in chunks.
-///
-/// This is the figure `demo_script.md` narrates at 0:30 and it is measured over
-/// every byte, exactly as `fixtures/corpus.py` measures the manifest's 7.0617. It is
-/// **not** the strided per-frame sample in [`crate::telemetry::entropy_sampled`], and
-/// the two must never be subtracted from one another.
 pub fn medium_entropy<D>(dev: &mut D, chunk_sectors: u32) -> Result<(f64, u64), WipeError>
 where
     D: SectorIo + ?Sized,
@@ -678,22 +517,13 @@ where
     Ok((hist.shannon_bits_per_byte(), hist.total()))
 }
 
-/// Everything a wipe job produces: what was written, and what was read back to
-/// support it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifiedWipeReport {
     pub wipe: WipeReport,
     pub verifications: Vec<VerifyReport>,
-    /// True only when every pass's verification returned a match. A certificate that
-    /// says a wipe succeeded reads this field, never the write path's return value.
     pub all_passes_verified: bool,
 }
 
-/// Write each pass, then read it back before the next pass overwrites it.
-///
-/// The ordering is the whole point. Verifying only the last pass of a three-pass
-/// method would leave passes 1 and 2 as unverified assertions, and the certificate
-/// would be claiming three passes on the evidence of one.
 pub fn wipe_verified<D, S>(
     dev: &mut D,
     cfg: &WipeConfig,
@@ -740,17 +570,11 @@ where
     })
 }
 
-/// Convenience for a caller that has bytes rather than a device: SHAKE-128 of a
-/// buffer, used by the measurement runs to prove two wipes produced identical media.
 pub fn digest_hex(data: &[u8]) -> String {
     let mut out = [0u8; 32];
     shake128(&[data], &mut out);
     hex(&out)
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -771,8 +595,6 @@ mod tests {
         (dev, cfg)
     }
 
-    // -- the plan ---------------------------------------------------------
-
     #[test]
     fn the_plan_arithmetic_is_exact() {
         let caps = Capabilities {
@@ -785,7 +607,6 @@ mod tests {
         assert_eq!(plan.region_sectors, SECTORS_PER_MIB);
         assert_eq!(plan.regions, 4);
         assert_eq!(plan.sectors_to_sample, 16);
-        // 16 of 8192 sectors: 0.1953125% of the medium, and the report says so.
         assert_eq!(plan.coverage_fraction, 16.0 / 8192.0);
         assert!((plan.coverage_fraction - 0.001953125).abs() < 1e-15);
     }
@@ -795,12 +616,11 @@ mod tests {
         let caps = Capabilities {
             medium: crate::passes::Medium::Image,
             sector_bytes: SB,
-            sector_count: SECTORS_PER_MIB + 3, // one full region plus three sectors
+            sector_count: SECTORS_PER_MIB + 3,
             writable: true,
         };
         let plan = SamplingPlan::new(&SamplingPolicy::default(), &caps).unwrap();
         assert_eq!(plan.regions, 2);
-        // The short region holds 3 sectors and 4 were asked for: it contributes 3.
         assert_eq!(plan.sectors_to_sample, 7);
     }
 
@@ -841,10 +661,6 @@ mod tests {
 
     #[test]
     fn the_sampler_covers_a_region_evenly_enough_to_be_called_uniform() {
-        // Rejection sampling, not a raw modulo. Over 512 regions x 8 draws the two
-        // halves of a region should be close to even; a modulo bias on a 2048 bound
-        // would not show here, but a construction error that anchored draws to low
-        // indices would.
         let seed = Seed::from_run_id("uniformity");
         let mut low = 0u32;
         let mut high = 0u32;
@@ -870,25 +686,17 @@ mod tests {
         assert!(skew < 0.06, "half-region skew {:.4} over 4096 draws", skew);
     }
 
-    // -- detection arithmetic ---------------------------------------------
-
     #[test]
     fn detection_probability_is_the_hypergeometric_complement() {
         assert_eq!(detection_probability(2048, 4, 0), 0.0);
         assert_eq!(detection_probability(2048, 4, 2048), 1.0);
-        // One bad sector in a region, four drawn: 4/2048.
         let one = detection_probability(2048, 4, 1);
         assert!((one - 4.0 / 2048.0).abs() < 1e-12, "{}", one);
-        // A 64 KiB unwritten run is 128 sectors: the module header quotes 0.2277.
         let run = detection_probability(2048, 4, 128);
         assert!((run - 0.227675).abs() < 1e-6, "{:.6}", run);
-        // Monotone in the size of the failure.
         assert!(detection_probability(2048, 4, 10) > detection_probability(2048, 4, 5));
-        // Monotone in the sampling rate.
         assert!(detection_probability(2048, 64, 8) > detection_probability(2048, 4, 8));
     }
-
-    // -- verification against a real pass ---------------------------------
 
     #[test]
     fn a_correct_seeded_pass_verifies_and_reports_its_coverage() {
@@ -920,7 +728,6 @@ mod tests {
     fn verification_fails_when_a_sampled_sector_was_not_written() {
         let (mut dev, cfg) = wiped(Method::SeededRandom, "verify-bad", 2 * SECTORS_PER_MIB);
         let policy = SamplingPolicy::default();
-        // Corrupt a sector the plan will actually read.
         let target = sample_region(&cfg.seed, cfg.method, 1, 0, 0, SECTORS_PER_MIB, 4)[2];
         let off = target as usize * 512;
         dev.data[off..off + 512].fill(0x00);
@@ -936,8 +743,6 @@ mod tests {
 
     #[test]
     fn verifying_the_wrong_pass_of_a_three_pass_method_fails() {
-        // The medium carries pass 3. Checking it against pass 2's pattern must not
-        // pass: this is what makes per-pass verification meaningful.
         let (mut dev, cfg) = wiped(Method::ThreePass, "wrong-pass", SECTORS_PER_MIB);
         let ok = verify_pass(&mut dev, &cfg, 3, &SamplingPolicy::default()).unwrap();
         assert!(ok.verdict.is_match());
@@ -945,12 +750,6 @@ mod tests {
         assert_eq!(bad.verdict, Verdict::PatternMismatch);
     }
 
-    /// The test that proves the caveat rather than asserting it.
-    ///
-    /// One sector of an 8 MiB medium is left unwritten. The sampled plan does not
-    /// name it, so the sampled verification returns a clean match — a true statement
-    /// about the sectors it read, and a false impression of the medium if the caveat
-    /// were dropped. The exhaustive read-back finds it.
     #[test]
     fn sampling_misses_a_single_bad_sector_that_exhaustive_read_back_catches() {
         let (mut dev, cfg) = wiped(Method::SeededRandom, "miss", 8 * SECTORS_PER_MIB);
@@ -1027,19 +826,14 @@ mod tests {
 
     #[test]
     fn a_device_that_ignores_writes_is_caught_rather_than_believed() {
-        // The failure CLAUDE.md rule 5 is about, in its host-visible form: the write
-        // path returned success and the medium did not change.
         let cfg = WipeConfig::new(Method::SeededRandom, Seed::from_run_id("liar"));
         let mut dev = MemDevice::new(SB, SECTORS_PER_MIB);
         let before = dev.data.clone();
-        // No wipe is run at all; the caller is pretending one succeeded.
         let rep = verify_pass(&mut dev, &cfg, 1, &SamplingPolicy::default()).unwrap();
         assert_eq!(rep.verdict, Verdict::PatternMismatch);
         assert_eq!(rep.mismatched_sectors, 4);
         assert_eq!(dev.data, before);
     }
-
-    // -- entropy ----------------------------------------------------------
 
     #[test]
     fn medium_entropy_reads_the_whole_medium() {
@@ -1087,10 +881,6 @@ mod tests {
         }
     }
 
-    // -- the blind spot, measured rather than described ------------------
-
-    /// Every LBA the shipped sampled plan reads, in the order it reads them.
-    /// Re-derived here from the seed alone, the way a third party would.
     fn planned_lbas(cfg: &WipeConfig, policy: &SamplingPolicy, caps: &Capabilities) -> Vec<u64> {
         let plan = SamplingPlan::new(policy, caps).unwrap();
         let k = policy.sectors_per_mib.max(1) as u64;
@@ -1113,27 +903,11 @@ mod tests {
 
     #[test]
     fn a_region_left_unwiped_between_sample_points_survives_a_confirmed_sample() {
-        //! THE LIMITATION, AS A TEST RATHER THAN A PARAGRAPH.
-        //!
-        //! An adversarial verifier built this against the real fixture: the
-        //! single-pass-random wiped image with one planted file (208,084 bytes,
-        //! 0.0776% of the medium) restored between sample points. The shipped
-        //! sampled verification returned PATTERN_CONFIRMED_ON_SAMPLE, zero
-        //! mismatches, and a sample digest identical to the clean run — while the
-        //! project's own carver recovered that file byte-exact from the same image.
-        //!
-        //! It is arithmetic, not a bug: 4 sampled sectors per MiB is 0.195% coverage
-        //! and the hypergeometric table in this module's header says exactly what
-        //! that detects. But an arithmetic consequence discovered on stage is worth
-        //! nothing, so it is asserted here in both directions — the sampled verdict
-        //! that misses it, AND the exhaustive verdict that catches it — and the
-        //! measured size of the blind spot is published in the report's `limits`.
         let sectors = 8 * SECTORS_PER_MIB;
         let (mut dev, cfg) = wiped(Method::SeededRandom, "blind-spot/v1", sectors);
         let policy = SamplingPolicy::default();
         let caps = dev.capabilities().unwrap();
 
-        // The control: the medium really is wiped, and the sample says so.
         let clean = verify_pass(&mut dev, &cfg, 1, &policy).unwrap();
         assert_eq!(clean.verdict, Verdict::SampledPatternMatch);
         assert_eq!(clean.mismatched_sectors, 0);
@@ -1143,10 +917,8 @@ mod tests {
             "the exhaustive control must pass before its failure below means anything"
         );
 
-        // The largest run of sectors the plan never touches, re-derived from the
-        // seed and cross-checked against the figure the report publishes.
         let lbas = planned_lbas(&cfg, &policy, &caps);
-        let mut best = (0u64, 0u64); // (start, len)
+        let mut best = (0u64, 0u64);
         let mut prev: Option<u64> = None;
         for &lba in &lbas {
             let (start, len) = match prev {
@@ -1174,13 +946,10 @@ mod tests {
             best.1
         );
 
-        // Restore "planted" bytes into that gap. Nothing else on the medium moves.
         let restored = core::cmp::min(best.1, 64);
         let plant = vec![0x5Au8; (restored * caps.sector_bytes as u64) as usize];
         dev.write_sectors(best.0, &plant).unwrap();
 
-        // THE SAMPLED VERDICT DOES NOT NOTICE, and it does not notice silently:
-        // same verdict, zero mismatches, and byte-identical sample digest.
         let after = verify_pass(&mut dev, &cfg, 1, &policy).unwrap();
         assert_eq!(after.verdict, Verdict::SampledPatternMatch);
         assert_eq!(after.mismatched_sectors, 0);
@@ -1188,8 +957,6 @@ mod tests {
         assert_eq!(after.sample_digest_hex, clean.sample_digest_hex);
         assert_eq!(after.verdict.code(), "PATTERN_CONFIRMED_ON_SAMPLE");
 
-        // THE EXHAUSTIVE VERDICT DOES. This is the upgrade `--verify exhaustive`
-        // buys, stated as a measurement rather than as advice.
         let ex = verify_pass_exhaustive(&mut dev, &cfg, 1, 256).unwrap();
         assert_eq!(ex.verdict, Verdict::PatternMismatch);
         assert_eq!(ex.verdict.code(), "PATTERN_MISMATCH");
@@ -1198,7 +965,6 @@ mod tests {
             "every restored sector must be caught, and no other"
         );
 
-        // And the claim a certificate carries names the blind spot in bytes.
         assert!(
             after
                 .claim
@@ -1219,24 +985,6 @@ mod tests {
 
 }
 
-// ---------------------------------------------------------------------------
-// The measurement run
-// ---------------------------------------------------------------------------
-
-/// Everything `docs/` will quote about this module, measured against a copy of the
-/// fixture rather than against a stub.
-///
-/// **Ignored by default and it must stay ignored.** It is the only test in this
-/// crate that opens a writable descriptor on a file, and it opens it only through
-/// [`crate::passes::stub::guard::authorize_write`], which refuses anything not
-/// inode-contained in the directory named by `SENTINELWIPE_WIPE_SCRATCH` and
-/// refuses the source workspace outright. `out/fixture.img` is read, never opened
-/// for writing, and every wipe runs against a byte copy in the scratch root.
-///
-/// ```text
-/// SENTINELWIPE_WIPE_SCRATCH=/path/to/scratch \
-///   cargo test --release -p sentinelwipe-wipe --lib -- --ignored --nocapture measure_
-/// ```
 #[cfg(all(test, unix))]
 mod measure {
     use super::*;
@@ -1250,18 +998,12 @@ mod measure {
     use std::time::Instant;
 
     const SECTOR: u32 = 512;
-    /// `fixtures/build_image.py` measured this over all 268,435,456 bytes with
-    /// `math.fsum`. The Rust estimator must land on it.
     const FIXTURE_ENTROPY: f64 = 7.061690499603866;
 
     fn fixture_path() -> PathBuf {
         guard::workspace_root().join("out").join("fixture.img")
     }
 
-    /// Byte copy, guarded. Explicitly a read/write loop rather than `std::io::copy`,
-    /// which on macOS delegates to `fcopyfile` and can produce an APFS clone --
-    /// a clone would make the first write to every block pay a copy-on-write break
-    /// that has nothing to do with the wipe being measured.
     fn copy_into_scratch(src: &Path, dst: &Path) -> PathBuf {
         let resolved = guard::authorize_write(dst).expect("scratch guard refused the target");
         let mut r = std::fs::File::open(src)
@@ -1299,7 +1041,6 @@ mod measure {
         println!("\nscratch root      {}", root.display());
         println!("fixture           {}", fixture_path().display());
 
-        // --- the before figure, and the cross-implementation check on it -----
         let base = copy_into_scratch(&fixture_path(), &root.join("phase3-baseline.img"));
         let mut dev = ScratchImage::open(&base, SECTOR).unwrap();
         let t = Instant::now();
@@ -1403,9 +1144,6 @@ mod measure {
             );
             assert_eq!(full.verdict, Verdict::ExhaustivePatternMatch, "{}", full.claim);
 
-            // Every earlier pass of a multi-pass method has already been overwritten
-            // by the time the job ends, so it can only be verified in flight; that is
-            // what wipe_verified does and what the interleaving test asserts.
             let mut whole = Vec::new();
             std::fs::File::open(&img)
                 .unwrap()
@@ -1414,7 +1152,6 @@ mod measure {
             println!("  sha3-256 of the wiped image  {}", crate::passes::hex(&sha3_256(&[&whole])));
         }
 
-        // --- rule 6: the same seed must produce the same medium --------------
         let a = copy_into_scratch(&fixture_path(), &root.join("phase3-repro-a.img"));
         let b = copy_into_scratch(&fixture_path(), &root.join("phase3-repro-b.img"));
         let cfg = WipeConfig::new(Method::SeededRandom, seed);
@@ -1434,7 +1171,6 @@ mod measure {
         println!("                  run B {}", digests[1]);
         assert_eq!(digests[0], digests[1], "same seed produced different media");
 
-        // --- crypto-erase, measured on real planted bytes --------------------
         let mut plain = vec![0u8; 1 << 20];
         {
             let mut f = std::fs::File::open(fixture_path()).unwrap();
@@ -1464,8 +1200,6 @@ mod measure {
     #[test]
     #[ignore = "reads out/fixture.img only; run with --ignored --nocapture"]
     fn measure_pattern_generation_throughput() {
-        // Generation cost alone, with no device in the path: the ceiling the seeded
-        // method can ever reach on this machine.
         let seed = Seed::from_run_id("gen-bench");
         for (label, method, pass) in [
             ("constant", Method::ZeroFill, 1u32),

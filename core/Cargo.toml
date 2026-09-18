@@ -7,6 +7,4 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.75"
 
-# Dependencies are added at the phase that needs them, announced first.
-# CLAUDE.md locks ed25519-dalek + sha2 for the ledger; they arrive at Phase 4.
 [workspace.dependencies]

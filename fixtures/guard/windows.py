@@ -1,63 +1,3 @@
-"""The **Windows** backend of the fixture write guard.
-
-What this module guarantees, and the one thing it does not
-----------------------------------------------------------
-It answers the same question ``posix.py`` answers: *may this process open this
-path for writing?* It refuses on the same grounds -- the target is not under an
-allowlisted root, the root is a system directory, the path is relative, the leaf
-is not a regular file, the size is outside bounds, the typed confirmation does
-not match the guard's own resolution of the target -- and it returns the same
-``Decision`` shape with the same code strings, so an audit line written on
-Windows is read by the same reader.
-
-**It is not TOCTOU-hardened, and that is the difference.** ``posix.py`` descends
-from the allowlisted root one component at a time with
-``openat(O_NOFOLLOW | O_DIRECTORY)`` and re-checks type, identity, link count and
-size on the descriptor it will actually write through, so the path it checked and
-the path it opened are provably the same object. ``os.supports_dir_fd`` is empty
-on Windows and there is no ``O_NOFOLLOW``, so that descent cannot be reproduced.
-This module resolves, checks, opens, and then **re-checks on the open
-descriptor**. That narrows the window; it does not close it. An attacker who can
-write to a directory on the path, racing the guard between the check and the
-open, is not defeated here and is defeated on POSIX.
-
-That sentence is reproduced in the ``detail`` of every allow this module issues,
-in ``docs/architecture.md`` D7, and in the certificate's limitations block. It is
-not a footnote: CLAUDE.md rule 1 says the tool never claims more than it
-verified, and a guard that quietly implied the POSIX guarantee on Windows would
-be exactly that claim.
-
-What IS parity
---------------
-The containment check is the same one, not a weaker substitute. CPython on
-Windows reports the volume serial number in ``st_dev`` and the 64-bit file index
-in ``st_ino``, so ``contained_by_inode`` walks the resolved path upward comparing
-identity pairs exactly as the POSIX backend does. A junction that points outside
-an allowed root fails that walk for the same reason a symlink does there.
-
-What is strictly stricter here
-------------------------------
-* **Device targets are always refused.** ``DENY_DEVICE_PLATFORM`` is returned for
-  every ``\\\\.\\PhysicalDriveN``, ``\\\\?\\`` and legacy DOS device name,
-  whether or not the policy arms devices and whether or not the environment sets
-  ``SENTINELWIPE_DEVICE_MODE``. Arming devices is refused at policy construction.
-  There is no Windows block-device layer in this build, so there is nothing for a
-  device decision to authorise and the honest answer is no.
-* **Reserved DOS names are refused.** ``CON``, ``NUL``, ``AUX``, ``PRN``,
-  ``COM1``..``COM9`` and ``LPT1``..``LPT9`` resolve to devices in any directory
-  and at any extension, so ``out\\NUL.img`` is a device and not a file. POSIX has
-  no counterpart to this rule.
-
-What cannot be enforced here, stated rather than skipped
---------------------------------------------------------
-``DENY_HARDLINK`` is in ``ALL_CODES`` and this backend never returns it.
-``os.stat().st_nlink`` is reported as 1 for every file on Windows regardless of
-how many hard links exist, so the multiple-hardlink refusal cannot be performed.
-A hard link from outside an allowlisted root into it is **not** detected here.
-The code is kept in the table so the two platforms share one vocabulary, and so
-this paragraph has something to name.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -67,7 +7,6 @@ import stat as statmod
 from dataclasses import asdict, dataclass, field
 from typing import Optional, Sequence, Tuple
 
-#: Which implementation answered.
 BACKEND = "windows"
 
 ALLOW_FILE = "ALLOW_FILE"
@@ -102,11 +41,6 @@ DENY_DEVICE_PLATFORM = "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_PLATFORM"
 DENY_RACE = "DENY_RACE_DETECTED_AT_OPEN"
 DENY_SYMLINK_AT_OPEN = "DENY_SYMLINK_COMPONENT_AT_OPEN"
 
-#: The same 28 codes ``posix.py`` publishes, in the same order, so a reader of a
-#: decision never has to know which platform produced it. Two are unreachable
-#: here and it is better to say which than to let a reader assume coverage:
-#: ``DENY_HARDLINK`` (no link count on Windows) and ``ALLOW_DEVICE`` (device
-#: targets are always refused).
 ALL_CODES = (
     ALLOW_FILE, ALLOW_CREATE, ALLOW_DEVICE,
     DENY_EMPTY, DENY_NUL, DENY_RELATIVE, DENY_SYNTHETIC, DENY_MODE, DENY_MISSING,
@@ -119,18 +53,10 @@ ALL_CODES = (
 
 DEVICE_MODE_ENV = "SENTINELWIPE_DEVICE_MODE"
 
-#: A root must name at least two components below its drive: ``C:\\a\\b``.
-#: ``C:\\`` and ``C:\\Users`` are refused by depth before the forbidden table is
-#: consulted.
 MIN_ROOT_DEPTH = 2
 
 DEFAULT_MAX_FILE_BYTES = 8 * (1 << 30)
 
-#: Top-level directories that may never *be* a write root.
-#:
-#: Spelled without a drive letter and compared component-wise, because the system
-#: volume is not always ``C:`` and a rule that assumed so would silently stop
-#: protecting anyone who installed Windows elsewhere.
 FORBIDDEN_TOP = frozenset([
     "WINDOWS",
     "PROGRAM FILES",
@@ -143,19 +69,8 @@ FORBIDDEN_TOP = frozenset([
     "PERFLOGS",
 ])
 
-#: Top-level directories that may never be an *ancestor* of a write root.
-#:
-#: This is deliberately ``FORBIDDEN_TOP`` minus ``USERS``, and the difference is
-#: the whole point. Being under ``C:\\Windows`` or ``C:\\Program Files`` is
-#: dangerous and is refused. Being under ``C:\\Users`` is where every developer's
-#: checkout lives on this platform -- there is no ``/home`` -- so refusing it
-#: would refuse the repository itself and the guard would protect nothing by
-#: making itself unusable. ``C:\\Users`` as the root, and the operator's own
-#: profile directory as the root, are both still refused.
 FORBIDDEN_UNDER = FORBIDDEN_TOP - {"USERS"}
 
-#: Legacy DOS device names. These resolve to devices in every directory and with
-#: any extension.
 RESERVED_LEAFS = frozenset(
     ["CON", "PRN", "AUX", "NUL"]
     + ["COM%d" % i for i in range(1, 10)]
@@ -171,8 +86,6 @@ _MODE_ALIASES = {
     "x": "x", "xb": "x", "x+": "x", "xb+": "x", "x+b": "x",
 }
 
-#: The sentence every allow carries. Written once so it cannot drift between the
-#: allow paths.
 TOCTOU_NOTE = (
     "windows backend: containment was checked on the resolved path and re-checked "
     "on the open descriptor, not held across the open. Unlike the posix backend "
@@ -182,15 +95,13 @@ TOCTOU_NOTE = (
 
 
 class GuardError(Exception):
-    """A target was refused. Carries the Decision that refused it."""
-
     def __init__(self, decision: "Decision"):
         super().__init__(f"{decision.code}: {decision.detail}")
         self.decision = decision
 
 
 class PolicyError(Exception):
-    """The policy itself is unsafe. Raised at construction, never at use."""
+    pass
 
 
 def native_platform() -> str:
@@ -202,12 +113,6 @@ def _norm_mode(mode: str) -> Optional[str]:
 
 
 def _ids(path: str) -> Optional[Tuple[int, int]]:
-    """``(st_dev, st_ino)`` for ``path``, or None if it cannot be stat'd.
-
-    On Windows CPython fills ``st_dev`` with the volume serial number and
-    ``st_ino`` with the 64-bit file index, so this pair is a genuine identity and
-    the containment walk below is the same algorithm the POSIX backend runs.
-    """
     try:
         st = os.stat(path)
     except OSError:
@@ -217,13 +122,6 @@ def _ids(path: str) -> Optional[Tuple[int, int]]:
 
 def contained_by_inode(resolved: str, root_ids: Sequence[Tuple[int, int]]
                        ) -> Optional[Tuple[int, int]]:
-    """Walk `resolved` upward comparing identity against `root_ids`.
-
-    Returns the matching root's identity pair, or None. A path is *inside* a
-    root, never equal to it: the loop starts at the parent of `resolved`, so a
-    root does not contain itself and cannot be overwritten as though it were a
-    target.
-    """
     if not root_ids:
         return None
     wanted = set(root_ids)
@@ -243,11 +141,6 @@ def contained_by_inode(resolved: str, root_ids: Sequence[Tuple[int, int]]
 
 
 def _is_reparse(path: str) -> bool:
-    """True if `path` is a symlink, junction or any other reparse point.
-
-    ``os.path.islink`` misses directory junctions on some CPython versions, so
-    the reparse attribute is consulted directly as well.
-    """
     try:
         st = os.lstat(path)
     except OSError:
@@ -259,12 +152,6 @@ def _is_reparse(path: str) -> bool:
 
 
 def _reparse_on_path(root_real: str, resolved: str) -> Optional[str]:
-    """The first reparse point on the path from `root_real` down to `resolved`.
-
-    This is the Windows stand-in for the POSIX backend's ``O_NOFOLLOW`` descent.
-    It is a check and not an open, so it establishes what was true when it ran
-    and not what is true at the moment of the write.
-    """
     try:
         rest = os.path.relpath(resolved, root_real)
     except ValueError:
@@ -282,13 +169,6 @@ def _reparse_on_path(root_real: str, resolved: str) -> Optional[str]:
 
 
 def _is_absolute_windows(path: str) -> bool:
-    """True for ``C:\\x`` and ``\\\\server\\share\\x``; false for ``C:x``,
-    ``\\x`` and ``x``.
-
-    Deliberately not ``os.path.isabs``, which on Windows accepts a bare leading
-    separator. A POSIX-style path such as ``/tmp/x`` names no drive here and must
-    be refused rather than silently resolved against the current one.
-    """
     drive, rest = os.path.splitdrive(path)
     if not drive:
         return False
@@ -296,18 +176,11 @@ def _is_absolute_windows(path: str) -> bool:
 
 
 def _body_components(real: str) -> list:
-    """Components below the drive or share: ``C:\\a\\b\\c.img`` -> [a, b, c.img]."""
     _drive, rest = os.path.splitdrive(real)
     return [p for p in rest.replace("/", "\\").split("\\") if p]
 
 
 def realpath(path: str) -> str:
-    """Fully resolve `path`, following symlinks and junctions.
-
-    A relative path is returned unchanged, exactly as the POSIX backend does:
-    resolving one against the working directory would import state the caller did
-    not state, and every caller rejects relative targets before this point.
-    """
     if not _is_absolute_windows(path):
         return path
     try:
@@ -317,11 +190,6 @@ def realpath(path: str) -> str:
 
 
 def _is_synthetic_namespace(path: str) -> bool:
-    """True for the Windows device and namespace prefixes.
-
-    ``\\\\?\\`` is included because it bypasses path normalisation, which is
-    precisely the normalisation this guard's containment check depends on.
-    """
     p = path.replace("/", "\\")
     return p.startswith("\\\\.\\") or p.startswith("\\\\?\\") or p.startswith("\\??\\")
 
@@ -332,14 +200,6 @@ def _is_reserved_leaf(name: str) -> bool:
 
 @dataclass(frozen=True)
 class Policy:
-    """The allowlist. Constructed once, validated loudly at construction,
-    hashed into the certificate so a reader can see which policy was in force.
-
-    roots must already exist: a root that is not a directory is a PolicyError, so
-    callers mkdir -p before constructing. A guard that creates its own allowed
-    root has no allowlist.
-    """
-
     roots: Tuple[str, ...]
     devices: Tuple[str, ...] = ()
     allow_device_targets: bool = False
@@ -419,8 +279,6 @@ class Policy:
         object.__setattr__(self, "root_reals", tuple(reals))
 
     def digest(self) -> str:
-        """Stable over spelling. Byte-for-byte the same construction the POSIX
-        backend uses, so the certificate field means the same thing on both."""
         payload = json.dumps(
             {
                 "roots": sorted(os.path.realpath(r) for r in self.roots),
@@ -438,10 +296,6 @@ class Policy:
 
 @dataclass(frozen=True)
 class Decision:
-    """The verdict. No timestamp, no random, no host state: two identical calls
-    produce equal Decisions, which is what makes the audit line reproducible
-    alongside the image it authorised."""
-
     allowed: bool
     code: str
     resolved: str
@@ -472,15 +326,7 @@ def _allow(code: str, detail: str, target: str, resolved: str, policy: Policy,
 def authorize(policy: Policy, path: str, confirmation: Optional[str] = None,
               *, mode: str = "r+", env: Optional[dict] = None,
               _platform: Optional[str] = None) -> Decision:
-    """Decide whether `path` may be opened under `policy`.
-
-    TOTAL: returns a Decision for every input and never raises OSError.
-
-    `env` is accepted for signature parity with the POSIX backend, which reads
-    ``SENTINELWIPE_DEVICE_MODE`` through it. Device targets are refused here
-    before any environment is consulted, so nothing reads it.
-    """
-    del env  # parity surface; see docstring
+    del env
 
     if _platform is not None and _platform != native_platform():
         return _deny(
@@ -607,8 +453,6 @@ def authorize(policy: Policy, path: str, confirmation: Optional[str] = None,
 def _confirm_then(policy: Policy, confirmation: Optional[str], path: str,
                   resolved: str, code: str, detail: str,
                   ids: Optional[Tuple[int, int]]) -> Decision:
-    """The typed confirmation is checked **last**, after containment, so it can
-    never be the thing that lets a target through. It grants nothing on its own."""
     if not policy.require_confirmation:
         return _allow(code, detail, path, resolved, policy, ids)
     if confirmation is None:
@@ -629,17 +473,6 @@ def _confirm_then(policy: Policy, confirmation: Optional[str], path: str,
 def open_authorized(policy: Policy, path: str, mode: str,
                     confirmation: Optional[str] = None,
                     *, env: Optional[dict] = None) -> int:
-    """The only way to obtain a descriptor on a fixture target.
-
-    TOTAL over refusals: raises GuardError and never a bare OSError, so every
-    exit is a Decision an audit line can carry. Returns a raw int fd; the caller
-    closes it.
-
-    After the open, the descriptor is re-checked with ``os.fstat`` against the
-    identity the decision recorded. That is what stands in for the POSIX
-    backend's ``openat`` descent. It narrows the race; it does not remove it, and
-    no line in this module claims otherwise.
-    """
     d = authorize(policy, path, confirmation, mode=mode, env=env)
     if not d.allowed:
         raise GuardError(d)
@@ -696,23 +529,14 @@ def open_authorized(policy: Policy, path: str, mode: str,
 
 
 def root_backing_device() -> Optional[str]:
-    """Present for signature parity with the POSIX backend, which uses it to
-    refuse a device that backs the running system. There is no Windows device
-    path in this build, so there is nothing to report and nothing is invented."""
     return None
 
 
 def _whole_disk(dev_name: str) -> str:
-    """Present for signature parity. See :func:`root_backing_device`."""
     return dev_name
 
 
 def audit_append(log_path: str, decision: Decision, *, stamp: str = "") -> None:
-    """Append one decision as JSONL. Every allow and every refusal is recorded.
-
-    `stamp` is supplied by the caller, never read from the clock here, so a build
-    that wants a byte-identical audit log can pass "" and get one.
-    """
     rec = decision.as_record()
     rec["stamp"] = stamp
     rec["backend"] = BACKEND
@@ -723,13 +547,6 @@ def audit_append(log_path: str, decision: Decision, *, stamp: str = "") -> None:
 
 def collect_confirmation(resolved: str, flag_value: Optional[str],
                          *, stdin_isatty: Optional[bool] = None) -> Optional[str]:
-    """--i-understand composition.
-
-    The flag TAKES A VALUE. A bare --i-understand is a bug, not a convenience.
-    When absent and stdin is a TTY we prompt; when absent and stdin is not a TTY
-    we return None, which denies. There is deliberately no environment variable,
-    config key, --force or --yes that stands in for this.
-    """
     if flag_value is not None:
         return flag_value
     import sys

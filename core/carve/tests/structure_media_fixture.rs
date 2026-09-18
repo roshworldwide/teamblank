@@ -1,32 +1,8 @@
-//! The four media validators against the real 256 MB fixture.
-//!
-//! `out/fixture.manifest.json` is ground truth and this file READS it rather
-//! than transcribing it, so a rebuilt fixture moves the test with it instead of
-//! quietly testing yesterday's offsets. Two claims are made here and both are
-//! measured on the shipped image:
-//!
-//!   1. every planted JPEG, PNG, GZIP and MP4 validates, and `end` equals the
-//!      manifest's `size` to the byte -- which is what makes the carved extent
-//!      hashable against the manifest's SHA-256 downstream;
-//!   2. every bare signature hit the manifest counts in free space is REJECTED.
-//!      The manifest's `residue_signature_false_positives` records 8 for JPEG
-//!      and 13 for GZIP. Those 21 are the whole argument for structure
-//!      validation, and 0 of them may survive.
-//!
-//! Covers only the four kinds this half owns. PDF, ZIP and SQLITE are the other
-//! structure agent's and are tested in their own modules.
-
 use sentinelwipe_carve::structure::{gzip, jpeg, mp4, png, validate};
 use sentinelwipe_carve::Kind;
 
 const IMAGE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../out/fixture.img");
 const MANIFEST_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../out/fixture.manifest.json");
-
-// ===========================================================================
-// A minimal JSON reader. CLAUDE.md forbids a new dependency; the manifest
-// schema is small and fixed, so the parser is ~120 lines and reads the whole
-// document into an owned tree.
-// ===========================================================================
 
 #[derive(Debug, Clone, PartialEq)]
 enum Json {
@@ -184,14 +160,6 @@ impl<'a> P<'a> {
     }
 }
 
-// ===========================================================================
-// Fixture loading
-// ===========================================================================
-
-/// A skipping test that prints `ok` claims more than it verified, which is
-/// CLAUDE.md rule 1 aimed at ourselves. The skip is loud, and
-/// `SENTINELWIPE_REQUIRE_FIXTURE=1` turns it into a failure. This mirrors the
-/// convention `signature.rs` established.
 fn fixture() -> Option<&'static (Vec<u8>, Json)> {
     static CACHE: std::sync::OnceLock<Option<(Vec<u8>, Json)>> = std::sync::OnceLock::new();
     CACHE
@@ -228,7 +196,6 @@ struct Planted {
     size: u64,
     fragmented: bool,
     recoverable: String,
-    /// (byte_offset, byte_length) in logical order
     extents: Vec<(u64, u64)>,
 }
 
@@ -238,11 +205,10 @@ fn kind_of(s: &str) -> Option<Kind> {
         "PNG" => Some(Kind::Png),
         "GZIP" => Some(Kind::Gzip),
         "MP4" => Some(Kind::Mp4),
-        _ => None, // PDF, ZIP/DOCX, SQLITE and TXT are not this half's kinds
+        _ => None,
     }
 }
 
-/// The planted files of the four kinds this half owns.
 fn planted(man: &Json) -> Vec<Planted> {
     man.get("files")
         .expect("manifest has a files array")
@@ -267,9 +233,6 @@ fn planted(man: &Json) -> Vec<Planted> {
         .collect()
 }
 
-/// Every planted byte range in the whole image, merged. Anything outside these
-/// is residue, and a signature hit there is a false positive by definition --
-/// the same rule `fixtures/plan.py::measure_signature_false_positives` applies.
 fn planted_ranges(man: &Json) -> Vec<(u64, u64)> {
     let mut spans: Vec<(u64, u64)> = man
         .get("files")
@@ -325,10 +288,6 @@ fn find_all(hay: &[u8], needle: &[u8]) -> Vec<u64> {
     out
 }
 
-/// The bytes a carver would hold for one planted object: its extents in logical
-/// order, then the image tail that follows the last extent. The tail is what
-/// makes `end` a real claim -- a validator that just returned the slice length
-/// would pass without it.
 fn assembled(img: &[u8], p: &Planted, tail: usize) -> Vec<u8> {
     let mut v = Vec::new();
     for (o, l) in &p.extents {
@@ -341,10 +300,6 @@ fn assembled(img: &[u8], p: &Planted, tail: usize) -> Vec<u8> {
     v
 }
 
-// ===========================================================================
-// 1 · every planted object of these four kinds validates, with the exact end
-// ===========================================================================
-
 #[test]
 fn fixture_image_is_the_one_the_manifest_describes() {
     let Some((img, man)) = fixture() else { return };
@@ -355,8 +310,6 @@ fn fixture_image_is_the_one_the_manifest_describes() {
     );
     assert_eq!(img.len(), 268_435_456);
     assert_eq!(man.get("bytes_per_cluster").unwrap().u(), 2048);
-    // Recorded so a failure report names the image that failed. The SHA-256
-    // itself is verified by `make fixtures`, which refuses to write a mismatch.
     eprintln!(
         "fixture image_sha256 {}",
         man.get("image_sha256").unwrap().s()
@@ -371,8 +324,6 @@ fn every_unfragmented_planted_object_validates_with_the_exact_end() {
     let mut failures = Vec::new();
     for p in files.iter().filter(|p| !p.fragmented) {
         let at = p.extents[0].0 as usize;
-        // The realistic carver input: the header offset through the end of the
-        // image. Nothing tells the validator where the object stops.
         let v = validate(p.kind, &img[at..]);
         if !v.valid || v.end != Some(p.size) {
             failures.push(format!(
@@ -388,8 +339,6 @@ fn every_unfragmented_planted_object_validates_with_the_exact_end() {
         checked += 1;
     }
     assert!(failures.is_empty(), "{} of {} failed:\n{}", failures.len(), checked, failures.join("\n"));
-    // 4 JPEG + 4 PNG + 4 GZIP + 3 MP4 planted unfragmented, counted off the
-    // manifest rather than asserted from memory.
     assert_eq!(checked, 15, "unfragmented count for these four kinds");
 }
 
@@ -409,23 +358,11 @@ fn every_bifragment_planted_object_validates_once_reassembled() {
         );
         checked += 1;
     }
-    // imaging_transcript.txt.gz, entropy_heatmap.png, sealing_procedure.mov,
-    // handover_briefing.mov.
     assert_eq!(checked, 4, "bifragment count for these four kinds");
 }
 
 #[test]
 fn fragmented_objects_read_contiguously_are_rejected_except_the_one_mp4_that_cannot_be() {
-    // This is why bifragment carving exists: if the contiguous read of a
-    // fragmented object passed, the gap search would be decoration.
-    //
-    // It holds for four of the five fragmented objects of these kinds, and NOT
-    // for /handover_briefing.mov. MP4 defines no checksum over mdat, so a
-    // fragmentation that falls entirely inside the media payload leaves a box
-    // tree that still tiles exactly to the true length. The 33,913 wrong bytes
-    // it picks up are residue and another file's PCM audio and no structural
-    // check can see them. That is recorded here as a measured fact rather than
-    // asserted away, and `structure/mp4.rs` names the driver-level fix.
     let Some((img, man)) = fixture() else { return };
     let files = planted(man);
     let mut rejected = Vec::new();
@@ -458,9 +395,6 @@ fn fragmented_objects_read_contiguously_are_rejected_except_the_one_mp4_that_can
 
 #[test]
 fn the_mp4_whose_gap_swallows_another_header_is_rejected_by_payload_exclusivity() {
-    // /sealing_procedure.mov read contiguously tiles perfectly to its true
-    // 221,041 bytes. The one thing wrong with it that structure can see is that
-    // /handover_briefing.mov's ftyp header sits inside its mdat payload.
     let Some((img, man)) = fixture() else { return };
     let p = planted(man)
         .into_iter()
@@ -469,14 +403,12 @@ fn the_mp4_whose_gap_swallows_another_header_is_rejected_by_payload_exclusivity(
     let at = p.extents[0].0 as usize;
     let r = mp4::analyze(&img[at..]);
 
-    // every other term is perfect -- the box tree really does tile
     assert_eq!(r.top_level_boxes, 3);
     assert!(r.rubric.tiling > 0.0, "the contiguous read tiles exactly");
     assert!(r.rubric.mdat_present > 0.0);
     assert_eq!(r.rubric.payload_exclusivity, 0.0);
     assert!(!r.validation.valid);
 
-    // and the foreign header is handover_briefing.mov's, at a known offset
     let handover = planted(man)
         .into_iter()
         .find(|p| p.path == "/handover_briefing.mov")
@@ -494,11 +426,6 @@ fn the_mp4_whose_gap_swallows_another_header_is_rejected_by_payload_exclusivity(
 
 #[test]
 fn the_contiguous_mp4_that_survives_overlaps_another_recovered_object() {
-    // The driver-level resolution, measured. /handover_briefing.mov's wrong
-    // contiguous extent claims bytes that /sealing_procedure.mov's correct
-    // second extent already owns; its true extents claim none. Two recovered
-    // objects cannot own the same bytes, which is a check the carve driver can
-    // make and a single validate() call cannot.
     let Some((_img, man)) = fixture() else { return };
     let files = planted(man);
     let h = files.iter().find(|p| p.path == "/handover_briefing.mov").unwrap();
@@ -521,16 +448,8 @@ fn the_contiguous_mp4_that_survives_overlaps_another_recovered_object() {
     );
 }
 
-// ===========================================================================
-// 2 · the two the fixture plants to defeat us
-// ===========================================================================
-
 #[test]
 fn the_reversed_jpeg_is_unrecoverable_by_a_forward_search_and_the_carver_says_so() {
-    // evidence_bag_seal.jpg. The manifest marks it unrecoverable-by-design: its
-    // second fragment lies BEFORE its first on disk, so a forward-only
-    // bifragment search cannot reach it. Three separate claims are made here,
-    // because "we failed" is only credible if we can also say precisely why.
     let Some((img, man)) = fixture() else { return };
     let p = planted(man)
         .into_iter()
@@ -540,27 +459,20 @@ fn the_reversed_jpeg_is_unrecoverable_by_a_forward_search_and_the_carver_says_so
     assert_eq!(p.recoverable, "unrecoverable-by-design");
     assert_eq!(p.extents.len(), 2);
 
-    // (a) the fragments run backwards on disk
     assert!(
         p.extents[1].0 < p.extents[0].0,
         "extent 1 at {} is not before extent 0 at {}",
         p.extents[1].0, p.extents[0].0
     );
 
-    // (b) read contiguously from the header, it fails
     let at = p.extents[0].0 as usize;
     let contiguous = jpeg::validate(&img[at..]);
     assert!(!contiguous.valid, "the reversed JPEG must not carve contiguously");
 
-    // (c) every FORWARD two-fragment split within the manifest's own gap bound
-    //     also fails. max_gap_clusters x bytes_per_cluster is the search window
-    //     the carver is allowed; nothing inside it reconstructs this file.
     let cluster = man.get("bytes_per_cluster").unwrap().u() as usize;
     let max_gap = man.get("max_gap_clusters").unwrap().u() as usize * cluster;
     let head_len = p.extents[0].1 as usize;
     let mut tried = 0usize;
-    // Split the head at every cluster boundary, then resume after every
-    // cluster-aligned forward gap. This is the search bifragment.rs performs.
     let mut split = cluster;
     while split <= head_len {
         let mut gap = cluster;
@@ -585,31 +497,11 @@ fn the_reversed_jpeg_is_unrecoverable_by_a_forward_search_and_the_carver_says_so
     }
     assert!(tried > 1000, "only {} forward splits were tried", tried);
 
-    // (d) and the object itself is intact -- reassembled in its true order it
-    //     validates. So the bytes are all there and no forward split within the
-    //     gap bound reconstructs them.
-    //
-    //     What (a)-(d) do NOT show is that the reversal is what stopped us. The
-    //     earlier comment here said "the barrier is the search direction, not
-    //     the carver", and that overstated the measurement: it would only follow
-    //     if this engine could reassemble a two-fragment JPEG laid out forward.
-    //     It cannot -- (e) measures that -- so reversal is SUFFICIENT to make
-    //     this file unrecoverable and is not shown to be NECESSARY. On stage the
-    //     honest line is "reversed, and of a kind we cannot pin anyway"; the
-    //     demonstrable two-fragment-search limit is media_inventory.docx, where
-    //     the same kind recovers at 2 fragments and refuses at 3.
     let buf = assembled(img, &p, 4096);
     let v = jpeg::validate(&buf);
     assert!(v.valid, "the reversed JPEG in true order: {}", v.detail);
     assert_eq!(v.end, Some(p.size));
 
-    // (e) the same bytes, re-planted FORWARD in benign filler -- the layout this
-    //     engine is built for -- are still not reassembled, at any split or gap.
-    //     PNG and GZIP objects of the same shape, through the same harness, are.
-    //     So the harness is not the reason, and the JPEG barrier is determinacy:
-    //     the format carries no checksum over entropy-coded data, so a splice one
-    //     cluster off validates too and `is_determined` refuses. That is the same
-    //     root cause bifragment.rs already documents for MP4's 6660 splices.
     let forward = forward_reassembly_sweep(&buf[..p.size as usize], Kind::Jpeg, cluster);
     let png_control = {
         let png = planted(man).into_iter().find(|q| q.kind == Kind::Png && q.fragmented);
@@ -651,16 +543,6 @@ fn the_reversed_jpeg_is_unrecoverable_by_a_forward_search_and_the_carver_says_so
     );
 }
 
-/// Lay `obj` out as two forward fragments in benign filler at every
-/// `split x gap` in the sweep, and count how many the shipped two-fragment
-/// search reassembles byte-exactly.
-///
-/// The filler is a deterministic pattern that contains no `FF` and no signature
-/// of any kind, so nothing but the planted object can validate. Splits start at
-/// two clusters because a first fragment at the lattice floor is refused by
-/// `is_determined` on its own published rule, which would confound the count.
-///
-/// Returns `(reassembled, layouts tried)`.
 fn forward_reassembly_sweep(obj: &[u8], kind: Kind, cluster: usize) -> (usize, usize) {
     const SPLITS: [usize; 6] = [2, 4, 8, 12, 18, 24];
     const GAPS: [usize; 4] = [1, 2, 4, 8];
@@ -700,10 +582,6 @@ fn forward_reassembly_sweep(obj: &[u8], kind: Kind, cluster: usize) -> (usize, u
     }
     (ok, tried)
 }
-
-// ===========================================================================
-// 3 · THE RESIDUE IS ADVERSARIAL -- every planted false positive is rejected
-// ===========================================================================
 
 #[test]
 fn every_jpeg_residue_decoy_is_rejected() {
@@ -756,8 +634,6 @@ fn every_gzip_residue_decoy_is_rejected_and_one_needs_the_inflater() {
     let mut needed_inflate = Vec::new();
     for &o in &hits {
         let r = gzip::analyze(&img[o as usize..]);
-        // A decoy whose header is clean got past every cheap check; only
-        // inflating its body rejects it.
         if r.rubric.header_fields > 0.0 {
             needed_inflate.push(o);
         }
@@ -771,9 +647,6 @@ fn every_gzip_residue_decoy_is_rejected_and_one_needs_the_inflater() {
     }
     assert!(survivors.is_empty(), "{} GZIP decoys survived: {:?}", survivors.len(), survivors);
     assert_eq!(hits.len(), 13, "the manifest's measured GZIP false-positive floor");
-    // Measured on this image: exactly one of the thirteen has FLG = 0x00, so
-    // twelve die on the header and one dies on the DEFLATE stream. That one is
-    // the reason this crate carries an inflater.
     assert_eq!(
         needed_inflate.len(), 1,
         "expected exactly one FLG-clean GZIP decoy, found {:?}", needed_inflate
@@ -794,8 +667,6 @@ fn png_and_mp4_residue_floors_are_zero_as_the_manifest_measured() {
     assert_eq!(png_hits.len() as u64, fp.get("PNG").unwrap().u());
     assert_eq!(png_hits.len(), 0);
 
-    // MP4's magic is `ftyp` at offset 4 of the object; the manifest counts the
-    // magic, so the scan does too.
     let mp4_hits: Vec<u64> = find_all(img, b"ftyp")
         .into_iter()
         .filter(|&o| !in_planted(&ranges, o))
@@ -803,20 +674,12 @@ fn png_and_mp4_residue_floors_are_zero_as_the_manifest_measured() {
     assert_eq!(mp4_hits.len() as u64, fp.get("MP4").unwrap().u());
     assert_eq!(mp4_hits.len(), 0);
 
-    // An eight-byte signature does not occur by chance in 134 MB of residue and
-    // a four-byte one is already marginal; the three-byte JPEG and GZIP magics
-    // are where the false positives live. Still, every hit that DOES exist is
-    // rejected, so the claim is not resting on the count being zero.
     for &o in png_hits.iter().chain(mp4_hits.iter()) {
         let start = o.saturating_sub(4) as usize;
         assert!(!png::validate(&img[o as usize..]).valid);
         assert!(!mp4::validate(&img[start..]).valid);
     }
 }
-
-// ===========================================================================
-// 4 · the measured summary, printed so the numbers on the slide have a source
-// ===========================================================================
 
 #[test]
 fn measured_summary() {
@@ -829,8 +692,6 @@ fn measured_summary() {
         } else {
             img[p.extents[0].0 as usize..].to_vec()
         };
-        // Timed because bifragment.rs calls this thousands of times per
-        // candidate and needs a real cost, not an assurance. Debug build.
         let t0 = std::time::Instant::now();
         let v = validate(p.kind, &buf);
         let us = t0.elapsed().as_micros();
@@ -856,15 +717,6 @@ fn measured_summary() {
     assert_eq!(ok, rows.len());
 }
 
-/// What one wrong reassembly costs, measured, because `bifragment.rs` will make
-/// thousands of them and needs a number rather than an assurance.
-///
-/// The interesting case is GZIP: it is the only validator here that does real
-/// work on the whole object (an inflate), so it is the one that could make a
-/// gap search unaffordable. The measurement below separates the two costs that
-/// matter -- a wrong split that dies inside the DEFLATE stream, which is what
-/// almost every candidate does, and a wrong split that inflates all the way to
-/// a mismatched trailer, which is the worst case.
 #[test]
 fn measured_cost_of_a_rejected_reassembly() {
     let Some((img, man)) = fixture() else { return };
@@ -883,8 +735,6 @@ fn measured_cost_of_a_rejected_reassembly() {
         while gap <= 16 * cluster {
             let resume = at + split + gap;
             let take = p.size as usize - split;
-            // The TRUE reassembly is one of the points in this grid; skip it,
-            // and assert separately below that it is the one that passes.
             let is_true = split == head && resume as u64 == p.extents[1].0;
             if !is_true && resume + take <= img.len() {
                 let mut buf = Vec::with_capacity(p.size as usize);
@@ -904,7 +754,6 @@ fn measured_cost_of_a_rejected_reassembly() {
     }
     assert!(n > 100, "only {} wrong reassemblies were tried", n);
     assert_eq!(accepted, 0, "a wrong GZIP reassembly was accepted");
-    // and the one point in the grid that was skipped is the right answer
     let truth = assembled(img, p, 0);
     let tv = gzip::validate(&truth);
     assert!(tv.valid && tv.end == Some(p.size), "the true reassembly: {}", tv.detail);
@@ -914,8 +763,6 @@ fn measured_cost_of_a_rejected_reassembly() {
         total_ns as f64 / n as f64 / 1000.0
     );
 
-    // The worst case for comparison: the contiguous read, which inflates
-    // 250,401 bytes before the trailer disagrees.
     let t0 = std::time::Instant::now();
     let v = gzip::validate(&img[at..]);
     let worst = t0.elapsed().as_micros();

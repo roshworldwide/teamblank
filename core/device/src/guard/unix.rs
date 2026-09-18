@@ -1,127 +1,3 @@
-//! SENTINELWIPE write guard, Rust. CLAUDE.md rule 4. Phase 3 gate.
-//!
-//! Nothing in the Rust engine obtains a writable descriptor on a fixture or a
-//! wipe target except through [`open_authorized`]. Standard library only, no
-//! new crate, no subprocess: nothing on PATH may influence a refusal.
-//!
-//! # Why this file exists at all, given `fixtures/guard.py`
-//!
-//! This is a deliberate, declared reimplementation. The Tauri frontend calls the
-//! Rust binary directly, so a Python-only allowlist is not merely duplicated on
-//! the demo path -- it is *absent* from it. A guard that the destructive path
-//! does not execute is not a guard.
-//!
-//! The duplication is contained by `fixtures/guard_vectors.json`: a committed
-//! table of (target, policy, expected decision code) rows whose expectations were
-//! *measured* from `fixtures/guard.py`. Both implementations run every row. The
-//! Rust half runs it in [`conformance`] below. Drift then fails a test instead of
-//! silently opening a hole.
-//!
-//! # THE PREDICATE, in evaluation order. Every clause is a conjunct.
-//!
-//! There is no disjunction anywhere on the allow path.
-//!
-//! ```text
-//! Target is an EXISTING FILE (modes "r", "r+", "w" on a file that is there):
-//!   F1  path is non-empty, contains no NUL, and is absolute
-//!   F2  resolved = realpath(path) -- resolves every symlink component and the
-//!       macOS /tmp -> /private/tmp alias
-//!   F3  on macOS, resolved is not under /.vol -- the volfs namespace that
-//!       addresses any file by inode number
-//!   F4  resolved exists; a block or character device is handed to the DEVICE
-//!       path, which is default-deny
-//!   F5  containment: some ancestor of resolved is inode-identical
-//!       ((st_dev, st_ino)) to an allowed root. Checked BEFORE any property of
-//!       the file itself, so a refusal names the control that refused it
-//!   F6  S_ISREG -- a directory, FIFO or socket is refused
-//!   F7  st_nlink == 1 -- a hardlink inside an allowed root whose inode lives
-//!       outside it is the one escape realpath cannot see
-//!   F8  min_file_bytes <= st_size <= max_file_bytes  (modes "r" and "r+")
-//!   F9  st_dev equals the matched root's st_dev (nothing was mounted inside it)
-//!   F10 if require_confirmation: confirmation byte-equals resolved
-//! Target does NOT exist (modes "w" and "x"):
-//!   C1  F1 and F3
-//!   C2  the leaf is one component and is not "", "." or ".."
-//!   C3  the parent directory exists and is a directory
-//!   C4  containment on the PARENT, by inode ancestry (F5)
-//!   C5  parent st_dev equals the matched root's st_dev
-//!   C6  F10, against realpath(parent) + "/" + leaf
-//! Target is a DEVICE:
-//!   D0  the platform is not macOS -- a MEASURED defect fix, not caution
-//!   D1  allow_device_targets is true                (config-file factor)
-//!   D2  env SENTINELWIPE_DEVICE_MODE == "1"         (environment factor)
-//!   D3  path byte-equals an entry in policy.devices AND realpath(path) byte-
-//!       equals that same entry
-//!   D4  the target is S_ISBLK or S_ISCHR
-//!   D5  the device is not the one backing "/" nor a slice of the same whole
-//!       disk (DESIGNED BUT UNVERIFIED on Linux; no Linux host was available)
-//!   D6  confirmation byte-equals the device name, unconditionally
-//! ```
-//!
-//! `devices` is empty by default, so D3 refuses every device until a human edits
-//! a config on purpose, and D0 refuses it again on this platform.
-//!
-//! # WHY INODE CONTAINMENT AND NOT A STRING PREFIX
-//!
-//! Measured on the dev machine, macOS 26.6.2 arm64:
-//!
-//! * `/Users` and `/System/Volumes/Data/Users` report the same `(st_dev, st_ino)`
-//!   -- one directory -- but `realpath` returns each unchanged. `realpath` does
-//!   not resolve firmlinks, so one directory has two irreducible path strings. A
-//!   string prefix test denies a legitimate target reached by the other name.
-//! * The working volume is case-insensitive, so `/x/FIXTURES/a.img` and
-//!   `/x/fixtures/a.img` are the same file. A case-sensitive prefix test denies
-//!   one of them; a case-insensitive one is wrong on a case-sensitive volume.
-//!
-//! Inode identity is exact under both, and being identity rather than a string
-//! relation it can never widen the allowed set.
-//!
-//! # TOCTOU
-//!
-//! [`authorize`] is a decision about a path and is inherently racy.
-//! [`open_authorized`] re-establishes every fact against descriptors: it descends
-//! from the allowed root one component at a time with `O_NOFOLLOW|O_DIRECTORY`,
-//! opens the leaf `O_NOFOLLOW`, and re-checks type, identity, nlink and size on
-//! the descriptor. The returned `File`, not the path, is what callers write
-//! through. `openat` is declared here as an `extern "C"` symbol from the libc
-//! that `std` already links; that is not a new dependency, and it is the only
-//! way to descend a path one component at a time without `std::os::fd` gaining
-//! an `openat`.
-//!
-//! # WHAT THIS PORT DOES NOT EXPRESS
-//!
-//! Recorded here rather than discovered later. See `fixtures/guard_vectors.json`
-//! and the Phase 3 report for the full list.
-//!
-//! * **`Policy::digest`.** Python hashes the canonical payload with SHA-256. The
-//!   device crate has no hash primitive and Phase 3 adds no dependency, so
-//!   [`Policy::digest_payload`] returns the *exact bytes Python hashes* and the
-//!   conformance test asserts they match the committed payload template. Any
-//!   crate that has SHA-256 (the ledger, the carver) produces the identical
-//!   digest from them. The Rust guard cannot produce the hex digest itself.
-//! * **Non-UTF-8 target paths.** The API takes `&str`, so a path that is not
-//!   valid UTF-8 cannot be passed at all. That is strictly narrower than Python,
-//!   which accepts any `str`; it is a refusal by construction, not a hole.
-//! * **`collect_confirmation`.** TTY prompting is a CLI concern and lives with
-//!   the caller. The guard evaluates the confirmation it is given and never
-//!   sources one itself.
-//! * **The injected-race tests.** Python monkeypatches `os.open` to widen the
-//!   window between decision and open. That is not expressible in a static
-//!   vector table in either language; the descend-with-`O_NOFOLLOW` machinery it
-//!   exercises is ported and covered by the static symlink rows.
-//! * **Detail strings.** Only `code`, `allowed` and `kind` are conformance
-//!   surface. The human-readable `detail` is written to be equivalent in
-//!   substance, not byte-identical.
-//!
-//! # This file is the Unix backend
-//!
-//! `guard/mod.rs` selects it on `cfg(unix)`. It is byte-for-byte the
-//! implementation the vector table in `fixtures/guard_vectors.json` was
-//! measured against, and nothing in this file was changed to accommodate
-//! Windows. The Windows backend is a separate file with a separate and
-//! explicitly weaker containment story: see `guard/windows.rs` and
-//! docs/architecture.md D7.
-
 use std::ffi::CString;
 use std::fs::{File, Metadata};
 use std::os::raw::{c_char, c_int};
@@ -129,11 +5,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::path::Path;
-
-// ------------------------------------------------------------- reason codes
-//
-// Byte-identical to fixtures/guard.py. These strings are the conformance
-// surface; changing one is a schema change, not a rename.
 
 pub const ALLOW_FILE: &str = "ALLOW_FILE";
 pub const ALLOW_CREATE: &str = "ALLOW_CREATE";
@@ -167,11 +38,6 @@ pub const DENY_DEVICE_PLATFORM: &str = "DENY_DEVICE_TARGETS_UNSUPPORTED_ON_THIS_
 pub const DENY_RACE: &str = "DENY_RACE_DETECTED_AT_OPEN";
 pub const DENY_SYMLINK_AT_OPEN: &str = "DENY_SYMLINK_COMPONENT_AT_OPEN";
 
-/// Every decision code this implementation can produce. Enumerated so the
-/// conformance test can assert that the committed table accounts for all of
-/// them -- exercised by a row, or named in `codes_not_exercised` with a reason.
-/// A code that exists in one implementation and not the other is exactly the
-/// drift the shared table exists to catch.
 pub const ALL_CODES: [&str; 28] = [
     ALLOW_FILE, ALLOW_CREATE, ALLOW_DEVICE,
     DENY_EMPTY, DENY_NUL, DENY_RELATIVE, DENY_SYNTHETIC, DENY_MODE, DENY_MISSING,
@@ -182,18 +48,12 @@ pub const ALL_CODES: [&str; 28] = [
     DENY_DEVICE_IS_SYSTEM, DENY_DEVICE_PLATFORM, DENY_RACE, DENY_SYMLINK_AT_OPEN,
 ];
 
-/// The environment variable that arms the second device factor.
 pub const DEVICE_MODE_ENV: &str = "SENTINELWIPE_DEVICE_MODE";
 
-/// A root must be at least `/a/b`; `/` and `/Users` are refused.
 pub const MIN_ROOT_DEPTH: usize = 2;
 
-/// The default size ceiling: 8 GiB, matching `fixtures/guard.py`.
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 8 * (1 << 30);
 
-/// Directories that may never be a write root, nor contain one that is offered.
-/// Compared by inode after realpath, never by string: `realpath("/etc")` is
-/// `/private/etc`, which no string test for `/etc` catches.
 pub const FORBIDDEN_ROOTS: &[&str] = &[
     "/", "/dev", "/.vol", "/System", "/System/Volumes/Data", "/Volumes", "/Library",
     "/Applications", "/bin", "/sbin", "/usr", "/etc", "/var", "/private",
@@ -201,13 +61,8 @@ pub const FORBIDDEN_ROOTS: &[&str] = &[
     "/Users", "/home", "/opt", "/net", "/cores", "/Network",
 ];
 
-/// The accepted modes. Deliberately Python's `open()` spelling so a reader does
-/// not have to learn a second vocabulary, and deliberately a closed set: an
-/// unrecognised mode is `DENY_UNSUPPORTED_MODE`, never a guess.
 pub const MODES: [&str; 4] = ["r", "r+", "w", "x"];
 
-/// A trailing or embedded `b` is accepted and ignored: every descriptor this
-/// module returns is binary, because it is a file descriptor.
 fn normalize_mode(mode: &str) -> Option<&'static str> {
     Some(match mode {
         "r" | "rb" => "r",
@@ -218,11 +73,6 @@ fn normalize_mode(mode: &str) -> Option<&'static str> {
     })
 }
 
-// ------------------------------------------------------------------ platform
-
-/// The platform string this guard compares against, spelled as Python's
-/// `sys.platform` spells it, because the two implementations share a vector
-/// table that names platforms.
 pub fn native_platform() -> &'static str {
     if cfg!(target_os = "macos") {
         "darwin"
@@ -232,13 +82,6 @@ pub fn native_platform() -> &'static str {
         "unknown"
     }
 }
-
-// ----------------------------------------------------------------- errno/flags
-//
-// Values taken from the platform headers rather than a crate. macOS values were
-// read from `$(xcrun --show-sdk-path)/usr/include/sys/fcntl.h`; the Linux values
-// are the asm-generic ones shared by x86_64 and aarch64. The Linux device layer
-// is gated and untested per the scope rules, and so are these constants.
 
 #[cfg(target_os = "macos")]
 mod oflags {
@@ -275,9 +118,6 @@ mod oflags {
 }
 
 extern "C" {
-    /// Declared variadic because it is variadic. On aarch64-apple-darwin the
-    /// variadic argument passing convention differs from the fixed one, so
-    /// calling `openat` through a non-variadic declaration would be wrong.
     fn openat(dirfd: c_int, path: *const c_char, flags: c_int, ...) -> c_int;
 }
 
@@ -296,8 +136,6 @@ fn openat_checked(dirfd: c_int, name: &str, flags: c_int) -> Result<File, std::i
     Ok(unsafe { File::from_raw_fd(fd) })
 }
 
-// ------------------------------------------------------------------- helpers
-
 fn stat(path: &str) -> Option<Metadata> {
     std::fs::metadata(Path::new(path)).ok()
 }
@@ -310,7 +148,6 @@ fn is_dir(path: &str) -> bool {
     stat(path).map(|m| m.is_dir()).unwrap_or(false)
 }
 
-/// `os.path.dirname` for an absolute POSIX path.
 fn dirname(path: &str) -> String {
     match path.rfind('/') {
         None => String::new(),
@@ -319,7 +156,6 @@ fn dirname(path: &str) -> String {
     }
 }
 
-/// `os.path.basename` for an absolute POSIX path.
 fn basename(path: &str) -> &str {
     match path.rfind('/') {
         None => path,
@@ -335,15 +171,8 @@ fn join(dir: &str, leaf: &str) -> String {
     }
 }
 
-/// `os.path.realpath`: resolves every symlink component, `.` and `..`, and
-/// tolerates components that do not exist (the create path needs that).
-///
-/// `..` is applied to the already-resolved prefix, which is POSIX-correct
-/// precisely because the prefix is symlink-free by then.
 pub fn realpath(path: &str) -> String {
     if !path.starts_with('/') {
-        // Callers reject relative paths before reaching here; resolving one
-        // against the working directory would import attacker-influenced state.
         return path.to_string();
     }
     let mut stack: Vec<String> = Vec::new();
@@ -352,7 +181,7 @@ pub fn realpath(path: &str) -> String {
         .rev()
         .map(|s| s.to_string())
         .collect();
-    let mut budget = 64_i32; // MAXSYMLINKS-ish; a cycle exhausts it and is left alone
+    let mut budget = 64_i32;
     while let Some(name) = pending.pop() {
         if name.is_empty() || name == "." {
             continue;
@@ -374,9 +203,6 @@ pub fn realpath(path: &str) -> String {
         }
         budget -= 1;
         if budget < 0 {
-            // A cycle, or pathological nesting. Leave the rest literal; the
-            // caller's stat() then fails and the decision is DENY_TARGET_MISSING,
-            // which is what Python reaches by the same route.
             stack.push(name);
             while let Some(rest) = pending.pop() {
                 if !rest.is_empty() && rest != "." {
@@ -407,19 +233,6 @@ pub fn realpath(path: &str) -> String {
     }
 }
 
-/// Walk `resolved` upward comparing `(st_dev, st_ino)` against `root_ids`.
-///
-/// `resolved` must already be a realpath, so every component is symlink-free and
-/// walking by string is sound. Identity comparison at each step is what makes
-/// this correct across macOS firmlinks (two path strings, one inode) and
-/// case-insensitive volumes (two spellings, one inode).
-/// Whether `walk_from` is reachable from its matching root's own spelling by
-/// name — the predicate `open_authorized`'s O_NOFOLLOW descent applies.
-///
-/// `authorize` calls this as a final conjunct so the decision and the open cannot
-/// disagree. Inode containment and a name-based descent are different tests, and on
-/// a case-insensitive volume they measurably diverge; the certificate quotes the
-/// decision, so the decision has to be the stricter of the two.
 fn reachable_by_descent(policy: &Policy, walk_from: &str, resolved: &str) -> bool {
     match matching_root_real(policy, walk_from) {
         Some(root_real) => rel_parts(resolved, &root_real).map(|p| !p.is_empty()).unwrap_or(false),
@@ -446,14 +259,11 @@ pub fn contained_by_inode(resolved: &str, root_ids: &[(u64, u64)]) -> Option<(u6
         cur = parent;
         steps += 1;
         if steps > 256 {
-            // pathological depth; refuse rather than spin
             return None;
         }
     }
 }
 
-/// The `/dev/diskNsM` (or `/dev/sdXN`) whose `st_rdev` equals `st_dev` of `/`.
-/// Computed with `stat` only; the guard spawns nothing.
 pub fn root_backing_device() -> Option<String> {
     let rootdev = std::fs::metadata("/").ok()?.dev();
     let mut names: Vec<String> = std::fs::read_dir("/dev")
@@ -474,7 +284,6 @@ pub fn root_backing_device() -> Option<String> {
     None
 }
 
-/// `/dev/disk3s5` -> `disk3` ; `/dev/rdisk3s5` -> `disk3`.
 pub fn whole_disk(dev_name: &str) -> String {
     let mut base = basename(dev_name).to_string();
     if base.starts_with('r') {
@@ -490,7 +299,6 @@ pub fn whole_disk(dev_name: &str) -> String {
     out
 }
 
-/// Byte comparison that does not short-circuit on the first difference.
 fn ct_eq(a: &str, b: &str) -> bool {
     let (x, y) = (a.as_bytes(), b.as_bytes());
     let mut diff = (x.len() ^ y.len()) as u32;
@@ -501,10 +309,6 @@ fn ct_eq(a: &str, b: &str) -> bool {
     diff == 0
 }
 
-// ------------------------------------------------------------------ environment
-
-/// Where the environment factor is read from. `Map` exists so a test can state
-/// the environment instead of inheriting one.
 pub enum Env<'a> {
     Process,
     Map(&'a [(String, String)]),
@@ -519,9 +323,6 @@ impl<'a> Env<'a> {
     }
 }
 
-// ---------------------------------------------------------------------- policy
-
-/// The policy itself is unsafe. Returned at construction, never at use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicyError(pub String);
 
@@ -533,15 +334,11 @@ impl std::fmt::Display for PolicyError {
 
 impl std::error::Error for PolicyError {}
 
-/// What a caller asks for. Validated into a [`Policy`] by [`Policy::build`].
 #[derive(Debug, Clone)]
 pub struct PolicySpec {
     pub roots: Vec<String>,
     pub devices: Vec<String>,
     pub allow_device_targets: bool,
-    /// False by default because building a fixture into a scratch directory is
-    /// not a destructive operation on anyone's data. Every destructive caller --
-    /// the wipe path -- sets it, and arming devices forces it.
     pub require_confirmation: bool,
     pub min_file_bytes: u64,
     pub max_file_bytes: u64,
@@ -569,11 +366,6 @@ impl PolicySpec {
     }
 }
 
-/// The allowlist. Constructed once, validated loudly at construction.
-///
-/// Roots must already exist: a root that is not a directory is a
-/// [`PolicyError`], so callers create it first. A guard that creates its own
-/// allowed root has no allowlist.
 #[derive(Debug, Clone)]
 pub struct Policy {
     spec: PolicySpec,
@@ -642,17 +434,12 @@ impl Policy {
                 None => return Err(PolicyError(format!("root vanished during validation: {real:?}"))),
             };
 
-            // (a) the root IS a system directory, under any spelling. Redundant
-            // with (b), because containment is reflexive; kept because it
-            // produces the message a reader can act on.
             if let Some((_, spelling)) = forbidden.iter().find(|(g, _)| *g == got) {
                 return Err(PolicyError(format!(
                     "refusing system directory as a write root: {r:?} -> {real:?} \
                      (matches {spelling})"
                 )));
             }
-            // (b) the root CONTAINS a system directory, so writing under it could
-            //     reach one.
             for (_, spelling) in &forbidden {
                 let freal = realpath(spelling);
                 if contained_by_inode(&freal, &[got]).is_some() {
@@ -692,12 +479,6 @@ impl Policy {
         self.spec.require_confirmation
     }
 
-    /// The exact bytes `fixtures/guard.py` feeds to SHA-256 to produce
-    /// `Policy.digest()`. This crate has no hash primitive and Phase 3 adds no
-    /// dependency, so the payload is what is offered: it is stable over spelling
-    /// (two teammates who name the same root `/tmp/x` and `/private/tmp/x`
-    /// produce the same payload) and any crate holding SHA-256 turns it into the
-    /// identical digest.
     pub fn digest_payload(&self) -> String {
         let mut roots: Vec<String> = self.spec.roots.iter().map(|r| realpath(r)).collect();
         roots.sort();
@@ -727,10 +508,6 @@ impl Policy {
     }
 }
 
-/// A JSON string literal escaped the way Python's `json.dumps` escapes with
-/// default settings: ASCII output, non-ASCII as `\uXXXX`, astral planes as a
-/// surrogate pair. The audit line has to be byte-comparable across the two
-/// implementations or it is not one record format.
 fn json_string(s: &str) -> String {
     let mut out = String::from("\"");
     for ch in s.chars() {
@@ -760,8 +537,6 @@ fn json_string(s: &str) -> String {
     out
 }
 
-// -------------------------------------------------------------------- decision
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
     File,
@@ -777,9 +552,6 @@ impl Kind {
     }
 }
 
-/// The verdict. No timestamp, no random, no host state: two identical calls
-/// produce equal `Decision`s, which is what makes the audit line reproducible
-/// alongside the image it authorised.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Decision {
     pub allowed: bool,
@@ -793,9 +565,6 @@ pub struct Decision {
 }
 
 impl Decision {
-    /// One JSONL audit record, keys sorted, compact separators, matching
-    /// `fixtures/guard.py`'s `audit_append`. The digest is supplied by the
-    /// caller because this crate cannot compute it; see [`Policy::digest_payload`].
     pub fn as_json_record(&self, policy_digest: &str) -> String {
         let mut s = String::from("{\"allowed\":");
         s.push_str(if self.allowed { "true" } else { "false" });
@@ -839,22 +608,6 @@ fn deny(code: &'static str, detail: String, target: &str, resolved: &str, kind: 
     }
 }
 
-// ------------------------------------------------------------------- authorize
-
-/// Decide whether `path` may be opened under `policy`. Pure: no descriptor, no
-/// side effect, nothing on disk is changed.
-///
-/// `confirmation` is checked LAST, and only after the allowlist has already said
-/// yes, so a refused target never reveals that typing something would have
-/// helped. It carries no authority of its own: the value it must equal is the
-/// guard's own resolution of the target, not the string the operator passed.
-///
-/// `platform` is a TEST SEAM and nothing else. Clause D0 refuses every device
-/// target on macOS before any other factor is consulted, which on a macOS host
-/// makes D1..D6 unreachable and therefore untested -- and those are precisely
-/// the clauses CLAUDE.md rule 4 calls a disqualifying defect area. Passing
-/// `Some("linux")` bypasses D0 ONLY. It does not reach the file rules: the
-/// `/.vol` refusal below still keys on the real platform.
 pub fn authorize(
     policy: &Policy,
     path: &str,
@@ -906,20 +659,6 @@ pub fn authorize(
 
     let resolved = realpath(path);
 
-    // macOS volfs. MEASURED unprivileged: /.vol/<st_dev>/<st_ino> addresses any
-    // file on the volume, realpath leaves the string untouched, stat reports the
-    // underlying regular file (S_ISREG, nlink 1, true size), and O_RDWR succeeds.
-    // So F5, F6 and F7 all pass and inode containment is the only clause left
-    // standing -- and /.vol/<dev>/<ino-of-the-root>/disk.img satisfies even that,
-    // because the walk hits the allowed root's own inode.
-    //
-    // Nothing in this project ever legitimately produces a /.vol path, so the
-    // namespace is refused whole. This is a string test, and soundly so: it is
-    // applied to the REALPATH, which has already collapsed ".", "..", repeated
-    // separators and every symlink.
-    //
-    // Keyed on the REAL platform, not on `plat`: the seam widens the device
-    // clause it names and nothing else.
     if native_platform() == "darwin" && (resolved == "/.vol" || resolved.starts_with("/.vol/")) {
         return deny(
             DENY_SYNTHETIC,
@@ -956,9 +695,6 @@ pub fn authorize(
     }
 
     if norm == "x" {
-        // Checked before containment on purpose: "x" asserts the target does not
-        // exist, and an existing file is a failure of the caller's own premise,
-        // not a policy question.
         return deny(
             DENY_EXISTS,
             format!("{resolved} already exists and mode 'x' refuses to replace it"),
@@ -968,12 +704,6 @@ pub fn authorize(
         );
     }
 
-    // Containment is evaluated FIRST, before any property of the file itself.
-    // Ordering is not cosmetic: with the size check first, /dev/stdout was
-    // refused as DENY_SIZE_OUT_OF_BOUNDS rather than DENY_NOT_ALLOWLISTED
-    // (measured in the Python guard). Both refuse, but the audit line then
-    // records an incidental reason instead of the controlling one, and the
-    // certificate quotes that line.
     let matched = match contained_by_inode(&resolved, &policy.root_ids) {
         Some(m) => m,
         None => {
@@ -996,21 +726,6 @@ pub fn authorize(
         );
     }
 
-    // AND the descent's own predicate, so this decision is a SOUND predicate for
-    // `open_authorized` rather than merely a necessary one.
-    //
-    // Containment above is inode identity, which is case-insensitive by nature on
-    // APFS; the descent re-identifies the root by STRING, because it has to walk
-    // components. Measured divergence: `<lab>/FIXTURES/disk.img` under a root
-    // spelled `<lab>/fixtures` was ALLOW_FILE at decision time and
-    // DENY_NOT_ALLOWLISTED at open time. It failed closed, so it was never a hole
-    // — but `--plan` and the certificate's `authorization.decision_code` both read
-    // the DECISION, so they published ALLOW_FILE for a target the engine would
-    // refuse. Both halves must agree, and they agree by the stricter one winning.
-    //
-    // It sits AFTER the type check on purpose: the allowed root itself is a
-    // directory no descent can reach strictly below itself, and the controlling
-    // reason for refusing a directory is that it is a directory.
     if !reachable_by_descent(policy, &resolved, &resolved) {
         return deny(
             DENY_NOT_ALLOWLISTED,
@@ -1038,10 +753,6 @@ pub fn authorize(
         );
     }
 
-    // Size bounds apply to the modes that READ existing content. "w" truncates
-    // and "x" creates, so the size the file happens to have now is not a policy
-    // question -- and a rule that denied "w" on a 10-byte file while allowing
-    // "w" on no file at all would be incoherent.
     if (norm == "r" || norm == "r+")
         && !(st.size() >= policy.spec.min_file_bytes && st.size() <= policy.spec.max_file_bytes)
     {
@@ -1090,8 +801,6 @@ pub fn authorize(
     }
 }
 
-/// The last conjunct. Returns a denial, or `None` if the clause is satisfied
-/// (including the case where the policy does not require it).
 fn confirm(
     policy: &Policy,
     path: &str,
@@ -1121,12 +830,6 @@ fn confirm(
     }
 }
 
-/// The target does not exist and the caller asked for "w" or "x".
-///
-/// Containment moves to the parent directory. The leaf never participates in a
-/// path walk: it is a single component opened relative to a descended directory
-/// descriptor with `O_CREAT|O_EXCL|O_NOFOLLOW`, so no symlink can be followed and
-/// no file that appeared after this decision can be clobbered.
 fn authorize_create(
     policy: &Policy,
     path: &str,
@@ -1170,8 +873,6 @@ fn authorize_create(
     };
 
     let resolved = join(&parent, &leaf);
-    // The create path takes the same conjunct, against the parent the descent will
-    // actually walk from. See the file branch above for the measured reason.
     if !reachable_by_descent(policy, &parent, &resolved) {
         return deny(
             DENY_NOT_ALLOWLISTED,
@@ -1236,23 +937,6 @@ fn authorize_device(
     env: &Env<'_>,
     plat: &str,
 ) -> Decision {
-    // D0. macOS: refuse every device target, unconditionally, before any factor
-    // is consulted. Not conservatism -- a MEASURED defect in an earlier version
-    // of the Python guard:
-    //
-    //   "/" is on /dev/disk3s5. /dev/disk3 is a SYNTHESIZED APFS container whose
-    //   physical store is /dev/disk0s2, a partition of the internal drive
-    //   /dev/disk0. The whole-disk rule below derives "disk3" from "disk3s5" and
-    //   never reaches disk0, so an operator who allowlisted /dev/disk0 and set
-    //   both other factors got ALLOW_DEVICE for the boot drive. It failed only
-    //   with EPERM because the process was not root -- the guard had already said
-    //   yes. That is the disqualifying defect in CLAUDE.md rule 4, reached
-    //   through the documented escape hatch.
-    //
-    // Walking the synthesis chain correctly needs `diskutil info -plist` or
-    // IOKit. The guard spawns no subprocess, on purpose. So on darwin the honest
-    // predicate is "no". The device layer is Linux-only per the scope rules and
-    // is never demoed.
     if plat == "darwin" {
         return deny(
             DENY_DEVICE_PLATFORM,
@@ -1331,7 +1015,6 @@ fn authorize_device(
         }
     }
 
-    // Devices always require the typed confirmation, whatever the policy says.
     match confirmation {
         None => {
             return deny(
@@ -1366,12 +1049,6 @@ fn authorize_device(
     }
 }
 
-// ---------------------------------------------------------------- hardened open
-
-/// A target was refused, or the open failed for a reason the guard did not
-/// predict. `Refused` is the only variant a correctly-written caller reports to
-/// an operator; `Io` means the kernel said no after the guard said yes, which is
-/// the shape of the defect this whole module exists to prevent.
 #[derive(Debug)]
 pub enum GuardError {
     Refused(Decision),
@@ -1408,20 +1085,11 @@ fn rel_parts(resolved: &str, root_real: &str) -> Option<Vec<String>> {
     let r: Vec<&str> = resolved.split('/').filter(|p| !p.is_empty()).collect();
     let b: Vec<&str> = root_real.split('/').filter(|p| !p.is_empty()).collect();
     if r.len() <= b.len() || r[..b.len()] != b[..] {
-        // Python computes os.path.relpath and refuses any ".." component. A
-        // prefix test is the same predicate, computed without building the
-        // string. Note this is a STRING relation, which is why a case-variant
-        // spelling that inode containment admits is refused here -- fail-closed,
-        // recorded as a row in fixtures/guard_vectors.json.
         return None;
     }
     Some(r[b.len()..].iter().map(|s| s.to_string()).collect())
 }
 
-/// The realpath spelling of the allowed root that contains `resolved`.
-/// Containment matched an inode; the descent needs a string to start from.
-/// Firmlinks mean the two are not interchangeable, so the root that matched is
-/// re-identified here rather than assumed.
 fn matching_root_real(policy: &Policy, resolved: &str) -> Option<String> {
     for r in &policy.spec.roots {
         let rr = realpath(r);
@@ -1434,17 +1102,6 @@ fn matching_root_real(policy: &Policy, resolved: &str) -> Option<String> {
     None
 }
 
-/// The only way the Rust engine obtains a descriptor on a fixture or wipe target.
-///
-/// Runs [`authorize`], then re-establishes every fact against descriptors:
-/// descends from the allowed root one component at a time with
-/// `O_NOFOLLOW|O_DIRECTORY` and opens the leaf with `O_NOFOLLOW`, so a component
-/// swapped for a symlink between decision and open fails with `ELOOP` instead of
-/// escaping. The `File`, not the path, is what callers write through.
-///
-/// Note that `authorize` runs here under the REAL platform: there is no seam on
-/// this path, because there is no test that needs one and every seam on a
-/// destructive path is a liability.
 pub fn open_authorized(
     policy: &Policy,
     path: &str,
@@ -1467,7 +1124,7 @@ pub fn open_authorized(
             .map_err(|_| GuardError::Io(std::io::Error::from(std::io::ErrorKind::InvalidInput)))?;
         // SAFETY: as in `openat_checked`; AT_FDCWD is not consulted because the
         // path is absolute.
-        let fd = unsafe { openat(-2 /* AT_FDCWD */, c.as_ptr(), flags, 0o600 as c_int) };
+        let fd = unsafe { openat(-2 , c.as_ptr(), flags, 0o600 as c_int) };
         if fd < 0 {
             return Err(GuardError::Io(std::io::Error::last_os_error()));
         }
@@ -1502,19 +1159,8 @@ pub fn open_authorized(
         }
     };
 
-    // O_NOFOLLOW on the ROOT's own open, not only on the descent below.
-    // `root_real` is already a realpath, so its final component is symlink-free
-    // by construction and no legitimate root is lost -- but if the root's
-    // directory entry is swapped for a symlink between the decision and this
-    // instant, following it starts the descent OUTSIDE the allowlist. This was
-    // the one open on the path that omitted O_NOFOLLOW, and a racing rename
-    // escaped through it: MEASURED, before this fix, as a 4096-byte file
-    // outside every allowed root truncated to 0 at attempt 87,502 of 200,000.
-    //
-    // The errno mapping is the descent's, so this exit is a Decision an audit
-    // line can carry rather than a bare io::Error.
     let mut dir = match openat_checked(
-        -2, /* AT_FDCWD; root_real is absolute */
+        -2,
         &root_real,
         oflags::O_RDONLY | oflags::O_DIRECTORY | oflags::O_NOFOLLOW | oflags::O_CLOEXEC,
     ) {
@@ -1570,12 +1216,6 @@ pub fn open_authorized(
         "r+" => oflags::O_RDWR | oflags::O_NOFOLLOW,
         "x" => oflags::O_RDWR | oflags::O_CREAT | oflags::O_EXCL | oflags::O_NOFOLLOW,
         _ => {
-            // "w": create-exclusive when the decision said the file was absent.
-            // When it said the file was there, DELIBERATELY NO O_TRUNC: that
-            // flag would make the kernel zero the file in the very syscall that
-            // establishes its identity, before the (dev,ino) re-check below can
-            // prove the fd landed on the file the decision authorised. The
-            // truncation happens after that proof, at the set_len(0) below.
             oflags::O_RDWR
                 | oflags::O_NOFOLLOW
                 | if creating {
@@ -1659,23 +1299,13 @@ pub fn open_authorized(
         }
     }
     if norm == "w" && !creating {
-        // The truncation O_TRUNC would have done, moved to after the type,
-        // nlink and (dev,ino) proofs. A refused run now costs no data: the file
-        // being emptied is provably the file the decision named, and a file the
-        // operator never confirmed is never emptied at all.
         file.set_len(0).map_err(GuardError::Io)?;
     }
     Ok(file)
 }
 
-// ============================================================================
-//                        THE SHARED CONFORMANCE TABLE
-// ============================================================================
-
 #[cfg(test)]
 mod json {
-    //! A minimal JSON reader, hand-rolled for the same reason the carver's JSON
-    //! writer is: Phase 3 adds no dependency. Test-only.
 
     #[derive(Debug, Clone, PartialEq)]
     pub enum J {
@@ -1879,17 +1509,6 @@ mod json {
 
 #[cfg(test)]
 mod conformance {
-    //! Every row of `fixtures/guard_vectors.json`, run against this
-    //! implementation. The expectations in that file were MEASURED from
-    //! `fixtures/guard.py`; nothing here authors one.
-    //!
-    //! A row is satisfied only when the decision code matches AND, where the row
-    //! asks for it, a descriptor was obtained exactly when the decision allowed
-    //! one. A refusal that arrives as an `io::Error` is a FAILURE, not a pass:
-    //! it means the guard said yes and only the kernel said no. That distinction
-    //! is the whole point -- the measured defect in the previous prototype was a
-    //! red-team row that read "refused" because the process lacked root, while
-    //! the guard had already returned ALLOW_DEVICE for the boot drive.
 
     use super::json::{parse, J};
     use super::*;
@@ -1912,11 +1531,6 @@ mod conformance {
             .join("guard_vectors.json")
     }
 
-    /// The lab lives under the system temp directory unless
-    /// `SENTINELWIPE_GUARD_LAB_DIR` names somewhere else. On macOS the temp
-    /// directory is reached through a symlinked ancestor (`/var` ->
-    /// `/private/var`), which is what makes the two aliasing control rows real
-    /// rather than decorative.
     fn lab_base() -> PathBuf {
         let base = std::env::var("SENTINELWIPE_GUARD_LAB_DIR")
             .map(PathBuf::from)
@@ -2031,7 +1645,6 @@ mod conformance {
         panic!("unknown requirement {req:?}");
     }
 
-    /// Returns the target string, plus a descriptor the row keeps alive.
     fn resolve_target(t: &J, sub: &[(&str, Option<String>)]) -> (String, Option<File>) {
         match t.get("kind").unwrap().s() {
             "path" => (subst(t.get("tpl").unwrap().s(), sub), None),
@@ -2068,8 +1681,6 @@ mod conformance {
 
     #[test]
     fn the_vector_table_is_present_and_not_vacuous() {
-        // Guard the guard: an empty or truncated table would make every
-        // assertion below pass while measuring nothing.
         let src = std::fs::read_to_string(vectors_path()).expect("fixtures/guard_vectors.json");
         let doc = parse(&src);
         assert_eq!(doc.get("schema").unwrap().s(), "sentinelwipe.guard_vectors/1");
@@ -2090,10 +1701,6 @@ mod conformance {
             "the regression row for the boot-disk defect is missing from the table"
         );
 
-        // Every code this implementation can produce is accounted for: either a
-        // row exercises it, or the table names it in codes_not_exercised with a
-        // reason. A code present in one implementation and absent from the other
-        // is the drift this whole file exists to catch.
         let mut seen: Vec<String> = Vec::new();
         for r in rows {
             if let Some(c) = r.get("expect_code") {
@@ -2110,22 +1717,6 @@ mod conformance {
                 }
             }
         }
-        // A code is accounted for in exactly one of three ways, and each one has to
-        // carry something a reader can check. Keys beginning with `_` are prose
-        // addressed to that reader and are skipped here.
-        //
-        //   1. a row exercises it;
-        //   2. `codes_not_exercised` states why it is unreachable on this host;
-        //   3. `codes_exercised_by_race_test` names a RACING test in EACH language
-        //      that reaches it, with the measured census from both.
-        //
-        // The third bucket exists because the second one used to hold
-        // DENY_RACE_DETECTED_AT_OPEN and DENY_SYMLINK_COMPONENT_AT_OPEN — the two
-        // clauses guarding the window between the decision and the open — excused as
-        // "not expressible in a static table". They are not inexpressible, only not
-        // TABLE rows, and while that excuse stood, all 85 rows passed in both
-        // languages against two guards that would truncate a file outside every
-        // allowed root under a racing rename. An unreached clause is not a guard.
         let excused: Vec<String> = doc
             .get("codes_not_exercised")
             .unwrap()
@@ -2138,10 +1729,6 @@ mod conformance {
             })
             .collect();
 
-        // This file reads ITS OWN source: the conformance test asserts the race-test
-        // functions named in guard_vectors.json actually exist here. The path must
-        // follow any rename of this file, or the crate stops compiling -- which is
-        // loud, and loud is the right failure for a self-reference.
         let this_file = include_str!("unix.rs");
         let py_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -2160,8 +1747,6 @@ mod conformance {
                     let got = v.get(field).unwrap_or_else(|| panic!("{k} has no {field}"));
                     assert!(!got.s().trim().is_empty(), "{k}.{field} is empty");
                 }
-                // The named tests must EXIST. A table that names a test nobody
-                // wrote is the same paper excuse in a different field.
                 let rname = v.get("rust_test").unwrap().s();
                 let rleaf = rname.rsplit("::").next().unwrap();
                 assert!(
@@ -2232,8 +1817,6 @@ mod conformance {
         let mut allows = 0usize;
         let mut failures: Vec<String> = Vec::new();
 
-        // --- the canonical policy payload, which is what this crate can offer
-        // --- in place of Python's SHA-256 digest.
         for (name, spec) in policies.obj() {
             let tpl = match spec.get("digest_payload_tpl") {
                 Some(t) => t.s(),
@@ -2356,7 +1939,6 @@ mod conformance {
             checked += 1;
         }
 
-        // --- policy construction rows
         let mut pol_checked = 0usize;
         for row in doc.get("policy_rows").unwrap().arr() {
             let name = row.get("name").unwrap().s().to_string();
@@ -2379,7 +1961,6 @@ mod conformance {
             pol_checked += 1;
         }
 
-        // The victim outside the allowed root must be untouched, byte for byte.
         let victim = format!("{}/outside/victim.img", lab.real);
         let bytes = std::fs::read(&victim).expect("victim");
         assert!(
@@ -2407,11 +1988,6 @@ mod conformance {
             failures.join("\n  ")
         );
     }
-
-    // ------------------------------------------------------------ unit checks
-    //
-    // Small properties the table cannot state, because they are about the guard's
-    // own primitives rather than about a decision.
 
     #[test]
     fn realpath_resolves_dot_dotdot_and_repeated_separators() {
@@ -2452,17 +2028,12 @@ mod conformance {
         let root_ids = [ids_of(&format!("{}/root", lab.real)).unwrap()];
         assert!(contained_by_inode(&format!("{}/root/sub", lab.real), &root_ids).is_some());
         assert!(contained_by_inode(&format!("{}/root", lab.real), &root_ids).is_some());
-        // the sibling whose name shares a prefix
         assert!(contained_by_inode(&format!("{}/root-evil", lab.real), &root_ids).is_none());
-        // an empty allowlist can never match, whatever the path
         assert!(contained_by_inode(&format!("{}/root", lab.real), &[]).is_none());
     }
 
     #[test]
     fn the_audit_record_escapes_the_way_python_json_does() {
-        // json.dumps defaults to ensure_ascii=True, so a combining accent leaves
-        // the process as é. The audit line has to be byte-comparable across
-        // the two implementations or it is not one record format.
         let d = Decision {
             allowed: true,
             code: ALLOW_FILE,
@@ -2484,21 +2055,8 @@ mod conformance {
 
     #[test]
     fn the_measured_defect_is_not_reintroduced() {
-        //! THE regression test for the defect this component exists to not repeat.
-        //!
-        //! Previous prototype, red-team row "/dev/disk0 allowlisted + env set":
-        //! result "refused", clause "OSERROR/1". EPERM. The guard had returned
-        //! ALLOW_DEVICE for the internal boot drive and only the absence of root
-        //! privilege stopped the write. That is CLAUDE.md rule 4's disqualifying
-        //! defect reached through the documented escape hatch.
-        //!
-        //! Here the refusal must come from POLICY: `authorize` says no with a
-        //! DENY_ code of device kind, and `open_authorized` returns
-        //! `GuardError::Refused` -- never `GuardError::Io`. A decision is what a
-        //! guard produces; an errno is what the kernel produces after the guard
-        //! has already failed. Nothing in this test opens a device node.
         if std::fs::symlink_metadata("/dev/disk0").is_err() {
-            return; // no /dev/disk0 on this host
+            return;
         }
         let base_pb = lab_base();
         let base = base_pb.to_string_lossy().into_owned();
@@ -2513,7 +2071,6 @@ mod conformance {
         let envv = vec![(DEVICE_MODE_ENV.to_string(), "1".to_string())];
         let env = Env::Map(&envv);
 
-        // All three factors present and the confirmation correct.
         let d = authorize(&pol, "/dev/disk0", Some("/dev/disk0"), "r+", &env, None);
         assert!(!d.allowed, "the guard PERMITTED the internal disk");
         assert!(d.code.starts_with("DENY_"), "{}", d.code);
@@ -2534,9 +2091,6 @@ mod conformance {
             }
         }
 
-        // The refusal is not "the device path refuses everything". Behind the D0
-        // blanket the allowlist can still say yes, and the boot-disk clause still
-        // says no -- both asserted here so the row above cannot pass vacuously.
         let mut ps2 = PolicySpec::with_roots([format!("{}/fixtures", lab.base)]);
         ps2.devices = vec!["/dev/null".into()];
         ps2.allow_device_targets = true;
@@ -2559,9 +2113,6 @@ mod conformance {
 
     #[test]
     fn arming_devices_without_a_confirmation_requirement_is_refused_at_construction() {
-        // Why the "unconditional" device confirmation cannot be mutated away
-        // meaningfully: the pair is enforced one layer up, so a policy that arms
-        // devices without demanding the typed confirmation does not exist.
         let base_pb = lab_base();
         let base = base_pb.to_string_lossy().into_owned();
         std::fs::create_dir_all(format!("{base}/fixtures")).unwrap();
@@ -2575,8 +2126,6 @@ mod conformance {
 
     #[test]
     fn the_platform_seam_bypasses_d0_and_only_d0() {
-        // The control for every seam row in the table. If this stops being true
-        // those rows are measuring nothing.
         if native_platform() != "darwin" {
             return;
         }
@@ -2597,42 +2146,8 @@ mod conformance {
     }
 }
 
-// ============================================================================
-//                          THE RACE TESTS
-// ============================================================================
-
 #[cfg(test)]
 mod race {
-    //! The two clauses the shared conformance table CANNOT reach.
-    //!
-    //! `fixtures/guard_vectors.json` is a static table of (target, policy,
-    //! expected code) rows. It proves the two implementations AGREE. It cannot
-    //! reach `DENY_RACE_DETECTED_AT_OPEN` or `DENY_SYMLINK_COMPONENT_AT_OPEN`,
-    //! because both require the filesystem to CHANGE between the decision and
-    //! the open -- there is no row that expresses "and now another process
-    //! renames this directory". The table's `codes_not_exercised` field said so
-    //! and left it there, and that omission is exactly what hid a real escape:
-    //! every one of the 85 rows passed in both languages while both guards
-    //! would truncate a file outside every allowed root under a racing rename.
-    //!
-    //! These tests need no table. A thread flips one path node while a loop
-    //! calls `open_authorized`, and two things are asserted:
-    //!
-    //!   1. SAFETY -- a pinned victim file outside every allowed root is
-    //!      byte-identical afterwards, and its inode never changed. A refusal
-    //!      that costs data is not a refusal.
-    //!   2. REACHABILITY -- the census contains the race code, so the clause is
-    //!      known to be executed rather than merely present, and every outcome
-    //!      is a policy Decision. `GuardError::Io` is a FAILURE here: a guard
-    //!      stopped by the kernel is not a guard.
-    //!
-    //! Measured before the fix, with this harness's Python twin: the victim was
-    //! truncated 4096 -> 0 at attempt 87,502 of 200,000 in mode "w", inode
-    //! unchanged, while the guard returned DENY_RACE_DETECTED_AT_OPEN for that
-    //! same call. Two independent causes compounded -- the allowed root's own
-    //! open omitted O_NOFOLLOW, and O_TRUNC rode in the openat that established
-    //! identity, before the (dev,ino) re-check could fire. Both are fixed; these
-    //! tests are what keep them fixed.
 
     use super::*;
     use std::io::Read;
@@ -2673,7 +2188,6 @@ mod race {
         }
     }
 
-    /// Read a whole file by path, or None if it is not there right now.
     fn slurp(p: &str) -> Option<Vec<u8>> {
         let mut f = std::fs::File::open(p).ok()?;
         let mut b = Vec::new();
@@ -2683,11 +2197,6 @@ mod race {
 
     #[test]
     fn racing_the_allowed_root_never_truncates_a_file_outside_it() {
-        //! Cause (1): the allowed root's own open. Every other component of the
-        //! descent was opened O_NOFOLLOW; the root was not, so a rename that
-        //! turned the root into a symlink in that instant started the descent
-        //! outside the allowlist -- and O_TRUNC in the leaf's openat then zeroed
-        //! whatever it landed on before identity was re-checked.
         let base = lab_dir("root");
         let root = format!("{base}/fixtures");
         let outside = format!("{base}/outside");
@@ -2703,10 +2212,6 @@ mod race {
         let target = format!("{root}/sub/disk.img");
         std::fs::write(&target, vec![0xBBu8; 4096]).unwrap();
 
-        // The policy is fixed BEFORE the race starts. An allowlist whose root is
-        // chosen while the attacker holds the directory entry names whatever the
-        // attacker wants and proves nothing; the threat model is a FIXED policy
-        // and a moving filesystem.
         let pol = Policy::build(PolicySpec::with_roots([root.clone()])).expect("policy");
         let env = Env::Map(&[]);
 
@@ -2738,8 +2243,6 @@ mod race {
                     census.bump(&format!("IO:{}", e.raw_os_error().unwrap_or(0)));
                 }
             }
-            // Check the victim on every single attempt, not at the end: a
-            // truncation followed by a restore would otherwise go unseen.
             if let Some(now) = slurp(&victim) {
                 assert_eq!(
                     now.len(),
@@ -2754,7 +2257,6 @@ mod race {
         }
         stop.store(true, AtOrd::Relaxed);
         let _ = flipper.join();
-        // Put the root back so the cleanup below can run.
         let _ = std::fs::remove_file(&root);
         let _ = std::fs::rename(&hidden, &root);
 
@@ -2787,10 +2289,6 @@ mod race {
 
     #[test]
     fn racing_a_mid_path_component_reaches_the_symlink_clause() {
-        //! The O_NOFOLLOW descent, which was always correct, and which is the
-        //! reason cause (1) was a single hole rather than a general one. A
-        //! component BELOW the root is swapped for a symlink pointing outside;
-        //! the openat must fail ELOOP and become DENY_SYMLINK_COMPONENT_AT_OPEN.
         let base = lab_dir("mid");
         let root = format!("{base}/fixtures");
         let outside = format!("{base}/outside");

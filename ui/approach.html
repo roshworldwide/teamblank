@@ -5,132 +5,55 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>SENTINELWIPE · THE APPROACH</title>
 <style>
-/* ==== ui/tokens.css — INLINED VERBATIM ================================= */
-/* ============================================================================
-   AURUM — THE TITANIUM STANDARD · Edition 27.0 · 412 declarations
-   Transcribed from the token appendix (sheet 45) and the semantic layer
-   (sheet 23) of the AURUM deck, not from the build prompt.
-
-   FINISH: BLACK TITANIUM — "DEFAULT · DARK. Cinema, media, telemetry, night.
-   The canonical AURUM expression: the void with one warm light in it."
-   Sheet 22 names five finishes; Desert Gold is CEREMONIAL·LIGHT (onboarding,
-   receipts, anniversaries) and is the wrong costume for a forensic instrument.
-   A product picks one and never mixes.
-
-   AXIS: FRONTIER (sheet 05) — "near-black canvas, monospaced numerics, tabular
-   figures, live telemetry, precision displayed to the digit that actually
-   matters. Legible under stress. No colour without semantics, no motion without
-   cause, no alarm without an action attached."
-
-   TOTAL COLOUR BUDGET: 32 values. Thirteen Titanium + ten Aurum + five Vapor +
-   four Signal. A SCREEN MAY USE AT MOST NINE OF THEM. No value outside this set
-   may ever enter the codebase.
-
-   ONE DIRECTION ONLY: roles reference ramp values; ramp values reference
-   nothing. A role that references another role is an alias, and aliases are
-   audited out at every release.
-
-   OPACITY OVER NEW HEX: strokes and fills are stated as a percentage of a ramp
-   value, never as a new opaque colour, so they stay correct over glass and
-   over media.
-
-   NAMING: category-role-state. No product prefixes, no screen names, no -v2.
-   GOVERNANCE: additive only — a token's value is never edited in place.
-   ============================================================================ */
 
 :root{
-  /* ---- PRIMITIVE · TITANIUM — thirteen values, the structural ramp ---- */
   --ti-00:#F7F6F4;  --ti-05:#EEEDEA;  --ti-10:#E3E0DB;  --ti-20:#CFCBC4;
   --ti-30:#B4AFA7;  --ti-40:#98938A;  --ti-50:#7C776E;  --ti-60:#615D56;
   --ti-70:#4A4741;  --ti-80:#35322C;  --ti-90:#232120;  --ti-95:#171615;
   --ti-100:#0B0B0B;
 
-  /* ---- PRIMITIVE · AURUM — ten values, the champagne ramp ------------ */
   --au-05:#FBF3E4;  --au-10:#F6E7CE;  --au-20:#EED6AE;  --au-30:#E3C089;
   --au-40:#D4A96A;  --au-50:#C08F4E;  --au-60:#A5763D;  --au-70:#835C30;
   --au-80:#5E4223;  --au-90:#3A2916;
 
-  /* ---- PRIMITIVE · VAPOR — five values, the cold axis.
-         hue 244–256°, chroma <= 0.033. For glass tint, depth and atmosphere
-         ONLY. Never brand, never decoration. --------------------------- */
-  --vp-10:#D0E4EA;  /* specular rim on cold glass   15.33:1 */
-  --vp-30:#A9BAC4;  /* distant-object label          9.54:1 */
-  --vp-50:#657F90;  /* atmosphere mid-depth          4.78:1 */
-  --vp-70:#445D6C;  /* cool elevated fill            2.39:1 */
-  --vp-90:#232B33;  /* chrome-theme canvas           1.37:1 */
+  --vp-10:#D0E4EA;
+  --vp-30:#A9BAC4;
+  --vp-50:#657F90;
+  --vp-70:#445D6C;
+  --vp-90:#232B33;
 
-  /* ---- PRIMITIVE · SIGNAL — four values, RESERVED FOR STATE.
-         NEVER COLOUR ALONE: every signal use carries a redundant channel —
-         a glyph, a position, or a word. Eight per cent of men cannot resolve
-         nominal from abort by hue, and a system that fails them fails the law.
-         ---------------------------------------------------------------- */
-  --sig-nominal:#38D158;  /* success, completion, within tolerance   9.74:1 */
-  --sig-caution:#FFD60A;  /* degraded, approaching limit            13.94:1
-                             NEVER PAIRED WITH GOLD                        */
-  --sig-abort:#FF453A;    /* failure and destruction                 5.78:1
-                             ALWAYS ACCOMPANIED BY AN ACTION               */
-  --sig-link:#0A84FF;     /* navigation away from context only       5.40:1 */
+  --sig-nominal:#38D158;
+  --sig-caution:#FFD60A;
+  --sig-abort:#FF453A;
+  --sig-link:#0A84FF;
 
-  /* ============ SEMANTIC LAYER · 42 roles · BLACK TITANIUM ============
-     Product code references a role. It never references a ramp value. */
+  --surface-canvas:var(--ti-100);
+  --surface-grouped:var(--ti-95);
+  --surface-raised:var(--ti-90);
+  --surface-glass:rgba(247,246,244,.09);
+  --surface-scrim:rgba(11,11,11,.56);
 
-  /* SURFACE */
-  --surface-canvas:var(--ti-100);              /* the floor. Never elevated,
-                                                  never tinted, never glass  */
-  --surface-grouped:var(--ti-95);              /* behind lists and forms     */
-  --surface-raised:var(--ti-90);               /* cards. One level only —
-                                                  no card inside a card      */
-  --surface-glass:rgba(247,246,244,.09);       /* floating chrome ONLY:
-                                                  bars, popovers, sheets     */
-  --surface-scrim:rgba(11,11,11,.56);          /* behind modals              */
+  --content-primary:var(--ti-00);
+  --content-secondary:var(--ti-20);
+  --content-tertiary:var(--ti-40);
+  --content-quaternary:var(--ti-60);
+  --content-accent:var(--au-30);
+  --content-on-accent:var(--ti-100);
 
-  /* CONTENT */
-  --content-primary:var(--ti-00);              /* titles and the sentence
-                                                  that matters      18.22:1  */
-  --content-secondary:var(--ti-20);            /* body. The workhorse 8.57:1 */
-  --content-tertiary:var(--ti-40);             /* metadata, timestamps,
-                                                  captions   6.44:1 still AA */
-  --content-quaternary:var(--ti-60);           /* placeholder and disabled
-                                                  ONLY. Never a real word    */
-  --content-accent:var(--au-30);               /* ONE INSTANCE PER VIEWPORT
-                                                                    11.40:1  */
-  --content-on-accent:var(--ti-100);           /* label on a filled metal
-                                                  capsule. Obsidian on gold,
-                                                  always                     */
-
-  /* STROKE & FILL — opacity over new hex, always */
-  --stroke-hairline:rgba(247,246,244,.09);     /* 0.5pt separators.
-                                                  PREFER A GAP; a rule only
-                                                  when space fails           */
-  --stroke-rim:rgba(247,246,244,.18);          /* the 1pt edge of every
-                                                  glass object. Non-optional */
-  --stroke-focus:var(--au-30);                 /* 3pt, 2pt offset OUTSIDE the
-                                                  shape. Never removed,
-                                                  never inset                */
-  --fill-quiet:rgba(247,246,244,.07);          /* secondary capsule ground,
-                                                  segmented track, chip      */
-  --fill-pressed:rgba(247,246,244,.14);        /* applied WITH scale .96 —
-                                                  colour alone never reads
-                                                  as pressed                 */
+  --stroke-hairline:rgba(247,246,244,.09);
+  --stroke-rim:rgba(247,246,244,.18);
+  --stroke-focus:var(--au-30);
+  --fill-quiet:rgba(247,246,244,.07);
+  --fill-pressed:rgba(247,246,244,.14);
   --fill-accent:linear-gradient(168deg,var(--au-30),var(--au-40));
-                                               /* 168° two-stop, 6% delta.
-                                                  Flat metal looks printed   */
-  /* LIGHT */
-  --specular-top:rgba(255,255,255,.45);        /* 1pt inset highlight, top
-                                                  edge only. The tell of
-                                                  real glass                 */
-  --specular-bottom:rgba(255,255,255,.12);     /* bounce light. Always
-                                                  weaker than the top by 3x  */
-  --shadow-key:rgba(11,11,11,.68);             /* single source, 12° above   */
-  --glow-accent:rgba(227,192,137,.28);         /* dark themes only. 42px
-                                                  blur, zero offset.
-                                                  NEVER ON TEXT              */
+  --specular-top:rgba(255,255,255,.45);
+  --specular-bottom:rgba(255,255,255,.12);
+  --shadow-key:rgba(11,11,11,.68);
+  --glow-accent:rgba(227,192,137,.28);
 
-  /* ---- TYPE · the fourteen-step scale ------------------------------- */
   --font-display:"SF Pro Display",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Inter,system-ui,sans-serif;
   --font-text:"SF Pro Text",-apple-system,BlinkMacSystemFont,"Helvetica Neue",Inter,system-ui,sans-serif;
   --font-mono:"SF Mono",ui-monospace,Menlo,"JetBrains Mono",monospace;
-  /* SF Pro is Apple-licensed and this repository is public: never vendored. */
 
   --size-colossus:96px;   --lh-colossus:88px;
   --size-display-1:64px;  --lh-display-1:64px;
@@ -147,15 +70,13 @@
   --size-micro:11px;      --lh-micro:13px;
   --size-overline:10px;   --lh-overline:12px;
 
-  /* ---- SPACE & RADIUS ------------------------------------------------ */
   --space-1:4px;  --space-2:8px;  --space-3:12px; --space-4:16px;
   --space-5:20px; --space-6:24px; --space-8:32px; --space-12:48px;
   --space-16:64px;
   --radius-sm:12px; --radius-md:16px; --radius-lg:20px; --radius-xl:28px;
   --radius-capsule:999px;
-  --target-min:44px;   /* AA5 floor. No target under 44px, ever. */
+  --target-min:44px;
 
-  /* ---- MOTION · six curves, six springs, no exceptions ---------------- */
   --ease-standard:cubic-bezier(.32,.72,0,1);
   --ease-enter:cubic-bezier(.16,1,.3,1);
   --ease-exit:cubic-bezier(.7,0,.84,0);
@@ -165,11 +86,8 @@
   --dur-large:400ms;   --dur-enter:520ms;   --dur-morph:620ms;
   --dur-ambient:4000ms;
   --stagger:24ms;
-  --frame-budget:8.33ms;   /* every frame ships in 8.33ms or the feature is
-                              not finished. A budget from the first commit,
-                              never polish applied at the end. */
+  --frame-budget:8.33ms;
 
-  /* ---- MATERIAL & ELEVATION ------------------------------------------ */
   --glass-thin:blur(20px) saturate(170%);
   --glass-regular:blur(28px) saturate(180%);
   --glass-thick:blur(40px) saturate(150%);
@@ -180,7 +98,6 @@
   --e5:0 28px 70px rgba(11,11,11,.72), 0 0 42px rgba(227,192,137,.28);
 }
 
-/* ---- The fourteen registers, set in their own spec ------------------- */
 .t-colossus {font:700 var(--size-colossus)/var(--lh-colossus) var(--font-display);letter-spacing:-.03em}
 .t-display-1{font:700 var(--size-display-1)/var(--lh-display-1) var(--font-display);letter-spacing:-.025em}
 .t-display-2{font:700 var(--size-display-2)/var(--lh-display-2) var(--font-display);letter-spacing:-.022em}
@@ -197,9 +114,6 @@
 .t-overline {font:600 var(--size-overline)/var(--lh-overline) var(--font-text);
              letter-spacing:.18em;text-transform:uppercase;color:var(--content-tertiary)}
 
-/* Every numeral in this product is monospace and tabular, carries its unit,
-   and is never abbreviated and never animated. Precision displayed to the
-   digit that actually matters. */
 .num {font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
       font-feature-settings:"tnum" 1,"lnum" 1}
 .unit{color:var(--content-tertiary);font-size:.72em;margin-left:.3em;letter-spacing:.02em}
@@ -211,12 +125,8 @@ body{margin:0;background:var(--surface-canvas);color:var(--content-secondary);
      -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 ::selection{background:rgba(227,192,137,.28);color:var(--au-05)}
 
-/* 2pt ring at 2pt offset OUTSIDE the shape. Never removed, never inset. */
 :focus-visible{outline:2px solid var(--stroke-focus);outline-offset:2px;border-radius:inherit}
 
-/* Sheet 43 — the floor, not the ceiling. Reduced motion is a first-class
-   path: all travel and scale become a 160ms opacity cross-fade at the
-   destination. Parallax and auto-play stop. No state is lost. */
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{
     animation-duration:1ms!important;animation-iteration-count:1!important;
@@ -224,20 +134,17 @@ body{margin:0;background:var(--surface-canvas);color:var(--content-secondary);
     scroll-behavior:auto!important}
 }
 
-/* ==== SURFACE A · THE APPROACH — built only on the roles above ======== */
-
 html{background:var(--surface-canvas);scroll-behavior:auto}
 body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:hidden}
 
 .mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
       font-feature-settings:"tnum" 1,"lnum" 1}
 
-/* ---- film skeleton: sticky pin, native scroll, never jacked -------------- */
 #film{position:relative}
 .act{position:relative;height:220vh}
 .act[data-act="1"]{height:250vh}
 .act[data-act="8"]{height:200vh}
-.gap{height:24vh}                    /* acts are separated by space, never a rule */
+.gap{height:24vh}
 .stage{position:sticky;top:0;height:100vh;overflow:hidden;
        display:flex;flex-direction:column;justify-content:center;
        padding:var(--space-16) clamp(var(--space-6),6vw,120px)}
@@ -250,7 +157,6 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
 .key{color:var(--content-primary)}
 .dim{color:var(--content-tertiary)}
 
-/* ---- fixed chrome: recedes, then retracts at the handover --------------- */
 #chrome{position:fixed;left:clamp(var(--space-6),6vw,120px);top:var(--space-6);
         z-index:6;color:var(--content-tertiary);opacity:0;
         transition:transform var(--dur-morph) var(--ease-standard),
@@ -258,20 +164,18 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
         pointer-events:none}
 #chrome.retract{transform:translateY(-180%);opacity:0}
 
-/* ---- 01 VOID ------------------------------------------------------------ */
 .void-stage{align-items:center;justify-content:center;text-align:center}
 .void-stage .act-label{position:absolute;top:var(--space-16);
                        left:clamp(var(--space-6),6vw,120px);margin:0}
 .hero{font:700 var(--size-display-1)/1.14 var(--font-display);letter-spacing:-.025em;
       color:var(--content-primary);margin:0;
-      transform:translateY(-2.5vh)}   /* optical centre sits above true centre */
+      transform:translateY(-2.5vh)}
 .hline{display:block;white-space:pre}
 .ch{display:inline-block}
 .hint{position:absolute;left:clamp(var(--space-6),6vw,120px);bottom:var(--space-8);
       font-family:var(--font-mono);font-size:var(--size-micro);line-height:var(--lh-micro);
       letter-spacing:.18em;color:var(--content-tertiary)}
 
-/* ---- 02 THE CLAIM ------------------------------------------------------- */
 .term{font-family:var(--font-mono);font-size:var(--size-subhead);line-height:var(--lh-subhead);
       color:var(--content-secondary);position:relative;white-space:pre;overflow:hidden;
       padding:var(--space-1) 0}
@@ -285,14 +189,12 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
          letter-spacing:-.025em;color:var(--sig-nominal)}
 .success .glyph{margin-right:var(--space-3)}
 
-/* ---- 03 THE NUMBER ------------------------------------------------------ */
 .colossus{font:700 var(--size-colossus)/var(--lh-colossus) var(--font-display);
           letter-spacing:-.03em;font-family:var(--font-mono);
           font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"tnum" 1,"lnum" 1}
 .gold{color:var(--content-accent)}
 .colossus .unit{font-size:.34em}
 
-/* ---- 04 THE FLOOR ------------------------------------------------------- */
 .deriv{display:grid;grid-template-columns:minmax(0,auto) 1fr;
        column-gap:var(--space-12);row-gap:var(--space-5);align-items:baseline;max-width:920px}
 .deriv dt{color:var(--content-tertiary);font-size:var(--size-caption);line-height:var(--lh-caption);
@@ -310,7 +212,6 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
            color:var(--content-primary);letter-spacing:-.02em}
 .floor-out .unit{font-size:.4em}
 
-/* ---- 05 THE COLLISION --------------------------------------------------- */
 .pair{display:grid;row-gap:var(--space-6)}
 .fig{display:flex;align-items:baseline;gap:var(--space-6);flex-wrap:wrap}
 .fig .tag{color:var(--content-tertiary);font-size:var(--size-caption);line-height:var(--lh-caption);
@@ -341,7 +242,6 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
 .action .k{font-size:var(--size-caption);letter-spacing:.18em;text-transform:uppercase;
            font-weight:600;color:var(--content-tertiary);white-space:nowrap}
 
-/* ---- 06 THE SECOND WITNESS ---------------------------------------------- */
 .witness{display:grid;row-gap:var(--space-6)}
 .wrow{display:grid;grid-template-columns:11ch minmax(0,1fr);column-gap:var(--space-6);
       align-items:baseline}
@@ -357,7 +257,6 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
 .unchanged .big{font:700 var(--size-display-2)/var(--lh-display-2) var(--font-display);
                 letter-spacing:-.022em;color:var(--content-primary)}
 
-/* ---- 07 THE LOOP -------------------------------------------------------- */
 .loopline{position:relative;margin:var(--space-8) 0 var(--space-12);height:var(--space-12)}
 .loopline .bar{position:absolute;left:0;right:0;top:50%;height:1px;
                background:var(--stroke-hairline);transform-origin:left center}
@@ -384,13 +283,11 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
          font-family:var(--font-mono);font-variant-numeric:tabular-nums lining-nums;
          color:var(--content-primary);letter-spacing:-.025em}
 
-/* ---- 08 HANDOVER -------------------------------------------------------- */
 .panel{background:var(--surface-glass);border:1px solid var(--stroke-rim);
        border-radius:var(--radius-xl);padding:var(--space-4);
        box-shadow:var(--e2),inset 0 1px 0 var(--specular-top);
        max-width:820px;backdrop-filter:var(--glass-thin);-webkit-backdrop-filter:var(--glass-thin)}
 .panel .inner{border-radius:var(--radius-sm);background:var(--fill-quiet);padding:var(--space-5)}
-/* concentricity: outer 28 − inset 16 = inner 12 */
 .notclaimed{margin:0;padding:0;list-style:none;display:grid;row-gap:var(--space-3)}
 .notclaimed li{display:grid;grid-template-columns:2ch 1fr;column-gap:var(--space-3);
                color:var(--content-tertiary);font-size:var(--size-footnote);
@@ -413,7 +310,6 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
 .go:active::after{opacity:1}
 .go .arrow{font-family:var(--font-mono)}
 
-/* ---- ?perf meter -------------------------------------------------------- */
 #perf{position:fixed;right:var(--space-6);bottom:var(--space-6);z-index:9;
       background:var(--surface-glass);border:1px solid var(--stroke-rim);
       border-radius:var(--radius-sm);padding:var(--space-3) var(--space-4);
@@ -422,7 +318,6 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
       color:var(--content-tertiary);display:grid;row-gap:2px;white-space:pre;pointer-events:none;user-select:none}
 #perf b{font-weight:400;color:var(--content-primary)}
 
-/* ---- narrow viewports: stay on the type scale --------------------------- */
 @media (max-width:900px){
   .hero{font-size:var(--size-display-2);line-height:1.16}
   .success{font-size:var(--size-display-2);line-height:var(--lh-display-2)}
@@ -436,7 +331,6 @@ body{background:var(--surface-canvas);color:var(--content-secondary);overflow-x:
   .deriv{grid-template-columns:1fr;row-gap:var(--space-4)}
 }
 
-/* ---- REDUCED MOTION: one stacked static document, every number present --- */
 html.rm .act,html.rm .act[data-act="1"],html.rm .act[data-act="8"]{height:auto}
 html.rm .gap{display:none}
 html.rm .stage{position:static;height:auto;overflow:visible;display:block;
@@ -467,7 +361,6 @@ html.rm .go{opacity:1}
 
 <main id="film">
 
-<!-- ==================== 01 · VOID ==================================== -->
 <section class="act" data-act="1" aria-label="01 VOID">
   <div class="stage void-stage">
     <p class="t-overline act-label" data-anim style="opacity:0">01 <span class="sep">/</span> VOID</p>
@@ -477,7 +370,6 @@ html.rm .go{opacity:1}
 </section>
 <div class="gap"></div>
 
-<!-- ==================== 02 · THE CLAIM ============================== -->
 <section class="act" data-act="2" aria-label="02 THE CLAIM">
   <div class="stage">
     <div class="wrap">
@@ -494,7 +386,6 @@ html.rm .go{opacity:1}
 </section>
 <div class="gap"></div>
 
-<!-- ==================== 03 · THE NUMBER ============================= -->
 <section class="act" data-act="3" aria-label="03 THE NUMBER">
   <div class="stage">
     <div class="wrap">
@@ -509,7 +400,6 @@ html.rm .go{opacity:1}
 </section>
 <div class="gap"></div>
 
-<!-- ==================== 04 · THE FLOOR ============================== -->
 <section class="act" data-act="4" aria-label="04 THE FLOOR">
   <div class="stage">
     <div class="wrap">
@@ -534,7 +424,6 @@ html.rm .go{opacity:1}
 </section>
 <div class="gap"></div>
 
-<!-- ==================== 05 · THE COLLISION · THE PEAK ============ -->
 <section class="act" data-act="5" aria-label="05 THE COLLISION">
   <div class="stage">
     <div class="wrap">
@@ -568,7 +457,6 @@ html.rm .go{opacity:1}
 </section>
 <div class="gap"></div>
 
-<!-- ==================== 06 · THE SECOND WITNESS ==================== -->
 <section class="act" data-act="6" aria-label="06 THE SECOND WITNESS">
   <div class="stage">
     <div class="wrap">
@@ -593,7 +481,6 @@ html.rm .go{opacity:1}
 </section>
 <div class="gap"></div>
 
-<!-- ==================== 07 · THE LOOP =============================== -->
 <section class="act" data-act="7" aria-label="07 THE LOOP">
   <div class="stage">
     <div class="wrap">
@@ -635,7 +522,6 @@ html.rm .go{opacity:1}
 </section>
 <div class="gap"></div>
 
-<!-- ==================== 08 · HANDOVER ============================== -->
 <section class="act" data-act="8" aria-label="08 HANDOVER">
   <div class="stage">
     <div class="wrap">
@@ -676,7 +562,6 @@ html.rm .go{opacity:1}
 (function(){
 "use strict";
 
-/* ---------- 1 · payload. Every figure on this page is bound from here. --- */
 var P = JSON.parse(document.getElementById("payload").textContent);
 
 function at(o,p){ var k=p.split("."),i=0; for(;i<k.length;i++){ if(o==null) return null; o=o[k[i]]; } return o; }
@@ -688,9 +573,7 @@ var FMT = {
   raw:  function(v){ return String(v); },
   bool: function(v){ return v===true?"true":v===false?"false":String(v); }
 };
-/* derivations this page computes from the payload, named so they can be audited */
 var CALC = {
-  /* floor_ns ÷ measured_ns — the human factor */
   lie_factor: function(){ return at(P,"lie.sanitize.floor_ns") / at(P,"lie.sanitize.measured_ns"); }
 };
 var i,n,el,v;
@@ -701,7 +584,6 @@ n = document.querySelectorAll("[data-calc]");
 for(i=0;i<n.length;i++){ el=n[i]; v=CALC[el.getAttribute("data-calc")]();
   el.textContent = FMT[el.getAttribute("data-fmt")||"int"](v); }
 
-/* ---------- 2 · the one family of curves ------------------------------- */
 function bez(x1,y1,x2,y2){
   var cx=3*x1, bx=3*(x2-x1)-cx, ax=1-cx-bx,
       cy=3*y1, by=3*(y2-y1)-cy, ay=1-cy-by;
@@ -726,7 +608,6 @@ function put(el,t,o){
   if(t!==null && el.__t!==t){ el.style.transform=t; el.__t=t; }
   if(o!==null){ var s=o.toFixed(3); if(el.__o!==s){ el.style.opacity=s; el.__o=s; } }
 }
-/* the standard arrival: travel on --ease-enter, opacity on --ease-standard */
 function arrive(el,p,dy,dx){
   put(el, "translate3d("+((dx||0)*(1-E.enter(p))).toFixed(2)+"px,"+((dy||0)*(1-E.enter(p))).toFixed(2)+"px,0)", E.standard(p));
 }
@@ -735,13 +616,11 @@ function stagger(list,p,a,b,dy){
   for(i=0;i<list.length;i++) arrive(list[i], seg(p, a+span*i*0.62, a+span*i*0.62+span*1.6), dy, 0);
 }
 
-/* ---------- 3 · reduced motion is the first-class path ---------------- */
 var mq = window.matchMedia("(prefers-reduced-motion: reduce)");
 var RM = mq.matches;
 if(RM) document.documentElement.className += " rm";
 mq.addEventListener && mq.addEventListener("change", function(){ location.reload(); });
 
-/* ---------- 4 · scene bindings ----------------------------------------- */
 var q = function(s,r){ return (r||document).querySelector(s); };
 var qa = function(s,r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); };
 var acts = qa(".act");
@@ -749,8 +628,6 @@ var chrome = q("#chrome");
 
 var S = {};
 
-/* 01 VOID — tracking closes from .08em to .01em, expressed as per-character
-   translation so no frame ever touches layout. Nothing else moves. */
 var hero = q(".hero"), heroLines = qa(".hline", hero), heroChars = [];
 (function(){
   for(var i=0;i<heroLines.length;i++){
@@ -761,7 +638,7 @@ var hero = q(".hero"), heroLines = qa(".hline", hero), heroChars = [];
 var s1lab = q('.act[data-act="1"] .act-label'), s1hint = q(".hint");
 var heroFs = 64;
 S[1] = function(a,p){
-  var e = E.standard(seg(p,0,.72));            /* the settle, held long */
+  var e = E.standard(seg(p,0,.72));
   var spread = (0.08-0.01) * heroFs * (1-e);
   for(var L=0;L<heroChars.length;L++){
     var cs = heroChars[L], mid = (cs.length-1)/2;
@@ -774,7 +651,6 @@ S[1] = function(a,p){
   put(s1lab, null, 0);
 };
 
-/* 02 THE CLAIM — a cover block travels off a pre-laid string. transform only. */
 var covers = qa("[data-cover]"), claim = q(".claim"), cap2 = q('.act[data-act="2"] .cap');
 S[2] = function(a,p){
   put(covers[0], "translate3d("+(E.glide(seg(p,.04,.46))*100).toFixed(3)+"%,0,0)", null);
@@ -783,7 +659,6 @@ S[2] = function(a,p){
   arrive(cap2,  seg(p,.84,1),    8, 0);
 };
 
-/* 03 THE NUMBER — the one gold element on this viewport. */
 var n3 = q('.act[data-act="3"] .colossus'), c3 = q('.act[data-act="3"] .cap'),
     f3 = q('.act[data-act="3"] .t-footnote');
 S[3] = function(a,p){
@@ -792,7 +667,6 @@ S[3] = function(a,p){
   arrive(f3, seg(p,.52,.80), 10, 0);
 };
 
-/* 04 THE FLOOR — the derivation assembles a row per scroll increment. */
 var d4 = qa('.act[data-act="4"] .deriv > *'), r4 = q('.act[data-act="4"] .rule'),
     o4 = q('.act[data-act="4"] .floor-out'), fm4 = q('.act[data-act="4"] .formula'),
     c4 = q('.act[data-act="4"] .cap');
@@ -804,19 +678,17 @@ S[4] = function(a,p){
   arrive(c4, seg(p,.78,1), 8, 0);
 };
 
-/* 05 THE COLLISION — the peak. The whole motion budget lives in this act. */
 var obs = q("#obs"), flr = q("#flr"), rr5 = q('.act[data-act="5"] .ratio-row'),
     fn5 = q('.act[data-act="5"] .factor .n'), fx5 = q('.act[data-act="5"] .factor .x'),
     v5 = q("#v5"), ar5 = q('.act[data-act="5"] .abort-rule'), ac5 = q('.act[data-act="5"] .action');
 var v5latched = false;
 S[5] = function(a,p){
-  arrive(obs, seg(p,0,.20), -22, 0);            /* observed arrives from above  */
-  arrive(flr, seg(p,.14,.34),  22, 0);          /* the floor arrives from below */
+  arrive(obs, seg(p,0,.20), -22, 0);
+  arrive(flr, seg(p,.14,.34),  22, 0);
   arrive(rr5, seg(p,.32,.48), 8, 0);
   var fe = E.enter(seg(p,.36,.62));
   put(fn5, "translate3d(0,"+(18*(1-fe)).toFixed(2)+"px,0) scale("+(0.94+0.06*fe).toFixed(4)+")", E.standard(seg(p,.36,.58)));
   arrive(fx5, seg(p,.46,.66), 8, 0);
-  /* the stamp: one latched settle on --ease-standard over --dur-morph, 4% and no bounce */
   if(!v5latched && p>=.66){ v5latched=true; v5.style.transition=
       "transform var(--dur-morph) var(--ease-standard), opacity var(--dur-morph) var(--ease-standard)";
       v5.style.transform="translate3d(0,0,0) scale(1)"; v5.style.opacity="1"; }
@@ -826,7 +698,6 @@ S[5] = function(a,p){
   arrive(ac5, seg(p,.82,1), 8, 0);
 };
 
-/* 06 THE SECOND WITNESS — two hashes lock, then turn cold. */
 var w6a=q("#w6a"), w6b=q("#w6b"), cold=qa('.act[data-act="6"] .cold'),
     warm=qa('.act[data-act="6"] .warm'), un6=q('.act[data-act="6"] .unchanged'),
     c6=q('.act[data-act="6"] .cap');
@@ -840,7 +711,6 @@ S[6] = function(a,p){
   arrive(c6,  seg(p,.76,1),    8, 0);
 };
 
-/* 07 THE LOOP — columns build on opacity over pre-laid cells. Never layout. */
 var bar7=q('.act[data-act="7"] .bar'), nodes7=qa('.act[data-act="7"] .node'),
     colB=qa('.act[data-act="7"] [data-col="b"]'), colA=qa('.act[data-act="7"] [data-col="a"]'),
     z7=q('.act[data-act="7"] .zero'), c7=q('.act[data-act="7"] .cap');
@@ -854,16 +724,12 @@ S[7] = function(a,p){
   arrive(c7, seg(p,.80,1),    8, 0);
 };
 
-/* 08 HANDOVER — chrome retracts, the control arrives, nothing cuts. */
 var h8 = qa('.act[data-act="8"] [data-anim]');
 S[8] = function(a,p){
   stagger(h8, p, .06, .72, 14);
   if(p>.10) chrome.classList.add("retract"); else chrome.classList.remove("retract");
 };
 
-/* ---------- 5 · one IntersectionObserver. It owns will-change and nothing
-   else: an act's scrub is derived from cached geometry in the loop, so a
-   scene is never wrong because an observer callback had not landed yet. ---- */
 var ANIM = "[data-anim],.ch,[data-cover]";
 if(!RM){
   var io = new IntersectionObserver(function(es){
@@ -878,9 +744,6 @@ if(!RM){
   for(var ai=0;ai<acts.length;ai++) io.observe(acts[ai]);
 }
 
-/* ---------- 6 · the lerp. Native scroll is never intercepted; the lerp
-   damps the value the scenes are scrubbed by, so the film is continuous
-   without taking the scroll away from the user. ---------------------------- */
 var tops = [], vh = innerHeight, hs = [];
 function measure(){
   vh = innerHeight; tops.length=0; hs.length=0;
@@ -897,30 +760,22 @@ function chromeUpdate(y){
   if(on!==chromeOn){ chromeOn=on; chrome.style.opacity = on ? "1" : "0"; }
 }
 
-/* perf meter, only behind ?perf */
 var PERF = /(^|[?&])perf(=|&|$)/.test(location.search);
 var pf = document.getElementById("perf"), ring = new Float32Array(240), rn=0, over=0, total=0, lastP=0, last=0;
 var ivl = new Float32Array(240), iv=0, work0=0;
 if(PERF){ pf.hidden=false; }
 
 function frame(now){
-  /* Two different quantities. Conflating them is the classic meter bug:
-       WORK    time spent inside this callback. What the 8.33 ms budget governs.
-       CADENCE wall time between callbacks. The panel refresh, pinned near 16.7 ms
-               on a 60 Hz display, and it can never beat 8.33 ms however fast the
-               page is. Scored against the budget it reports 100% failure on a
-               blank page, which is a defect in the meter, not in the page. */
   if(PERF){ work0 = performance.now(); if(last){ ivl[iv%240]=now-last; iv++; } }
   last = now;
 
   var y = window.scrollY || window.pageYOffset || 0;
-  smooth += (y - smooth) * 0.18;                       /* the lerp */
+  smooth += (y - smooth) * 0.18;
   if(Math.abs(y-smooth) < 0.06) smooth = y;
   chromeUpdate(smooth);
 
   if(!RM){
     for(var k=0;k<acts.length;k++){
-      /* on screen, or one viewport either side of it — eight comparisons */
       if(smooth + vh < tops[k] || smooth > tops[k] + hs[k]) continue;
       var travel = hs[k] - vh, p;
       p = travel>0 ? (smooth - tops[k]) / travel : (smooth>=tops[k] ? 1 : 0);
@@ -928,7 +783,7 @@ function frame(now){
     }
   }
   if(PERF){
-    var cost = performance.now() - work0;            /* WORK, not cadence */
+    var cost = performance.now() - work0;
     ring[rn%240]=cost; rn++; total++; if(cost>8.33) over++;
     if(now-lastP>400){
       lastP=now;
@@ -956,9 +811,6 @@ if(RM){
 })();
 </script>
 <script>
-/* One keyboard path through the demo: Escape returns to the entry surface,
-   ui/index.html, from anywhere. Guarded so it never fires while the operator
-   is typing the destructive-confirmation string. */
 (function(){
   document.addEventListener("keydown", function(e){
     if(e.key!=="Escape"&&e.key!=="Esc") return;

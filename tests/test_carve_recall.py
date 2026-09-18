@@ -1,46 +1,3 @@
-"""Recall and false-positive rate of the carver against the planted fixture manifest.
-
-Two properties live here.  Both are measured through shipped code.
-
-THE MARGIN.  The carving engine admits a candidate at ``confidence::MIN_CONFIDENCE``.
-What protects that gate is not the gap between the planted and residue populations --
-that is a distance nothing enforces.  It is the structural credit a decoy would need
-in order to clear the gate on its own, given that a decoy already scores full marks
-on signature, entropy and size.  These tests assert the gate the Rust code actually
-enforces, by running its CI measurement rather than restating its numbers.
-
-RECALL (re-measured 2026-09-03, through the shipped ``carve`` binary, after
-``bifragment.rs`` was wired into the pipeline behind ``--reassemble``).  DEMONSTRATED
-RECALL is what a run measurably recovered, joined to the manifest BY SHA-256 -- never
-by row count, because this run still admits three records whose bytes are not the
-planted bytes and only the digest sees the difference.
-
-There are now two runs and they are two measurements, never averaged and never
-conflated:
-
-  DEFAULT (reassembly OFF)   demonstrated recall (contiguous engine)  28 of 40
-  --reassemble               demonstrated recall (contiguous engine
-                             + two-fragment reassembly)               30 of 40
-
-Reassembly is OFF by default in the shipped binary.  That is a deliberate state and
-it is asserted here as one, not merely observed: the default run must reassemble
-nothing, and it must still recover its published 28.
-
-The reachability CEILING of 33 of 40 and either demonstrated recall figure are
-different numbers.  They live in different fields, they are printed on different
-lines, and ``test_the_two_numbers_are_never_in_one_sentence`` enforces that they are
-never rendered as one -- in stderr, in the report notes, or in the recall block.
-
-When the binary is absent these tests SKIP, loudly, with the reason naming the
-missing path -- never silently.  Set SENTINELWIPE_REQUIRE_CARVER=1 to turn the
-absence into a failure, which is what CI should do.
-
-COST.  The reassembling runs are slow by construction: 59 of 63 searches walk a whole
-split-point x gap-length lattice and return nothing.  Two of them are run here (one
-with the manifest, one blind) at roughly 63 s each, and that is the price of measuring
-a search rather than trusting it.
-"""
-
 from __future__ import annotations
 
 import copy
@@ -58,35 +15,14 @@ REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "out"
 IMAGE = OUT / "fixture.img"
 MANIFEST = OUT / "fixture.manifest.json"
-#: Cargo appends `.exe` on Windows; without this the binary is never found
-#: there and every measurement in this file skips for a reason that is not true.
 _EXE = ".exe" if os.name == "nt" else ""
 CARVE_BIN = REPO / "core" / "target" / "release" / ("carve" + _EXE)
 
-# The four weights and the gate, as published in docs/architecture.md D2 and
-# exported from core/carve/src/confidence.rs.  Duplicated here deliberately: if
-# these drift from the Rust constants, test_the_rust_gate_matches_this_file
-# fails, which is the point.
 W_SIGNATURE, W_STRUCTURE, W_ENTROPY, W_SIZE = 0.40, 0.35, 0.15, 0.10
 MIN_CONFIDENCE = 0.75
-NON_STRUCTURE_CEILING = W_SIGNATURE + W_ENTROPY + W_SIZE          # 0.65
+NON_STRUCTURE_CEILING = W_SIGNATURE + W_ENTROPY + W_SIZE
 STRUCTURAL_BREACH_POINT = (MIN_CONFIDENCE - NON_STRUCTURE_CEILING) / W_STRUCTURE
 
-# ---------------------------------------------------------------------------
-# The five files the manifest tags `bifragment`, one at a time.
-#
-# MEASURED 2026-09-03 through `carve --reassemble --cluster-bytes 2048
-# --max-gap-clusters 128` against out/fixture.img.  Recorded here per file and
-# asserted per file, because "2 of 5" is a score and this is a finding.  The gap
-# in each reason is re-derived from the manifest at run time and asserted against
-# the number written here, so no figure below is a claim the fixture does not back.
-#
-# RECOVERED is measured.  REASON, for a file not recovered, is what the search
-# reported: `carve` prints solved/ambiguous/exhausted/refused-contiguous counts on
-# stderr and those aggregates are asserted; the per-file attribution comes from
-# core/carve/src/bifragment.rs's own per-plant measurement and is labelled as
-# such, never as something this file measured.
-# ---------------------------------------------------------------------------
 BIFRAGMENT_OUTCOME = {
     "/entropy_heatmap.png": (
         True, 1,
@@ -116,11 +52,8 @@ BIFRAGMENT_OUTCOME = {
         "digest -- see MP4@65943552 in the table."),
 }
 
-# The two files the fixture fragments in shapes this algorithm cannot solve.
 BY_DESIGN = ["/media_inventory.docx", "/evidence_bag_seal.jpg"]
 
-# The run's one genuine false positive.  Named here so that a change in it is a
-# change to this file and not a silent drift.
 GENUINE_FALSE_POSITIVE = "ZIP@1228603"
 
 
@@ -137,11 +70,6 @@ def manifest() -> dict:
 
 
 def _cargo_measure() -> str:
-    """Run the Rust residue-separation measurement and return its output.
-
-    This is the enforcing check.  Parsing its printed table rather than
-    recomputing it here keeps one implementation of the measurement.
-    """
     if shutil.which("cargo") is None:
         pytest.fail("NOT VERIFIED -- cargo is absent, so the margin was not measured.")
     proc = subprocess.run(
@@ -160,17 +88,7 @@ def _num(pattern: str, text: str) -> float:
     return float(m.group(1))
 
 
-# --------------------------------------------------------------------------
-# The counted set: what the fixture claims is reachable at all
-# --------------------------------------------------------------------------
-
 def test_the_counted_set_excludes_what_has_no_signature():
-    """40 planted, 33 reachable, 7 unreachable by construction.
-
-    Five are plaintext, which carries no magic bytes; two are fragmented in
-    shapes a bifragment search cannot solve.  A fixture containing only cases we
-    pass would not be evidence.
-    """
     m = manifest()
     cs = m["counted_set"]
     assert cs["total"] == 40
@@ -187,28 +105,12 @@ def test_the_counted_set_excludes_what_has_no_signature():
 
 
 def test_no_txt_file_is_labelled_recoverable():
-    """Plain text has no signature.  Labelling it recoverable would overstate the engine.
-
-    Our corpus text opens with an ASCII banner and keying on it would lift recall
-    to 38.  That is refused: a carver tuned to a marker we planted ourselves
-    measures nothing.  See docs/ai-log/entries/2026-09-03.md.
-    """
     for f in manifest()["files"]:
         if f["kind"].upper() == "TXT":
             assert f["expected_recoverable"] == "unrecoverable-by-design", f["path"]
 
 
 def test_recall_thresholds_are_defined_over_the_reachable_set():
-    """>=95% unfragmented and >=60% fragmented, measured over what is reachable.
-
-    Measured over all 40 the thresholds are unreachable by construction: 33 of 40
-    is 82.5%, below the 95% bar, without the carver being at fault.
-
-    Both bars are now MEASURED, because the code that has to earn them has been
-    run.  The unfragmented bar is met in ``test_recall_over_the_reachable_set``.
-    The fragmented bar is not, and ``test_the_five_fragmented_files_one_at_a_time``
-    reports the shortfall per file rather than averaging it away.
-    """
     m = manifest()
     reach = [f for f in m["files"]
              if f["expected_recoverable"] != "unrecoverable-by-design"]
@@ -217,24 +119,13 @@ def test_recall_thresholds_are_defined_over_the_reachable_set():
     assert len(unfrag) == 28, len(unfrag)
     assert len(frag) == 5, len(frag)
     assert len(reach) == 33
-    # the bars those sets imply
     assert -(-len(unfrag) * 95 // 100) == 27
     assert -(-len(frag) * 60 // 100) == 3
 
-    # The per-file table in this module covers the fragmented reachable set exactly.
     assert sorted(BIFRAGMENT_OUTCOME) == sorted(f["path"] for f in frag)
 
 
-# --------------------------------------------------------------------------
-# The margin, measured through shipped Rust
-# --------------------------------------------------------------------------
-
 def test_the_rust_gate_matches_this_file():
-    """The gate constant here must equal the one confidence.rs exports.
-
-    If they drift, every margin number in this file is asserting a threshold the
-    engine does not enforce -- a green run that has measured the wrong property.
-    """
     src = (REPO / "core" / "carve" / "src" / "confidence.rs").read_text()
     m = re.search(r"pub const MIN_CONFIDENCE:\s*f64\s*=\s*([0-9.]+)", src)
     assert m, "confidence.rs no longer exports MIN_CONFIDENCE"
@@ -247,11 +138,6 @@ def test_the_structural_breach_point_is_where_the_arithmetic_puts_it():
 
 
 def test_residue_never_reaches_the_admission_gate():
-    """The enforcing measurement, run through shipped structure.rs and confidence.rs.
-
-    Asserts the margin that binds -- structural credit against the breach point --
-    not the population gap, which describes a distance nothing enforces.
-    """
     _require_fixture()
     out = _cargo_measure()
 
@@ -273,10 +159,6 @@ def test_residue_never_reaches_the_admission_gate():
     assert abs(headroom - (STRUCTURAL_BREACH_POINT - worst_structure)) < 5e-4
 
 
-# --------------------------------------------------------------------------
-# Recall -- measured, through the shipped carve binary
-# --------------------------------------------------------------------------
-
 def _require_carver():
     if CARVE_BIN.exists():
         return
@@ -291,16 +173,6 @@ _CARVE_RUNS: dict = {}
 
 
 def carve(*args: str):
-    """Run the shipped binary once per distinct argument list and cache the report.
-
-    Returns ``(report, exit_code, stderr)``.  Exit 0 means something was admitted
-    and 1 means a clean run that admitted nothing; both are runs that happened and
-    both carry a complete report.  2, 3 and 4 mean the run did not happen, and
-    those are failures here rather than an empty result quietly read as zero recall.
-
-    A reassembling run costs roughly 63 s, so the cache is what keeps this module
-    to two of them rather than one per test.
-    """
     _require_fixture()
     _require_carver()
     if args in _CARVE_RUNS:
@@ -325,13 +197,6 @@ def _manifest_arg() -> str:
 
 
 def reassembly_flags() -> tuple:
-    """The reassembly geometry, taken from the fixture manifest rather than typed here.
-
-    The medium's cluster size and the gap bound are OPERATOR parameters: the engine
-    does not read the manifest for them and never sees ground truth before it
-    carves.  Deriving them here from ``bytes_per_cluster`` and ``max_gap_clusters``
-    keeps this file from hardcoding a geometry the fixture could change underneath.
-    """
     m = manifest()
     return ("--reassemble",
             "--cluster-bytes", str(m["bytes_per_cluster"]),
@@ -339,19 +204,14 @@ def reassembly_flags() -> tuple:
 
 
 def the_run():
-    """THE measured run: the whole image, reassembly ON, scored by SHA-256."""
     return carve("--phase", "pre-wipe", "--manifest", _manifest_arg(), *reassembly_flags())
 
 
 def the_default_run():
-    """The shipped default: no reassembly flag at all, so reassembly is OFF."""
     return carve("--phase", "pre-wipe", "--manifest", _manifest_arg())
 
 
-# --- the join, done here rather than trusted from the report ---------------
-
 def planted_by_digest(m: dict) -> dict:
-    """digest -> planted path.  A digest join needs no name, offset or size."""
     by = {f["sha256"]: f["path"] for f in m["files"]}
     assert len(by) == len(m["files"]), (
         "two planted files share a SHA-256; a digest join cannot be trusted on this fixture")
@@ -359,15 +219,6 @@ def planted_by_digest(m: dict) -> dict:
 
 
 def recovered_paths(report: dict, m: dict) -> dict:
-    """Planted path -> the ADMITTED record that recovered it, byte for byte.
-
-    Computed here from digests alone.  The carver publishes its own
-    ``ground_truth`` block and this deliberately does not read it: a recall
-    figure the engine scores for itself is not a measurement of the engine.
-
-    A reassembled record joins here on exactly the same terms as a contiguous
-    one.  Nothing in this function knows how many extents a record has.
-    """
     by = planted_by_digest(m)
     out = {}
     for rec in report["candidates"]:
@@ -381,13 +232,6 @@ def recovered_paths(report: dict, m: dict) -> dict:
 
 
 def digest_of_extents(rec: dict) -> str:
-    """Re-hash the image bytes the record's own extents name, in logical order.
-
-    This is the check that the ``sha256`` field is a digest of real bytes at real
-    offsets and not a value the report carries about itself.  For a reassembled
-    record it is also the check that the two fragments concatenate to the file:
-    the gap between them is skipped, and the digest is over the join.
-    """
     h = hashlib.sha256()
     with IMAGE.open("rb") as fh:
         for ext in rec["extents"]:
@@ -401,32 +245,10 @@ def digest_of_extents(rec: dict) -> str:
 
 
 def unjoined_records(report: dict) -> list:
-    """Records the run could not join to any planted file.
-
-    The engine annotates a record with ``ground_truth`` when its digest matches a
-    planted file, and failing that when its offset is a planted file's FIRST extent
-    offset and the kind agrees.  ``ground_truth is None`` therefore means neither
-    join landed.
-
-    That is deliberately WIDER than "free-space decoy": a header lying inside a
-    planted file's second or third fragment is unjoined too, and ZIP@1228603 is
-    exactly such a header -- it sits inside media_inventory.docx's third extent.
-    Wider is the safe direction. This is the population whose structural ceiling
-    the admission margin has to hold against, and over-counting it can only make
-    that ceiling harder to clear, never easier.
-    """
     return [r for r in report["candidates"] if r.get("ground_truth") is None]
 
 
-# --- stderr, which is where the cost of a search is published --------------
-
 def reassembly_stats(stderr: str) -> dict:
-    """Parse the reassembly counters the binary prints.
-
-    docs/output_schema.md is frozen and carries no field for a validation count,
-    so the cost is on stderr and is read from there.  Absence of these lines in a
-    reassembling run is a failure, not a zero.
-    """
     m = re.search(
         r"reassembly attempted (\d+) search\(es\): solved (\d+), ambiguous (\d+), "
         r"exhausted (\d+), degenerate (\d+), refused-contiguous (\d+), budget (\d+)",
@@ -457,8 +279,6 @@ def reassembly_stats(stderr: str) -> dict:
     }
 
 
-# --- the demo artifact -----------------------------------------------------
-
 _COLS = "  %-6s %11s %9s %-12s  %-8s%-8s%-8s%-8s %-8s %-3s %-12s  %s"
 _HEAD = _COLS % ("KIND", "OFFSET", "BYTES", "ASSEMBLY", "SIG", "STRUCT", "ENTROPY", "SIZE",
                  "TOTAL", "ADM", "SHA256", "PLANTED FILE  (SHA-256 join)")
@@ -486,22 +306,7 @@ def _emit(lines, capsys):
         print("\n" + text + "\n")
 
 
-# --------------------------------------------------------------------------
-# The default is OFF, and that is a state, not an accident
-# --------------------------------------------------------------------------
-
 def test_reassembly_is_off_by_default_and_the_default_run_still_recovers_28(capsys):
-    """With no reassembly flag the engine is the contiguous engine, unchanged.
-
-    This REPLACES the previous module's blanket assertion that no record is ever
-    reassembled.  That assertion was correct when bifragment.rs was not called at
-    all; it is now the assertion for ONE run -- the default one -- and it is made
-    stronger here by also pinning what the default run recovers and by proving that
-    the bare default and an explicit ``--no-reassemble`` produce the same records.
-
-    28 of 40 is the number that was published for the contiguous engine.  If
-    wiring reassembly in behind a flag had moved it, the flag would not be a flag.
-    """
     m = manifest()
     report, exit_code, stderr = the_default_run()
     assert exit_code == 0
@@ -533,7 +338,6 @@ def test_reassembly_is_off_by_default_and_the_default_run_still_recovers_28(caps
     assert "demonstrated recall (contiguous engine)" in stderr.lower()
     assert "two-fragment reassembly" not in stderr.lower().split("demonstrated recall")[1][:200]
 
-    # The bare default and the explicit spelling are the same run.
     explicit, _, _ = carve("--phase", "pre-wipe", "--manifest", _manifest_arg(),
                            "--no-reassemble")
     assert explicit["candidates"] == report["candidates"], (
@@ -549,23 +353,7 @@ def test_reassembly_is_off_by_default_and_the_default_run_still_recovers_28(caps
            "=" * 112], capsys)
 
 
-# --------------------------------------------------------------------------
-
 def test_recall_over_the_reachable_set(capsys):
-    """Demonstrated recall with two-fragment reassembly ON, joined by SHA-256.
-
-    The set the engine can reach is now the 28 planted files the manifest marks
-    ``signature-only`` PLUS whatever of the 5 marked ``bifragment`` a forward,
-    two-fragment, cluster-quantised search can actually solve.  Both halves are
-    asserted BY DIGEST, one path at a time; the 7 unreachable by construction are
-    asserted absent.
-
-    A row count is not a recall figure.  This run admits 33 records and three of
-    them carry bytes that are not any planted file's bytes -- one is a genuine
-    false positive and two sit at a planted file's offset.  Only the digest sees it.
-
-    The reachability ceiling and this number are two fields, printed on two lines.
-    """
     m = manifest()
     report, exit_code, stderr = the_run()
 
@@ -582,7 +370,6 @@ def test_recall_over_the_reachable_set(capsys):
 
     records = report["candidates"]
 
-    # Every record's arithmetic and geometry, before any of it is counted as evidence.
     for rec in records:
         c = rec["confidence"]
         w = c["weighted"]
@@ -600,7 +387,6 @@ def test_recall_over_the_reachable_set(capsys):
             "%s: assembly %r against %d extents -- the label and the shape disagree"
             % (rec["id"], rec["assembly"], len(rec["extents"])))
 
-    # The reassembled records, on the geometry the operator supplied.
     stats = reassembly_stats(stderr)
     assert stats["cluster_bytes"] == m["bytes_per_cluster"]
     assert stats["max_gap_clusters"] == m["max_gap_clusters"]
@@ -632,7 +418,6 @@ def test_recall_over_the_reachable_set(capsys):
             "%s was reassembled and the run did not publish what its search cost"
             % rec["id"])
 
-    # The three ground-truth sets, read off the manifest, never hardcoded.
     contiguous = sorted(f["path"] for f in m["files"]
                         if f["expected_recoverable"] == "signature-only")
     needs_bifragment = sorted(f["path"] for f in m["files"]
@@ -645,7 +430,6 @@ def test_recall_over_the_reachable_set(capsys):
     got = recovered_paths(report, m)
     by_digest = planted_by_digest(m)
 
-    # ---- the table ----
     matched, admitted_unmatched, rejected = [], [], []
     for rec in sorted(records, key=lambda r: r["offset"]):
         path = by_digest.get(rec["sha256"])
@@ -731,7 +515,6 @@ def test_recall_over_the_reachable_set(capsys):
               "=" * 130]
     _emit(lines, capsys)
 
-    # ---- the assertions ----
     missing = [p for p in contiguous if p not in got]
     assert not missing, (
         "%d of %d contiguous reachable files recovered. NOT RECOVERED: %s\n"
@@ -754,7 +537,6 @@ def test_recall_over_the_reachable_set(capsys):
     assert len(got) == 30, (
         "demonstrated recall is %d of %d; this file records 30 of 40" % (len(got), 40))
 
-    # The engine's own arithmetic must agree with the join computed above.
     gt = report["ground_truth"]
     assert gt["recall_measured"] is True
     assert gt["demonstrated_recall"] is not None, gt["demonstrated_recall_note"]
@@ -764,8 +546,6 @@ def test_recall_over_the_reachable_set(capsys):
     assert gt["demonstrated_recall"]["of"] == m["counted_set"]["total"]
     assert report["counts"]["sha256_matches_planted"] == len(got)
 
-    # Ceiling and result are two fields. A run must never publish the ceiling as
-    # the result, and a reassembling engine must never exceed its own ceiling.
     ceiling = reach["contiguous"] + reach["needs_bifragment_reassembly"]
     assert ceiling == m["counted_set"]["expected_recoverable"] == 33
     assert gt["demonstrated_recall"]["recovered"] <= ceiling
@@ -775,30 +555,13 @@ def test_recall_over_the_reachable_set(capsys):
         "the operator-facing line does not label the number as demonstrated recall "
         "of the engine that produced it")
 
-    # A record that recovered a planted file byte-exact and was then rejected is a
-    # recall loss, so no such record may exist unnoticed.
     for rec in records:
         if not rec["admitted"] and rec["sha256"] in by_digest:
             pytest.fail("%s recovered %s byte-exact and was rejected at %.4f"
                         % (rec["id"], by_digest[rec["sha256"]], rec["confidence"]["total"]))
 
 
-# --------------------------------------------------------------------------
-
 def test_the_five_fragmented_files_one_at_a_time(capsys):
-    """Each of the 5 files the manifest tags ``bifragment``: recovered, or why not.
-
-    Two of five is 40% against a 60% bar.  The bar is NOT met and the shortfall is
-    reported per file with its measured gap, rather than averaged into a
-    percentage that hides which three failed.
-
-    The gaps are re-derived from the manifest here, so the reason text next to each
-    file carries a number the fixture backs.  The aggregate search outcomes --
-    solved, ambiguous, exhausted, refused-contiguous -- are read off the run's own
-    stderr and asserted; the per-file attribution of an ambiguous verdict comes from
-    bifragment.rs's per-plant measurement and is labelled as its finding, not this
-    file's.
-    """
     m = manifest()
     report, _, stderr = the_run()
     stats = reassembly_stats(stderr)
@@ -886,7 +649,6 @@ def test_the_five_fragmented_files_one_at_a_time(capsys):
         "re-measure it, update BIFRAGMENT_OUTCOME per file, and republish the recall "
         "figure. Do not leave this assertion inverted." % (len(solved), len(frag)))
 
-    # The searches that failed, failed by refusing -- never by returning a wrong join.
     assert stats["solved"] == 2
     assert stats["degenerate"] == 0 and stats["budget"] == 0, stats
     assert stats["ambiguous"] + stats["exhausted"] + stats["solved"] == stats["attempted"], stats
@@ -894,9 +656,6 @@ def test_the_five_fragmented_files_one_at_a_time(capsys):
         "no splice was accepted and then refused; an ambiguous verdict is the whole "
         "reason this engine can be trusted not to guess")
 
-    # handover_briefing.mov: never searched, because its contiguous read validates.
-    # That is measurable from the report: a contiguous record of exactly its planted
-    # length, full structural credit, admitted, and the wrong digest.
     hb = by_path["/handover_briefing.mov"]
     lead = hb["extents"][0]["byte_offset"]
     at_lead = [r for r in report["candidates"] if r["offset"] == lead]
@@ -914,29 +673,12 @@ def test_the_five_fragmented_files_one_at_a_time(capsys):
         "supposed to be applied before the search, so this costs probes for nothing")
 
 
-# --------------------------------------------------------------------------
-# The two planted to defeat this algorithm
-# --------------------------------------------------------------------------
-
 def records_carrying(records: list, digests: dict) -> list:
-    """Every record whose bytes ARE one of these planted files, admitted or not.
-
-    Factored out so that ``test_the_by_design_absence_check_can_fail`` can prove
-    this detector fires.  An absence assertion nobody has seen fail is not
-    evidence of absence.
-    """
     return sorted((r["id"], digests[r["sha256"]], r["admitted"])
                   for r in records if r["sha256"] in digests)
 
 
 def test_the_by_design_absence_check_can_fail():
-    """The absence check above must be capable of failing. Prove it, do not assume it.
-
-    A record carrying media_inventory.docx's digest is forged into a copy of the
-    real record list.  The detector must find it.  Without this, every "not
-    recovered" assertion in the next test is indistinguishable from a detector
-    that returns the empty list unconditionally.
-    """
     m = manifest()
     report, _, _ = the_run()
     by_path = {f["path"]: f for f in m["files"]}
@@ -952,31 +694,11 @@ def test_the_by_design_absence_check_can_fail():
     hits = records_carrying(report["candidates"] + [forged], digests)
     assert hits == [("FORGED@0", "/media_inventory.docx", True)], hits
 
-    # And the guard clause built on it must raise, not merely report.
     with pytest.raises(AssertionError):
         assert not records_carrying(report["candidates"] + [forged], digests)
 
 
 def test_the_two_by_design_failures_are_not_recovered(capsys):
-    """The fixture fragments two files to defeat this engine, and they still defeat it.
-
-    ``media_inventory.docx`` is planted in three extents and ``evidence_bag_seal.jpg``
-    in two stored out of physical order.  Reassembly is ON for this run and neither
-    is recovered: a two-fragment search cannot solve a three-fragment object, and a
-    forward-only search cannot reach a second fragment that lies at a LOWER offset
-    than its first.  Absence is asserted by digest over EVERY record, admitted or
-    rejected, and ``test_the_by_design_absence_check_can_fail`` proves that
-    assertion can fail.
-
-    The second half is the one that matters more, and it matters more now than it
-    did before reassembly existed.  A carver that recognised any fragmented file by
-    name would produce this same output, so the engine source is searched for the
-    names, planted offsets, extent offsets and lengths, sizes and digests of ALL
-    SEVEN fragmented files -- the two that were recovered included, because a
-    recovery the engine was told the answer to is not a recovery.  The reassembling
-    run is then repeated with no manifest at all, and must produce the same records
-    field for field.
-    """
     m = manifest()
     report, _, _ = the_run()
 
@@ -993,7 +715,6 @@ def test_the_two_by_design_failures_are_not_recovered(capsys):
     got = recovered_paths(report, m)
     digests = {by_path[p]["sha256"]: p for p in BY_DESIGN}
 
-    # 1. Absent from the recovery set, and absent from the report entirely by digest.
     for p in BY_DESIGN:
         assert p not in got, "%s was recovered, and it is planted to be unrecoverable" % p
     carried = records_carrying(report["candidates"], digests)
@@ -1001,7 +722,6 @@ def test_the_two_by_design_failures_are_not_recovered(capsys):
         "a record carries the exact bytes of a by-design failure: %r -- the "
         "by-design failure did not fail" % carried)
 
-    # 2. What the engine DID emit over those bytes, and why it is not a recovery.
     spans = {p: [(e["byte_offset"], e["byte_offset"] + e["byte_length"])
                  for e in by_path[p]["extents"]] for p in BY_DESIGN}
     touching = []
@@ -1033,8 +753,6 @@ def test_the_two_by_design_failures_are_not_recovered(capsys):
               "=" * 130]
     _emit(lines, capsys)
 
-    # 3. Nothing in the engine knows ANY fragmented file by name, offset, length
-    #    or digest -- including the two it recovered.
     fragmented = [f["path"] for f in m["files"] if f["fragmented"]]
     assert len(fragmented) == 7, fragmented
     needles = _needles(m, fragmented)
@@ -1043,10 +761,6 @@ def test_the_two_by_design_failures_are_not_recovered(capsys):
         "the engine special-cases a fragmented file. These are executable, "
         "non-test, non-comment lines naming one of them:\n  " + "\n  ".join(hits))
 
-    # 4. Ground truth never reaches the engine, search included: the same
-    #    reassembling run with no manifest at all produces the same records, field
-    #    for field, minus the annotation. This is the answer to "you wrote the
-    #    fixture -- did you also tell it where the second fragment was?"
     blind, _, blind_err = carve("--phase", "pre-wipe", *reassembly_flags())
     assert blind["ground_truth"] is None
     strip = lambda cs: [{k: v for k, v in c.items() if k != "ground_truth"} for c in cs]
@@ -1062,7 +776,6 @@ def test_the_two_by_design_failures_are_not_recovered(capsys):
 
 
 def _needles(m: dict, paths: list) -> dict:
-    """needle -> the planted file it would betray."""
     by_path = {f["path"]: f for f in m["files"]}
     needles = {}
     for p in paths:
@@ -1099,14 +812,6 @@ def _scan_engine(needles: dict, roots=None) -> list:
 
 
 def test_the_engine_source_scan_can_fail(tmp_path):
-    """The special-casing scan must fire on a planted constant. Prove it.
-
-    Three cases, because the scan has three ways to be vacuous: it must hit an
-    offset written as a bare integer, hit one written with Rust digit separators,
-    and NOT hit one that appears only in a comment or below ``#[cfg(test)]`` --
-    a fixture path in a unit test is a test naming its own input, not the engine
-    recognising a file.
-    """
     m = manifest()
     seal = {f["path"]: f for f in m["files"]}["/evidence_bag_seal.jpg"]
     off = seal["extents"][1]["byte_offset"]
@@ -1132,12 +837,6 @@ def test_the_engine_source_scan_can_fail(tmp_path):
 
 
 def _engine_lines(path: Path):
-    """(lineno, code) for executable engine source only.
-
-    Comments are stripped and everything from the file's ``#[cfg(test)]`` module to
-    the end is dropped, because a fixture path in a unit test is a test naming its
-    own input, not the engine recognising a file.
-    """
     lines = path.read_text().splitlines()
     cut = len(lines)
     for i, line in enumerate(lines):
@@ -1165,22 +864,7 @@ def _engine_lines(path: Path):
     return out
 
 
-# --------------------------------------------------------------------------
-# The risk reassembly introduces, measured rather than assumed
-# --------------------------------------------------------------------------
-
 def test_reassembly_did_not_enlarge_the_false_positive_surface(capsys):
-    """A two-fragment search gives every decoy many more chances to validate.
-
-    That is the risk this step had to answer, and it is answered by comparison
-    rather than by argument: the two runs are diffed record by record.  If
-    reassembly lifted any residue record's structural credit past
-    STRUCTURAL_BREACH_POINT, decoys would start clearing the gate on structure
-    alone and the whole confidence argument would go with them.
-
-    core/carve/tests/residue_separation.rs is the CI guard for the population;
-    this is the guard for the two runs of the shipped binary.
-    """
     m = manifest()
     contig, _, _ = the_default_run()
     reasm, _, _ = the_run()
@@ -1242,7 +926,6 @@ def test_reassembly_did_not_enlarge_the_false_positive_surface(capsys):
         "rejected residue structural credit %.6f has reached the breach point %.6f"
         % (reasm["margin"]["worst_rejected_structural_validity"], STRUCTURAL_BREACH_POINT))
 
-    # Every record that did change, changed for the better and by reassembly.
     for o in changed:
         a, b = ci[o], ri[o]
         assert b["assembly"] == "reassembled" and a["assembly"] != "reassembled"
@@ -1256,21 +939,6 @@ def ri_off(report: dict, rec_id: str) -> int:
 
 
 def test_the_one_genuine_false_positive_is_still_reported_as_one(capsys):
-    """ZIP@1228603 is a real false positive and reassembly neither fixed nor lifted it.
-
-    It is the lowest admitted score in both runs.  Its bytes are not any planted
-    file's bytes -- no digest match -- and it is not a leading fragment, so the
-    engine joins it to nothing.  Stated precisely: it is a nested ZIP local-file
-    header lying INSIDE media_inventory.docx's third extent, which is why the
-    by-design table shows it overlapping that file while this test calls it a false
-    positive.  Both are true, and the digest is what separates them.
-
-    Its structural credit of 0.3000 sits ABOVE STRUCTURAL_BREACH_POINT, which is
-    precisely why it clears the gate -- and it is the reason that breach point is
-    the margin worth quoting.  It stays in the report.  A recovery engine that
-    scores full marks on a fixture we wrote ourselves is the weakest claim in the
-    deck.
-    """
     m = manifest()
     by_digest = planted_by_digest(m)
     rows = {}
@@ -1328,10 +996,6 @@ def test_the_one_genuine_false_positive_is_still_reported_as_one(capsys):
         "the explanation for why it is admitted has changed")
 
 
-# --------------------------------------------------------------------------
-# Claim discipline
-# --------------------------------------------------------------------------
-
 def _sentences(text: str) -> list:
     out = []
     for line in text.splitlines():
@@ -1342,7 +1006,6 @@ def _sentences(text: str) -> list:
 
 
 def _recall_sentences(texts, recall: int, total: int):
-    """(violations, how many sentences mentioned demonstrated recall at all)."""
     bad, seen = [], 0
     for label, text in texts:
         for s in _sentences(text):
@@ -1359,15 +1022,6 @@ def _recall_sentences(texts, recall: int, total: int):
 
 
 def test_the_two_numbers_are_never_in_one_sentence(capsys):
-    """Demonstrated recall and the reachability ceiling are two sentences, always.
-
-    Enforced over everything the run publishes in prose: stderr, the recall note,
-    the recall method string and every provenance note.  A sentence that names
-    demonstrated recall may carry exactly one "N of M", and it must be the recall
-    figure -- not the ceiling, and not both.
-
-    ``seen`` is asserted non-zero so this cannot pass by finding nothing to check.
-    """
     lines = ["=" * 130, "CLAIM DISCIPLINE -- every sentence that names demonstrated recall", ""]
     total_seen = 0
     for label, (report, _, stderr), recall in (
@@ -1391,7 +1045,6 @@ def test_the_two_numbers_are_never_in_one_sentence(capsys):
             for s in _sentences(text):
                 if "demonstrated recall" in s.lower():
                     lines.append("  %-14s %s" % (label, s[:112]))
-        # The ceiling is published, just not there.
         ceiling = (gt["reachability"]["contiguous"]
                    + gt["reachability"]["needs_bifragment_reassembly"])
         assert ceiling == 33

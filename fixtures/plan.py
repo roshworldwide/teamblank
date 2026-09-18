@@ -1,26 +1,3 @@
-"""Extent planner for the SENTINELWIPE forensic fixture.
-
-Every cluster every planted file will occupy is chosen HERE, before a single
-byte is written.  ``build_plan`` returns the complete extent list; the image
-writer obeys it and the manifest reports it.  The fragment layout is therefore
-an input, not an allocator outcome discovered afterwards -- which is the only
-reason the tri-fragment and out-of-order cases are buildable at all.
-
-Ported from the plan-obeying allocator in the Phase-0 investigation
-(``scratchpad/fixture/build_fat32.py``), whose ``frag(fid, name, data, splits,
-gaps, order)`` is the only prototype allocator able to express gaps,
-cross-file interleave and out-of-order fragments.  The cursor-only allocator in
-``scratchpad/fat32/fat32img.py`` cannot express any of the three.
-
-Determinism contract: hashlib.shake_128 over the seed string is the only
-entropy source.  No ``random``, no time, no host state, no locale, no
-PYTHONHASHSEED dependence.  Integer arithmetic only -- no floats anywhere in a
-value that reaches the image.
-
-This module deliberately imports nothing from the rest of the fixture package.
-``geo`` and ``corpus`` are duck-typed, so the planner is testable on its own.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -54,22 +31,10 @@ __all__ = [
     "UNRECOVERABLE",
 ]
 
-# --------------------------------------------------------------------------
-# expected_recoverable vocabulary (manifest schema)
-# --------------------------------------------------------------------------
-
 SIG_ONLY = "signature-only"
 BIFRAGMENT = "bifragment"
 UNRECOVERABLE = "unrecoverable-by-design"
 
-# Which corpus kind maps to which signature row a carver would key on.  DOCX is
-# carved as ZIP, since a .docx IS a zip archive.  TXT maps to nothing: plain text
-# has no magic bytes, so signature carving cannot reach it at any offset.
-#
-# Our TXT corpus does open with an ASCII banner, and keying on that would lift
-# recall from 33 to 38 in an afternoon.  We do not, because a carver tuned to a
-# marker we planted ourselves measures nothing about carving.  Recorded in
-# docs/ai-log/entries/2026-09-03.md.
 KIND_SIGNATURE = {
     "PNG": "PNG", "JPEG": "JPEG", "PDF": "PDF", "DOCX": "ZIP",
     "GZIP": "GZIP", "SQLITE": "SQLITE", "MP4": "MP4",
@@ -77,50 +42,16 @@ KIND_SIGNATURE = {
 }
 NO_SIGNATURE_KINDS = frozenset(k for k, v in KIND_SIGNATURE.items() if v is None)
 
-# --------------------------------------------------------------------------
-# Reserved region at the head of the data area
-# --------------------------------------------------------------------------
-# Cluster 2 is the first cluster of the FAT32 root directory.  40 files with
-# VFAT long names need 3 directory entries each (2 LFN + 1 short, since every
-# corpus name is <= 26 characters) plus one volume-label entry: 121 * 32 =
-# 3872 bytes.  At the 2 KiB cluster size a 256 MiB FAT32 volume is forced into
-# (see FAT32_MIN_CLUSTERS = 65525) that is two clusters with no headroom, so
-# the planner reserves four and never plants inside them.  The residue writer
-# refuses this whole range as well, so growth of the root chain can never
-# collide with planted data or with decoy fill.
 ROOT_DIR_CLUSTERS = 4
-FIRST_PLANTED_CLUSTER = 2 + ROOT_DIR_CLUSTERS  # 6
+FIRST_PLANTED_CLUSTER = 2 + ROOT_DIR_CLUSTERS
 
-# Fraction (per mille) of the data area the 40 files are spread across.  The
-# remaining tail is pure residue.  Kept at 88% so that an off-by-one in the
-# writer's cluster_count convention can never push a planted extent out of
-# range.
 SPREAD_PER_MILLE = 880
 
-# --------------------------------------------------------------------------
-# The fragmentation ladder
-# --------------------------------------------------------------------------
-# Gaps are denominated in CLUSTERS, so the ladder means the same thing at any
-# cluster size.  FRAG-03's 128-cluster gap sets the max_gap budget the Phase-2
-# carver will be configured with; every other gap in the fixture sits under it
-# ON PURPOSE, so that FRAG-06 and FRAG-07 fail for their structural reason
-# (fragment count, fragment direction) and not because a distance limit was
-# exceeded.  A failure we cannot attribute is not evidence.
 MAX_GAP_BUDGET_CLUSTERS = 128
 
-# FRAG-03 sits EXACTLY on the budget, which is the only way a rung can prove a
-# budget rather than merely respect it.  That makes the comparison operator
-# load-bearing: a Phase-2 carver implementing `gap < budget` instead of
-# `gap <= budget` loses disposal_certificate.pdf and the counted set drops from
-# 38 to 37 with no error, and the demo's attribution -- FRAG-06 fails on
-# fragment count, FRAG-07 on direction, neither on distance -- becomes false on
-# stage.  The convention is therefore INCLUSIVE, stated here, published in the
-# manifest as max_gap_clusters / max_gap_is_inclusive, and asserted in the
-# tests.  The carver reads it from the manifest; it does not hardcode 128.
 MAX_GAP_IS_INCLUSIVE = True
 
 LADDER = {
-    # id          corpus file             shape
     "FRAG-01": ("entropy_heatmap.png", "bifragment, gap 1 cluster"),
     "FRAG-02": ("imaging_transcript.txt.gz", "bifragment, gap 16 clusters"),
     "FRAG-03": ("disposal_certificate.pdf", "bifragment, gap 128 clusters (sets max_gap)"),
@@ -136,56 +67,24 @@ FRAG03_GAP = 128
 FRAG04_GAP = 50
 FRAG05_GAP = 70
 FRAG06_GAPS = (11, 29)
-FRAG07_SEPARATION = 24  # clusters between fragment 1's end and fragment 0's start
+FRAG07_SEPARATION = 24
 
-# --------------------------------------------------------------------------
-# The deleted set -- 12 files, and the design that produces the number 12
-# --------------------------------------------------------------------------
-# The previous round inherited "12 deleted" from a CLI flag with no design
-# behind it.  Here 12 is a derived quantity: 4 + 8.
-#
-# The carver never parses filesystem metadata, so deletion changes nothing it
-# can see.  The deleted set therefore exists to answer two specific objections
-# a jury or an evaluator will raise, and its relationship to the FRAGMENTED set
-# is what does the answering.  The two sets are CROSSED, not nested:
-#
-#   (a) 4 of the 7 fragmented files are deleted, 3 are live.  The two
-#       deliberately unsolvable cases straddle that boundary -- FRAG-06
-#       (tri-fragment DOCX) is DELETED and FRAG-07 (out-of-order JPEG) is LIVE.
-#       So "your two failures are just the deleted ones" is refuted on the
-#       manifest, and so is the converse.  The interleaved pair straddles it
-#       too: FRAG-05 is deleted and lies physically inside live FRAG-04's gap,
-#       which is the sharpest single picture of "deletion is not erasure" the
-#       fixture can produce.
-#
-#   (b) The other 8 deleted files are one contiguous file of EACH of the eight
-#       corpus kinds.  Every format is represented in the deleted set, so no
-#       carve result can be explained away with "they only deleted the formats
-#       that carve easily".  Index 01 of each kind is used throughout -- a
-#       fixed, boring rule, so the choice cannot be read as cherry-picking.
-#
-# 4 fragmented + 8 kinds x 1 contiguous = 12.  Deleted 12, live 28.
 DELETED_FRAGMENTED = ("FRAG-01", "FRAG-03", "FRAG-05", "FRAG-06")
 
 DELETED_CONTIGUOUS = (
-    "evidence_log_2026-01-14.txt",   # TXT
-    "audit_trail.log.gz",  # GZIP
-    "sector_map_01.png",     # PNG
-    "seizure_photo_b.jpg",          # JPEG
-    "chain_of_custody.pdf",        # PDF
-    "sanitization_report.docx",        # DOCX
-    "custody_ledger.db",         # SQLITE
-    "bodycam_intake.mov",           # MP4
+    "evidence_log_2026-01-14.txt",
+    "audit_trail.log.gz",
+    "sector_map_01.png",
+    "seizure_photo_b.jpg",
+    "chain_of_custody.pdf",
+    "sanitization_report.docx",
+    "custody_ledger.db",
+    "bodycam_intake.mov",
 )
 
 DELETED_NAMES = frozenset(
     DELETED_CONTIGUOUS + tuple(LADDER[fid][0] for fid in DELETED_FRAGMENTED)
 )
-
-
-# --------------------------------------------------------------------------
-# Deterministic byte source
-# --------------------------------------------------------------------------
 
 
 def _shake(material: str, nbytes: int) -> bytes:
@@ -197,7 +96,6 @@ def _u32(material: str) -> int:
 
 
 def _shuffled(items: Sequence, material: str) -> list:
-    """Fisher-Yates driven by shake_128.  No random module, no PRNG state."""
     a = list(items)
     for i in range(len(a) - 1, 0, -1):
         j = _u32("%s|swap|%d" % (material, i)) % (i + 1)
@@ -205,20 +103,8 @@ def _shuffled(items: Sequence, material: str) -> list:
     return a
 
 
-# --------------------------------------------------------------------------
-# Data model
-# --------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Extent:
-    """One physically contiguous run of clusters holding one slice of a file.
-
-    Extents are stored in LOGICAL order -- extent[0] holds the first bytes of
-    the file.  For FRAG-07 that means extent[0] has the HIGHER cluster_start,
-    which is the whole point of the case.
-    """
-
     cluster_start: int
     cluster_count: int
     byte_offset: int
@@ -226,7 +112,6 @@ class Extent:
 
     @property
     def cluster_end(self) -> int:
-        """One past the last cluster of this extent."""
         return self.cluster_start + self.cluster_count
 
     def as_manifest(self) -> dict:
@@ -240,8 +125,6 @@ class Extent:
 
 @dataclass
 class Placement:
-    """One planted file, with its complete chosen layout."""
-
     name: str
     kind: str
     data: bytes
@@ -250,7 +133,6 @@ class Placement:
     extents: list
     fragmented: bool
     expected_recoverable: str
-    # Non-contract, additive: provenance for the manifest and the demo caption.
     frag_id: Optional[str] = None
     note: str = ""
 
@@ -264,7 +146,6 @@ class Placement:
 
     @property
     def first_byte_offset(self) -> int:
-        """Byte offset of the file's FIRST logical byte (manifest 'offset')."""
         return self.extents[0].byte_offset
 
     def as_manifest(self) -> dict:
@@ -282,23 +163,8 @@ class Placement:
 
 
 def is_fragmented(extents: Sequence[Extent]) -> bool:
-    """fragmented == the extents are NON-ADJACENT on disk.
-
-    NOT ``len(extents) > 1``.  A previous harness got exactly this wrong and
-    reported a file as fragmented because the planner happened to emit two
-    touching runs.  Two runs that abut are one physical run; a carver reading
-    forward never notices them.
-    """
     if len(extents) < 2:
         return False
-    # Direction first.  ``extents`` is in LOGICAL order, so a later fragment
-    # sitting physically BELOW an earlier one is fragmented however close the
-    # two runs are -- even if they touch.  Sorting before the adjacency test
-    # (below) throws that information away: two touching runs read backwards
-    # are physically contiguous but reassemble in the wrong order, so a
-    # forward-reading carver produces a wrong hash while the flag says
-    # "signature-only".  FRAG-07 exists precisely to punish direction, and a
-    # flag blind to direction cannot describe it.
     for prev, nxt in zip(extents, extents[1:]):
         if nxt.cluster_start < prev.cluster_start:
             return True
@@ -309,39 +175,22 @@ def is_fragmented(extents: Sequence[Extent]) -> bool:
     return False
 
 
-# --------------------------------------------------------------------------
-# The allocator -- port of frag(fid, name, data, splits, gaps, order)
-# --------------------------------------------------------------------------
-
-
 class _Allocator:
-    """Plan-obeying cluster allocator.
-
-    Takes an EXTENT PLAN (cluster counts per fragment, and the gap in clusters
-    to skip after each), never a fragment count.  ``place_runs`` accepts
-    absolute cluster numbers so a caller can put a fragment anywhere, including
-    behind the cursor -- that is what makes FRAG-04/05 interleave and FRAG-07
-    reversal expressible.
-    """
-
     def __init__(self, geo, first_cluster: int):
         self.bpc = geo.bytes_per_sector * geo.sectors_per_cluster
         self.data_start = geo.data_start_offset
-        self.last_cluster = geo.cluster_count + 1  # clusters are 2..cluster_count+1
+        self.last_cluster = geo.cluster_count + 1
         self.cursor = first_cluster
-        self.claimed: dict = {}  # cluster -> owning file name, for overlap detection
+        self.claimed: dict = {}
 
-    # -- geometry -------------------------------------------------------
     def clusters_for(self, nbytes: int) -> int:
         return -(-nbytes // self.bpc) if nbytes else 1
 
     def offset_of(self, cluster: int) -> int:
         return self.data_start + (cluster - 2) * self.bpc
 
-    # -- allocation -----------------------------------------------------
     def runs_from_plan(self, start: int, splits: Sequence[int],
                        gaps: Sequence[int]) -> list:
-        """(start_cluster, cluster_count) runs from a splits/gaps plan."""
         runs, c = [], start
         for i, s in enumerate(splits):
             runs.append((c, s))
@@ -349,12 +198,6 @@ class _Allocator:
         return runs
 
     def to_extents(self, runs: Sequence, nbytes: int, owner: str) -> list:
-        """Turn (cluster_start, cluster_count) runs into byte-mapped Extents.
-
-        Runs are consumed in LOGICAL order; byte_offset comes from the cluster
-        number, so a run that lies earlier on disk than its predecessor gets
-        the lower offset with the later bytes.  Sum of byte_length == nbytes.
-        """
         extents, pos = [], 0
         for start, count in runs:
             if start < 2 or start + count - 1 > self.last_cluster:
@@ -386,11 +229,6 @@ class _Allocator:
         self.cursor += clusters
 
 
-# --------------------------------------------------------------------------
-# Fragment split rules (adapt to whatever cluster size geometry chose)
-# --------------------------------------------------------------------------
-
-
 def _split_two(n: int, per_mille: int) -> tuple:
     a = max(1, min(n - 1, (n * per_mille) // 1000))
     return (a, n - a)
@@ -407,17 +245,8 @@ def _split_three(n: int) -> tuple:
 
 
 def _interleave_layout(base: int, n_a: int, n_b: int) -> tuple:
-    """Runs for the mutual-interleave pair FRAG-04 / FRAG-05.
-
-    FRAG-04 (A) has a 50-cluster gap that holds FRAG-05 fragment 0.
-    FRAG-05 (B) has a 70-cluster gap that holds FRAG-04 fragment 1.
-    Physical order on disk is A0, B0, A1, B1 -- each file's second fragment
-    lies beyond the other file's first, so neither can be carved without
-    stepping over the other.  Both files are the same kind (MP4), so the decoy
-    in each gap carries the same signature as the file being carved.
-    """
     b0 = min(max(1, n_b // 2), 40)
-    g = FRAG04_GAP - b0 - 6          # residue clusters between A0 and B0
+    g = FRAG04_GAP - b0 - 6
     if g < 1:
         raise ValueError("interleave: B fragment 0 does not fit inside A's gap")
     a1_max = g + b0 + 20
@@ -434,7 +263,6 @@ def _interleave_layout(base: int, n_a: int, n_b: int) -> tuple:
     a1_start = base + a0 + FRAG04_GAP
     b1_start = b0_start + b0 + FRAG05_GAP
 
-    # The two properties the case exists to demonstrate, asserted not assumed.
     if not (a0_start + a0 <= b0_start and b0_start + b0 <= a1_start):
         raise ValueError("interleave: FRAG-05 fragment 0 not inside FRAG-04's gap")
     if not (b0_start + b0 <= a1_start and a1_start + a1 <= b1_start):
@@ -442,25 +270,10 @@ def _interleave_layout(base: int, n_a: int, n_b: int) -> tuple:
 
     runs_a = [(a0_start, a0), (a1_start, a1)]
     runs_b = [(b0_start, b0), (b1_start, b1)]
-    return runs_a, runs_b, (b1_start + b1) - base   # third value is the SPAN, relative to base
-
-
-# --------------------------------------------------------------------------
-# build_plan
-# --------------------------------------------------------------------------
+    return runs_a, runs_b, (b1_start + b1) - base
 
 
 def build_plan(geo, corpus, seed) -> list:
-    """Choose every extent of every planted file.  Nothing is written here.
-
-    geo     -- fixtures.fat32.Geometry (duck-typed: bytes_per_sector,
-               sectors_per_cluster, cluster_count, data_start_offset)
-    corpus  -- list[CorpusFile] of exactly 40 files (name, kind, data, sha256)
-    seed    -- the fixture seed string; every derived choice hangs off it
-
-    Returns list[Placement] in the corpus's own order (stable, so the manifest
-    file list does not depend on the physical layout).
-    """
     files = list(corpus)
     if len(files) != 40:
         raise ValueError("fixture expects exactly 40 corpus files, got %d" % len(files))
@@ -479,9 +292,6 @@ def build_plan(geo, corpus, seed) -> list:
     alloc = _Allocator(geo, FIRST_PLANTED_CLUSTER)
     ladder_names = {LADDER[fid][0]: fid for fid in LADDER}
 
-    # ---- layout units ------------------------------------------------
-    # A unit is one thing the allocator lays down in one go.  FRAG-04 and
-    # FRAG-05 are a single unit because they are physically interwoven.
     units = []
     for f in files:
         fid = ladder_names.get(f.name)
@@ -490,7 +300,6 @@ def build_plan(geo, corpus, seed) -> list:
         units.append(("frag" if fid else "contig", fid, [f.name]))
     units.append(("interleave", "FRAG-04/05", [LADDER["FRAG-04"][0], LADDER["FRAG-05"][0]]))
 
-    # ---- intrinsic span of each unit ---------------------------------
     def n_clusters(name: str) -> int:
         return alloc.clusters_for(len(by_name[name].data))
 
@@ -514,17 +323,9 @@ def build_plan(geo, corpus, seed) -> list:
             return n + FRAG07_SEPARATION
         raise ValueError("unknown fragmented unit %r" % fid)
 
-    # NB: keyed by index, not by (kind, fid) -- all 33 contiguous units share
-    # fid None and a dict keyed on it collapses them to one entry, understating
-    # `occupied` by ~2000 clusters and overshooting the spread target.
     spans = [unit_span(kind, fid, names) for kind, fid, names in units]
     occupied = sum(spans)
 
-    # ---- spread the 40 files across the data area ---------------------
-    # A corpus packed into the first 2% of a 256 MiB image is not a forensic
-    # image, it is a header.  Files are spread over 88% of the data area with
-    # deterministic jitter, so every planted file is surrounded by residue and
-    # the carver has to find it rather than trip over it.
     last_cluster = geo.cluster_count + 1
     usable = last_cluster - FIRST_PLANTED_CLUSTER + 1
     target_span = (usable * SPREAD_PER_MILLE) // 1000
@@ -533,9 +334,6 @@ def build_plan(geo, corpus, seed) -> list:
         raise ValueError(
             "corpus (%d clusters incl. gaps) does not fit in %d planted clusters"
             % (occupied, target_span))
-    # Slack is shared between the 39 units; jitter below is +/-40% of base, so
-    # the worst-case total span is occupied + 1.4 * slack_total, which is why
-    # SPREAD_PER_MILLE is 880 and not 1000.
     base_slack = slack_total // len(units)
 
     order = _shuffled(units, "%s|layout-order" % seed)
@@ -564,7 +362,7 @@ def build_plan(geo, corpus, seed) -> list:
             placements_by_name[nb_name] = (ext_b, "FRAG-05", LADDER["FRAG-05"][1])
             alloc.advance_to(cur + span)
 
-        else:  # a single fragmented file
+        else:
             name = names[0]
             f = by_name[name]
             n = alloc.clusters_for(len(f.data))
@@ -577,11 +375,6 @@ def build_plan(geo, corpus, seed) -> list:
             elif fid == "FRAG-06":
                 runs = alloc.runs_from_plan(cur, _split_three(n), list(FRAG06_GAPS))
             elif fid == "FRAG-07":
-                # OUT OF ORDER: fragment 1 is laid down FIRST, at the lower
-                # cluster.  A forward-only bifragment search starting at
-                # fragment 0's header runs off the end of the data area and
-                # never looks backwards.  The separation stays inside the
-                # max_gap budget so the failure is direction, not distance.
                 f0, f1 = _split_two(n, 350)
                 runs = [(cur + f1 + FRAG07_SEPARATION, f0), (cur, f1)]
             else:
@@ -590,10 +383,9 @@ def build_plan(geo, corpus, seed) -> list:
             placements_by_name[name] = (ext, fid, LADDER[fid][1])
             alloc.advance_to(max(s + c for s, c in runs))
 
-        jitter = _u32("%s|slack|%d" % (seed, idx)) % 801  # 0..800
+        jitter = _u32("%s|slack|%d" % (seed, idx)) % 801
         alloc.skip(max(1, (base_slack * (600 + jitter)) // 1000))
 
-    # ---- assemble placements in corpus order --------------------------
     out = []
     for f in files:
         ext, fid, note = placements_by_name[f.name]
@@ -623,21 +415,7 @@ def build_plan(geo, corpus, seed) -> list:
     return out
 
 
-# --------------------------------------------------------------------------
-# Claimed clusters and the residue rule
-# --------------------------------------------------------------------------
-
-
 def claimed_clusters(placements: Iterable[Placement]) -> set:
-    """Every cluster held by a planted extent, deleted files INCLUDED.
-
-    This is the set the residue must never write into.  Deleting a file frees
-    its FAT chain, so all 12 deleted files' clusters read as FAT-free; a
-    residue fill keyed on "FAT-free" alone overwrites every one of them and the
-    demo silently degrades from 40 planted to 28 recoverable with no error
-    raised anywhere.  That is a measured defect from the previous round, and it
-    is the reason this function exists.
-    """
     claimed = set()
     for p in placements:
         for e in p.extents:
@@ -646,29 +424,17 @@ def claimed_clusters(placements: Iterable[Placement]) -> set:
 
 
 def residue_clusters(geo, placements: Iterable[Placement]) -> list:
-    """Data clusters eligible for residue: not root-reserved, not planted."""
     claimed = claimed_clusters(placements)
     last = geo.cluster_count + 1
     return [c for c in range(FIRST_PLANTED_CLUSTER, last + 1) if c not in claimed]
 
 
-# The residue mix, per mille of eligible clusters.  Tuned by measurement
-# against whole-image Shannon entropy.  A single-pass random wipe drives the
-# image to the MEASURED ceiling of a 100% SHAKE fill, 7.9977 bits/byte, so a
-# pre-wipe fixture already sitting there would leave the wipe nothing to
-# demonstrate.  The mix puts the pre-wipe image at a measured 7.06169 while
-# still reading as a used disk rather than a blank one.  Both figures are
-# measurements; neither is the round 8.0 that appears in narration.
-# Per-class Shannon entropy, measured over 3000 clusters of each class at the
-# 2048-byte cluster size:  unwritten 0.0000, sparse 1.5377, text 4.8162,
-# record 7.3911, high 8.0000 bits/byte.  The weights below were chosen against
-# the resulting whole-image figure, not the other way round.
 RESIDUE_MIX = (
-    ("unwritten", 120),  # never-written clusters: some of a used disk is still blank
-    ("high", 520),       # deleted compressed/encrypted remains, indistinguishable from ciphertext
-    ("text", 170),       # deleted plaintext logs and mail spool fragments
-    ("record", 140),     # old directory tables / database pages: structured, repetitive
-    ("sparse", 50),      # a written header on an otherwise untouched cluster
+    ("unwritten", 120),
+    ("high", 520),
+    ("text", 170),
+    ("record", 140),
+    ("sparse", 50),
 )
 
 _RESIDUE_WORDS = (
@@ -682,9 +448,6 @@ _RESIDUE_WORDS = (
 
 
 def _residue_text(material: str, n: int) -> bytes:
-    """ASCII log-shaped filler.  Low entropy on purpose: real deleted text is
-    text, and an image where every free cluster is uniform noise is a
-    laboratory artefact, not a used disk."""
     src = _shake(material, max(64, n // 3 + 64))
     out = bytearray()
     i = 0
@@ -704,8 +467,6 @@ def _residue_text(material: str, n: int) -> bytes:
 
 
 def _residue_record(material: str, n: int) -> bytes:
-    """32-byte fixed-layout records: magic, counter, a little entropy, padding.
-    Shaped like an old directory table or a database freelist page."""
     src = _shake(material, max(32, (n // 32 + 1) * 12))
     out = bytearray()
     k = 0
@@ -725,30 +486,6 @@ def _residue_sparse(material: str, n: int) -> bytes:
 
 
 def make_residue_fn(geo, placements: Iterable[Placement], seed: str) -> Callable:
-    """Build the residue_fn handed to ``fixtures.fat32.build_image``.
-
-    Signature of the returned callable:
-
-        residue_fn(cluster_index: int, cluster_bytes: int) -> bytes | None
-
-    Return value:
-        bytes  -- exactly ``cluster_bytes`` long; write it at that cluster.
-        None   -- DO NOT WRITE.  The cluster is either root-directory reserve
-                  or claimed by a planted extent.
-
-    The writer is expected to call this only for clusters it believes are free,
-    but the None return makes the function self-protecting: even if the writer
-    hands it every FAT-free cluster -- which INCLUDES all 12 deleted files,
-    whose chains were freed -- not one planted byte can be overwritten.  The
-    check lives here, on the side that owns the plan, because the failure mode
-    it prevents is silent.
-
-    Structurally, a cluster-indexed function cannot reach the boot sector, the
-    FSInfo sector, the backup boot region or either FAT: all of those live
-    below ``geo.data_start_offset``, and cluster 2 is the first byte after it.
-    The root directory chain is inside the data area, so it is excluded here
-    by number (clusters 2 .. FIRST_PLANTED_CLUSTER-1).
-    """
     claimed = claimed_clusters(placements)
     reserved = frozenset(range(2, FIRST_PLANTED_CLUSTER))
     last_cluster = geo.cluster_count + 1
@@ -782,31 +519,12 @@ def make_residue_fn(geo, placements: Iterable[Placement], seed: str) -> Callable
             return _residue_record(material, cluster_bytes)
         return _residue_sparse(material, cluster_bytes)
 
-    residue_fn.claimed_clusters = claimed        # exposed for the writer's own assertions
+    residue_fn.claimed_clusters = claimed
     residue_fn.reserved_clusters = reserved
     residue_fn.mix = RESIDUE_MIX
     return residue_fn
 
 
-# --------------------------------------------------------------------------
-# Validation
-# --------------------------------------------------------------------------
-
-
-# --------------------------------------------------------------------------
-# The residue's signature false-positive floor -- MEASURED, not estimated
-# --------------------------------------------------------------------------
-# 52% of the eligible clusters are filled with SHAKE output, so a short magic
-# will occur in them by chance.  The arithmetic differs by an order of
-# magnitude with signature LENGTH, which is the trap: over ~134 MB of uniform
-# bytes the expected count of a given 4-byte magic is ~0.03, but for a 3-byte
-# magic it is ~8.  JPEG (FF D8 FF), GZIP (1F 8B 08) and BZ2 (42 5A 68) are
-# 3-byte signatures and therefore DO occur in the residue.
-#
-# Phase 2 measures precision against this fixture, so the floor has to be a
-# published number rather than a surprise.  It is measured on the finished
-# image at build time and written into the manifest, so the figure the carver
-# subtracts is the figure this image actually contains.
 CARVER_SIGNATURES = (
     ("PNG", b"\x89PNG\r\n\x1a\x0a"),
     ("JPEG", b"\xff\xd8\xff"),
@@ -820,7 +538,6 @@ CARVER_SIGNATURES = (
 
 
 def planted_byte_ranges(placements: Iterable[Placement]) -> list:
-    """Sorted, merged [start, end) byte ranges of every planted extent."""
     spans = sorted((e.byte_offset, e.byte_offset + e.byte_length)
                    for p in placements for e in p.extents)
     merged: list = []
@@ -833,14 +550,6 @@ def planted_byte_ranges(placements: Iterable[Placement]) -> list:
 
 
 def measure_signature_false_positives(placements: Sequence[Placement], image) -> dict:
-    """Count each carver signature's occurrences OUTSIDE every planted extent.
-
-    A hit inside a planted extent is a true positive (or an interior byte of a
-    real file); everything else -- residue, root directory, FAT, boot sector --
-    is a false positive for a signature scanner, and this is the number Phase 2
-    has to subtract before it reports precision.  Counted on the finished image
-    bytes, so it is a measurement of this fixture and not a model of it.
-    """
     ranges = planted_byte_ranges(placements)
     starts = [lo for lo, _hi in ranges]
     blob = bytes(image)
@@ -878,7 +587,6 @@ def counted_set(placements: Sequence[Placement]) -> dict:
 
 
 def validate_plan(geo, placements: Sequence[Placement]) -> dict:
-    """Every property the fixture claims, checked against the plan itself."""
     bpc = geo.bytes_per_sector * geo.sectors_per_cluster
     last_cluster = geo.cluster_count + 1
     owner = {}
@@ -943,7 +651,6 @@ def validate_plan(geo, placements: Sequence[Placement]) -> dict:
 
     by_fid = {p.frag_id: p for p in placements if p.frag_id}
 
-    # ladder gaps
     def gap(p, i):
         a, b = p.extents[i], p.extents[i + 1]
         return b.cluster_start - a.cluster_end
@@ -995,7 +702,6 @@ def validate_plan(geo, placements: Sequence[Placement]) -> dict:
                 problems.append("FRAG-07: separation %d exceeds the max_gap budget, so the "
                                 "failure would not be attributable to direction" % back)
 
-    # the deleted/fragmented cross
     if by_fid:
         df = sorted(fid for fid, p in by_fid.items() if p.deleted)
         if df != sorted(DELETED_FRAGMENTED):

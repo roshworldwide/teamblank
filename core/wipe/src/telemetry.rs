@@ -1,314 +1,65 @@
-//! The wipe telemetry stream: what the instrument watches while a medium is destroyed.
-//!
-//! CLAUDE.md fixes the path as `Rust -> Tauri events -> React`, *live, not polled*.
-//! That single word decides the whole shape of this module. A poller asks "where are
-//! you now?" and gets one answer per ask; the regions between two asks are never
-//! painted and the hex pane shows whatever happened to be under the head at sample
-//! time. A push stream can promise something a poller cannot: **every sector of the
-//! medium appears in exactly one delivered event, in order, even when the consumer
-//! is too slow to keep up.** The sector map is a canvas of the entire medium, so an
-//! unpainted region is a visible lie about work that was actually done.
-//!
-//! ## The three decisions this module makes
-//!
-//! **1 · What carries the events: a sink trait, with a channel behind it.**
-//!
-//! Three carriers were considered.
-//!
-//! * A **callback** (`FnMut(&Event)`) is the cheapest — no allocation, no queue —
-//!   and it is wrong here. It runs the consumer *on the write loop's thread*. A UI
-//!   that takes 8 ms to repaint a 100k-block canvas would then stall a destructive
-//!   operation for 8 ms per frame, and a panic in the consumer would unwind through
-//!   a half-written sector range. The engine must never be able to be slowed, or
-//!   killed, by its own instrument.
-//! * A **writer** (`impl Write`, JSONL) is the right shape for the *recording*, and
-//!   nothing else: it is synchronous, it can block on disk, and it cannot be read
-//!   live by a UI thread.
-//! * A **channel** decouples correctly, but committing the engine to
-//!   `std::sync::mpsc` bakes one transport into a signature that Tauri, a file
-//!   recorder, and every test would all have to pretend to be.
-//!
-//! So the engine sees exactly one thing: [`EventSink`], one object-safe method. The
-//! channel ([`ChannelSink`]) is the live carrier, [`RecorderSink`] is the writer,
-//! [`FanoutSink`] runs both at once, and that composition — not a bespoke code path —
-//! is the production wiring. Zero new dependencies: `std::sync::mpsc::sync_channel`
-//! is the bounded queue, so no `crossbeam`.
-//!
-//! **2 · Backpressure: lossy on frames, lossless on coverage.**
-//!
-//! The queue is bounded ([`DEFAULT_CHANNEL_CAPACITY`]) and the producer *never*
-//! blocks on a progress event. When the queue is full, [`ChannelSink`] does not drop
-//! the event: it **merges** it into the next one. The merged event keeps the newest
-//! head bytes, entropy, byte count and throughput, and takes the **union** of the two
-//! sector ranges. A slow consumer therefore sees fewer, wider frames — never a hole.
-//! [`Trace::coverage_gaps`] is the assertion of that invariant, and it is a test in
-//! this file rather than a claim in this comment.
-//!
-//! Two events are exempt from merging: the [`Header`], which defines the canvas the
-//! UI is about to allocate, and the [`End`], which is the terminal state. Losing
-//! either is not a dropped frame, it is a broken UI. They are delivered with a
-//! *bounded* wait ([`TERMINAL_SEND_TIMEOUT_MS`]), never an unbounded `send` — an
-//! unbounded one deadlocked the wipe outright against a consumer that stopped
-//! reading, and no property of the instrument may be able to prevent a destructive
-//! operation from finishing. Past the bound the event is abandoned and counted in
-//! [`ChannelSink::abandoned`]; the recorded trace still holds it.
-//!
-//! Pass boundaries are also exempt from merging: a range from pass 1 and a range
-//! from pass 2 paint different canvas layers and their union is meaningless, so a
-//! pending event from the previous pass is flushed with a blocking send instead.
-//!
-//! **3 · Recording and replay, which are not optional.**
-//!
-//! `demo_script.md`: *"Demo mode replays a recorded telemetry trace. A live
-//! filesystem operation never stands between the team and a working demo."*
-//!
-//! The recorder is deliberately wired **upstream of the coalescing**, on its own
-//! branch of the fanout. The channel is lossy-by-design because a human consumer is
-//! slow; a file is not, so the trace holds the full-rate stream. This matters: if the
-//! trace recorded the post-coalesce stream, its contents would depend on how busy the
-//! UI thread happened to be, and Phase 6's demo would differ run to run for reasons
-//! nobody could see. Replay pushes the recorded full-rate stream back through the
-//! same [`EventSink`] the live engine uses, so the coalescing policy applies again on
-//! replay exactly as it did live.
-//!
-//! The wire format is JSON Lines, one flat object per line, no nesting: the React
-//! side reads it with `JSON.parse` per line and needs no schema library, and this
-//! module parses it back with a strict reader ([`TraceReader`]) small enough to keep
-//! the zero-dependency rule.
-//!
-//! **The trace is not byte-reproducible and is not a certificate input.** It carries
-//! wall-clock timings and measured throughput, which differ per run by construction.
-//! CLAUDE.md rule 6 constrains the *certificate*; the trace is an observation of one
-//! run and is labelled with the run's start time. Anything reproducible that is
-//! derived from a wipe must be derived from the wipe, not from this stream.
-//!
-//! ## What the event has to carry, and why each field is there
-//!
-//! The instrument has two live panes and neither may read the device itself — the
-//! device is mid-destruction and a second reader would both perturb the measured
-//! throughput and race the writer.
-//!
-//! * *Sector map* — a canvas of the whole medium with a write head sweeping it.
-//!   Needs `total_sectors` once (in the [`Header`]) and then, per event,
-//!   `first_sector` + `sector_count` + `pass`.
-//! * *Hex pane* — the bytes under the head right now. Needs the bytes themselves:
-//!   [`Progress::head`], [`HEAD_BYTES`] of the buffer that was just written, at
-//!   [`Progress::head_sector`]. 256 bytes is 16 rows of 16, one conventional hex
-//!   page, and it is the single largest contributor to event size — see the module
-//!   tests for the measured figure.
-//! * Everything else — `bytes_done`, `throughput_bps`, `entropy_sample` — is the
-//!   numeric readout, and CLAUDE.md rule 2 applies to every one of them.
-//!
-//! `entropy_sample` is a **real Shannon measurement of the pattern written to the
-//! sectors that frame covers** — the source buffer, not a read-back — and it is not a
-//! constant and not a property of the method name: a zero-fill pass reads 0.0000 and
-//! a seeded random pass reads ~7.99. What is on the medium is a separate claim, made
-//! by [`crate::verify`] and by the certificate's whole-medium entropy figures, both of
-//! which read the sectors back. Every chunk contributes
-//! [`ENTROPY_CHUNK_SAMPLE_BYTES`] of strided sample to the frame's histogram, which
-//! is reset at each frame — so a frame forced at a pass boundary, with no chunk in
-//! hand, still reports the range it claims instead of a false zero. The estimator's
-//! finite-sample bias is stated on [`entropy_sampled`], because the demo quotes the
-//! number on screen.
-//!
-//! ## Measured, 2026-09-03, 256 MiB scratchpad copy of the fixture, arm64 release
-//!
-//! | run | wall | events | achieved | max gap | trace |
-//! |---|---|---|---|---|---|
-//! | 40 ms period, 1 MiB chunk, buffered | 228.6 ms | 6 | 26.25 Hz | 43.98 ms | 5,597 B |
-//! | 40 ms period, 1 MiB chunk, `sync_data` per 4 MiB | 514.2 ms | 12 | 23.34 Hz | 46.01 ms | 10,558 B |
-//! | 4 ms period, 256 KiB chunk | 167.3 ms | 38 | 227.16 Hz | 6.25 ms | 32,145 B |
-//! | 40 ms period, 3-pass NIST Clear (768 MiB written) | 260.4 ms | 5 | see below | 40.10 ms | 4,767 B |
-//!
-//! A progress frame is **810-833 bytes** on the wire, mean 827-831 across runs; the
-//! header is 411-412 and the end record 209-216. 512 of those bytes are the hex page,
-//! which is 62% of the frame and the only thing worth shrinking if size ever matters.
-//! [`Telemetry::wrote`] costs **0.26% to 2.82% of wall clock** at the default period,
-//! and 4.65% only when forced to emit on every one of 1,024 chunks.
-//!
-//! **20 Hz is met and is not the interesting constraint.** The interesting number is
-//! that a 256 MiB single-pass wipe finishes in 114-514 ms on this hardware, so the
-//! *whole sweep* is 3 to 12 frames long. The rate floor holds; the sweep is simply
-//! over before a human sees it. Do not slow the engine to fix that — a wipe throttled
-//! for a demo is a lie about throughput, and the behavioural audit reads the same
-//! clock. Record at a shorter period and replay slower instead: the 4 ms recording
-//! above, replayed at 0.10x, measured **1,677.9 ms of sweep at 22.65 frames per second
-//! on screen**, with `coverage_gaps()` empty, while `t_ms` and the certificate still
-//! carry the true 167.3 ms.
-//!
-//! One caution on `achieved_hz`, which is `events / wall`: the 3-pass run reports
-//! 19.20 Hz because a 91.2 ms trailing `sync_all` counted into `wall_ms` while
-//! emitting nothing. Every real inter-frame gap in that run was 40.10 ms or less.
-//! `max_gap_ms` is the rate verdict; `achieved_hz` is a job average.
-//!
-//! Entropy tracks the data and not the method name: the 3-pass run's first frame
-//! measured **0.0000** bits/byte over pass 1's zero fill and its last **7.9998** over
-//! pass 3's random, sampling 843,776 to 2,097,152 bytes per frame.
-//!
-//! Backpressure, measured: forced to 1,024 frames against a consumer taking 2 ms
-//! each, the producer emitted **1,024** and the consumer received **53**, with
-//! **971 coalesced away** — and `Trace::coverage_gaps()` on what the consumer
-//! actually received was **empty**. Frames were lost; not one sector was.
-
 use std::fmt;
 use std::io::{self, BufRead, Write};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// Wire-format identifier. Moves only with the same ceremony as a confidence weight.
 pub const SCHEMA: &str = "sentinelwipe.wipe.telemetry/1";
 
-/// The floor the build pack sets: progress events at >= 20 Hz.
 pub const MIN_RATE_HZ: f64 = 20.0;
 
-/// Nominal emit period. 40 ms is 25 Hz — the 20 Hz floor plus 25% margin, so a
-/// single late chunk does not put the achieved rate under the requirement. Going
-/// faster buys nothing: the canvas repaints at display rate and a 100k-block sector
-/// map cannot show a finer sweep than one event per ~4 ms anyway.
 pub const DEFAULT_PERIOD_MS: u64 = 40;
 
-/// Bytes of the just-written buffer carried in every event for the hex pane.
-/// 16 rows x 16 columns = one hex page.
 pub const HEAD_BYTES: usize = 256;
 
-/// Budget for a one-shot [`entropy_sampled`] call over a single buffer.
 pub const ENTROPY_SAMPLE_BYTES: usize = 65_536;
 
-/// Bytes [`Telemetry::wrote`] samples from **every** chunk into the frame's
-/// histogram.
-///
-/// The frame's entropy is therefore measured over the whole sector range the frame
-/// claims, not over whichever chunk happened to trip the clock — and it exists even
-/// on a frame forced at a pass boundary, where there is no "current" chunk at all.
-/// An earlier design measured only the emitting chunk and published `0.0000` on
-/// forced frames, which is the single most misleading number this instrument could
-/// show: it is exactly what a zero-fill produces.
-///
-/// 8 KiB per chunk costs one strided pass over 1/128th of a 1 MiB chunk. Measured
-/// against a page-cache-backed image at ~2 GB/s it is under 2% of wall clock, and
-/// against any real medium it disappears. The per-frame sample size is published in
-/// `entropy_sample_bytes`, because the plug-in estimator's bias depends on it.
 pub const ENTROPY_CHUNK_SAMPLE_BYTES: usize = 8_192;
 
-/// How long a terminal event — the [`Header`], the [`End`], a pass-boundary flush —
-/// waits for room in a full queue before it is abandoned.
-///
-/// It is a bound, not a blocking send, and the difference is not theoretical: an
-/// unbounded `send` here **deadlocked the wipe** against a consumer that stopped
-/// reading. Three tests in this file hung for over sixty seconds before the timeout
-/// was introduced. Nothing about an instrument may be able to stop a destructive
-/// operation from finishing, and "the receiver still exists" is not the same
-/// condition as "the receiver is reading".
-///
-/// 100 ms is two and a half emit periods. A consumer that cannot take one event in
-/// that time is not rendering anything a person is watching, and the recorded trace
-/// still holds every event regardless — see [`ChannelSink::abandoned`].
-///
-/// Implemented as `try_send` polled every [`TERMINAL_RETRY_MS`] rather than
-/// `SyncSender::send_timeout`, which is still unstable in `std` and would need a
-/// nightly feature this project does not take.
 pub const TERMINAL_SEND_TIMEOUT_MS: u64 = 100;
 
-/// Poll interval while a terminal event waits for room.
 pub const TERMINAL_RETRY_MS: u64 = 1;
 
-/// Bounded queue depth for [`ChannelSink`]. 8 frames is ~320 ms of slack at 25 Hz:
-/// long enough to absorb a garbage-collection pause in the UI, short enough that a
-/// consumer which stops entirely starts coalescing within a third of a second
-/// instead of growing an unbounded backlog behind a destructive operation.
 pub const DEFAULT_CHANNEL_CAPACITY: usize = 8;
 
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
-
-/// Opens the stream. Everything the UI needs to allocate its canvas before a single
-/// sector has been touched.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
     pub schema: String,
-    /// Identity of the medium as the device layer named it. Never a runtime
-    /// `/dev/diskN` this project invented; see architecture D1.
     pub device: String,
     pub sector_size: u32,
     pub total_sectors: u64,
-    /// The method label. If the operation is simulated the word `simulated` is in
-    /// this string, enforced by [`Telemetry::start`] — operator decision 3 requires
-    /// it in the field itself, never in a footnote.
     pub method: String,
     pub simulated: bool,
     pub passes: u32,
-    /// Hex seed of the pattern generator, so a run is describable. Empty for
-    /// patterns that take no seed (zero fill).
     pub pattern_seed_hex: String,
-    /// Wall clock at start. The trace is an observation of one run and says which.
     pub started_unix_ms: u128,
-    /// The emit period this run targeted, so a replay can tell an intended gap from
-    /// a stall.
     pub period_ms: u64,
 }
 
-/// One frame of the sweep.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Progress {
-    /// Monotone from 0 across the whole job, including coalesced-away frames, so a
-    /// consumer can tell how many frames it never saw without trusting `coalesced`.
     pub seq: u64,
-    /// Milliseconds since [`Telemetry::start`], monotonic. Replay paces on this.
     pub t_ms: f64,
-    /// 1-based.
     pub pass: u32,
     pub passes: u32,
-    /// Sector range covered since the last *delivered* event: `[first_sector,
-    /// first_sector + sector_count)`. Under backpressure this is the union of
-    /// several frames, which is what makes the map complete.
     pub first_sector: u64,
     pub sector_count: u64,
-    /// Cumulative over the whole job, all passes.
     pub bytes_done: u64,
-    /// `total_sectors * sector_size * passes`.
     pub bytes_total: u64,
-    /// Mean over the job so far.
     pub throughput_bps: f64,
-    /// Over the interval since the previous emitted frame. This is the one the
-    /// behavioural audit's plausibility bound is built from; the mean hides a stall.
     pub throughput_inst_bps: f64,
-    /// Shannon entropy, bits/byte, of the **pattern written to** the sectors this
-    /// frame covers: [`ENTROPY_CHUNK_SAMPLE_BYTES`] strided out of every source
-    /// buffer handed to `write_sectors` since the previous frame. Real, never a
-    /// constant, and never a property of the method name — a zero-fill pass reads
-    /// 0.0000 and a seeded random pass reads ~7.99.
-    ///
-    /// **It is a measurement of what was sent, not of what is on the medium**, and
-    /// the distinction is not pedantic: a device that accepted a write and discarded
-    /// it would leave this pane reading 7.999 over untouched sectors. Evidence about
-    /// the medium comes from reads — `verify::verify_pass`, and the whole-medium
-    /// `entropy_bits_per_byte.before`/`.after` in the certificate, both of which read
-    /// the sectors back. Reading back here instead would put a read in the middle of
-    /// the write loop and perturb the very throughput the behavioural audit measures
-    /// off this same clock, so the live pane states what it has.
     pub entropy_sample: f64,
-    /// How many bytes that measurement read. Published because a bits/byte figure
-    /// without its sample size is not a measurement (CLAUDE.md rule 2).
     pub entropy_sample_bytes: u32,
-    /// Where [`Progress::head`] was read from.
     pub head_sector: u64,
-    /// Valid prefix length of `head`.
     pub head_len: u16,
-    /// The bytes now under the write head, for the hex pane. Inline, so the hot path
-    /// allocates nothing.
     pub head: [u8; HEAD_BYTES],
-    /// Frames merged into this one by backpressure. 0 on a healthy consumer.
     pub coalesced: u32,
 }
 
 impl Progress {
-    /// The valid prefix of [`Progress::head`].
     pub fn head_bytes(&self) -> &[u8] {
         &self.head[..(self.head_len as usize).min(HEAD_BYTES)]
     }
 
-    /// Exclusive end of the covered sector range.
     pub fn sector_end(&self) -> u64 {
         self.first_sector.saturating_add(self.sector_count)
     }
@@ -336,35 +87,20 @@ impl Progress {
     }
 }
 
-/// Closes the stream. Carries the stream's own self-measurement, so a consumer can
-/// state the achieved event rate without timing the events itself.
 #[derive(Debug, Clone, PartialEq)]
 pub struct End {
     pub seq: u64,
     pub t_ms: f64,
     pub bytes_done: u64,
     pub bytes_total: u64,
-    /// Progress events emitted by the producer (before any coalescing).
     pub events: u64,
     pub wall_ms: f64,
     pub mean_throughput_bps: f64,
-    /// `events / (wall_ms/1000)`.
-    ///
-    /// **Not the figure that decides whether the rate floor held.** It is a job
-    /// average, and any stretch where nothing was written deflates it: a measured
-    /// 3-pass run here reported 12.50 Hz because a 215.8 ms trailing `sync_all`
-    /// counted into `wall_ms` while emitting no frames, with every actual
-    /// inter-frame gap at 40.18 ms or less. Read [`End::max_gap_ms`] for the floor.
     pub achieved_hz: f64,
-    /// Largest gap between two consecutive emitted frames. This is the figure that
-    /// decides whether the >= 20 Hz floor held: a single 300 ms gap is invisible in
-    /// a mean and very visible on a sector map.
     pub max_gap_ms: f64,
-    /// `complete`, or `aborted:<reason>`.
     pub outcome: String,
 }
 
-/// One item on the wire.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     Header(Header),
@@ -372,19 +108,8 @@ pub enum Event {
     End(End),
 }
 
-// ---------------------------------------------------------------------------
-// The sink seam
-// ---------------------------------------------------------------------------
-
-/// Where events go. The engine holds exactly one of these and knows nothing else
-/// about the transport.
-///
-/// Object safe on purpose: `Box<dyn EventSink>` is how the Tauri layer, the
-/// recorder, and a test collector all reach the same engine without generics
-/// leaking into the wipe API.
 pub trait EventSink {
     fn emit(&mut self, ev: &Event);
-    /// Called once at the end of a job. Recorders flush here; a channel is a no-op.
     fn flush(&mut self) {}
 }
 
@@ -406,7 +131,6 @@ impl<T: EventSink + ?Sized> EventSink for &mut T {
     }
 }
 
-/// Discards everything. For a wipe run with no instrument attached.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullSink;
 
@@ -414,8 +138,6 @@ impl EventSink for NullSink {
     fn emit(&mut self, _ev: &Event) {}
 }
 
-/// Keeps every event in memory. The test and verification sink; also how a replay
-/// consumer materialises a stream it wants to assert over.
 #[derive(Debug, Default, Clone)]
 pub struct CollectSink {
     pub events: Vec<Event>,
@@ -446,9 +168,6 @@ impl EventSink for CollectSink {
     }
 }
 
-/// Sends to any number of sinks. The production wiring is
-/// `Fanout[ChannelSink, RecorderSink]`, which is what puts the recorder upstream of
-/// the channel's coalescing.
 #[derive(Default)]
 pub struct FanoutSink {
     sinks: Vec<Box<dyn EventSink>>,
@@ -486,12 +205,6 @@ impl EventSink for FanoutSink {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The live carrier, and the backpressure policy
-// ---------------------------------------------------------------------------
-
-/// Bounded, non-blocking-on-progress channel sink. This is the whole backpressure
-/// policy, in one place.
 pub struct ChannelSink {
     tx: SyncSender<Event>,
     pending: Option<Progress>,
@@ -501,8 +214,6 @@ pub struct ChannelSink {
     disconnected: bool,
 }
 
-/// Build the live carrier. The [`Receiver`] is handed to the UI thread (or the Tauri
-/// event bridge); the [`ChannelSink`] goes to the engine.
 pub fn channel(capacity: usize) -> (ChannelSink, Receiver<Event>) {
     let (tx, rx) = sync_channel(capacity.max(1));
     (
@@ -519,29 +230,19 @@ pub fn channel(capacity: usize) -> (ChannelSink, Receiver<Event>) {
 }
 
 impl ChannelSink {
-    /// Frames merged away by backpressure over the life of the sink.
     pub fn coalesced_total(&self) -> u64 {
         self.coalesced_total
     }
-    /// Events actually handed to the receiver.
     pub fn delivered(&self) -> u64 {
         self.delivered
     }
-    /// Terminal events given up on after [`TERMINAL_SEND_TIMEOUT_MS`] because the
-    /// consumer had stopped reading. Non-zero means the live view is incomplete and
-    /// the recorded trace is the authority.
     pub fn abandoned(&self) -> u64 {
         self.abandoned
     }
-    /// True once the receiver has been dropped. Every later emit is a no-op; a
-    /// closed instrument must not be able to stall or fail a wipe.
     pub fn disconnected(&self) -> bool {
         self.disconnected
     }
 
-    /// Deliver an event that must not be coalesced away, waiting at most
-    /// [`TERMINAL_SEND_TIMEOUT_MS`] for room. Never waits indefinitely: see that
-    /// constant for the deadlock this replaced.
     fn send_terminal(&mut self, ev: Event) {
         if self.disconnected {
             return;
@@ -577,7 +278,6 @@ impl ChannelSink {
         match self.tx.try_send(Event::Progress(p)) {
             Ok(()) => self.delivered += 1,
             Err(TrySendError::Full(Event::Progress(p))) => {
-                // Hold it. The next frame will absorb it, range and all.
                 self.pending = Some(p);
             }
             Err(TrySendError::Full(_)) => unreachable!("only Progress is try_sent"),
@@ -585,8 +285,6 @@ impl ChannelSink {
         }
     }
 
-    /// Push a held frame out without merging. Used when the next frame belongs to a
-    /// different pass, where a union would be meaningless.
     fn flush_pending_terminal(&mut self) {
         if let Some(p) = self.pending.take() {
             self.send_terminal(Event::Progress(p));
@@ -594,12 +292,6 @@ impl ChannelSink {
     }
 }
 
-/// Merge `prev` (older) into `next` (newer), preserving coverage.
-///
-/// The newer frame wins on everything instantaneous — head bytes, entropy,
-/// `bytes_done`, throughput, `t_ms`, `seq` — because a UI showing a *stale* hex page
-/// would be worse than showing fewer of them. The sector range is the union, because
-/// that is the one property the canvas cannot reconstruct from a later frame.
 fn merge_progress(prev: Progress, next: Progress) -> Progress {
     debug_assert_eq!(prev.pass, next.pass, "merge across passes is not meaningful");
     let mut out = next;
@@ -614,8 +306,6 @@ fn merge_progress(prev: Progress, next: Progress) -> Progress {
 impl EventSink for ChannelSink {
     fn emit(&mut self, ev: &Event) {
         match ev {
-            // The header defines the canvas and the end is the terminal state.
-            // Neither is a frame; neither may be dropped.
             Event::Header(_) => self.send_terminal(ev.clone()),
             Event::End(_) => {
                 self.flush_pending_terminal();
@@ -637,16 +327,6 @@ impl EventSink for ChannelSink {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The recorder
-// ---------------------------------------------------------------------------
-
-/// Writes the stream as JSON Lines. Wrap the writer in a `BufWriter`: this sink
-/// issues one `write_all` per event and does not buffer for you.
-///
-/// I/O errors are captured, not propagated: a failing trace file must not abort a
-/// destructive operation half way through a sector range. [`RecorderSink::error`]
-/// reports it afterwards, and the wipe result should carry it.
 pub struct RecorderSink<W: Write> {
     w: W,
     bytes: u64,
@@ -663,14 +343,12 @@ impl<W: Write> RecorderSink<W> {
             err: None,
         }
     }
-    /// Bytes written to the trace so far.
     pub fn bytes_written(&self) -> u64 {
         self.bytes
     }
     pub fn lines_written(&self) -> u64 {
         self.lines
     }
-    /// The first I/O error, if the trace is incomplete.
     pub fn error(&self) -> Option<&io::Error> {
         self.err.as_ref()
     }
@@ -702,40 +380,12 @@ impl<W: Write> EventSink for RecorderSink<W> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Entropy
-// ---------------------------------------------------------------------------
-
-/// Shannon entropy in bits/byte over a strided sample of `buf`.
-///
-/// One-shot form, used by callers outside the frame loop and by the tests.
-/// [`Telemetry`] does not call this: it accumulates across every chunk of a frame
-/// with [`sample_into`] instead. Both share the same strided sampling.
-///
-/// Returns `(bits_per_byte, bytes_sampled)`.
-///
-/// **Finite-sample bias, because the demo quotes this number on screen.** The
-/// plug-in estimator is biased low by about `(K-1) / (2 N ln 2)` bits for `K` = 256
-/// symbols and `N` samples: 0.0028 bits at 64 KiB, 0.0225 bits at 8 KiB. A perfectly
-/// uniform stream therefore measures ~7.997 at the one-shot budget and never 8.0000.
-/// Say 7.997, not "8.0" — and note that the whole-image figure the demo compares
-/// against (7.0617 bits/byte, `fixture.manifest.json`) is computed over all
-/// 268,435,456 bytes, where the same bias is 0.0000007 bits and vanishes. The two
-/// figures are not measured over the same support and a slide must not subtract them
-/// as if they were.
 pub fn entropy_sampled(buf: &[u8], sector_size: usize, budget: usize) -> (f64, u32) {
     let mut hist = [0u64; 256];
     let n = sample_into(buf, sector_size, budget, &mut hist);
     (shannon(&hist, n), n as u32)
 }
 
-/// Add a strided, non-overlapping sample of `buf` to `hist`, spending at most
-/// `budget` bytes, and return how many bytes were counted.
-///
-/// The windows are sector-sized and spread evenly across the whole buffer, so a
-/// chunk that is half zeroes and half random reads as such. Taking the first
-/// `budget` bytes instead would be a measurement of the head, described as a
-/// measurement of the chunk.
 pub fn sample_into(buf: &[u8], sector_size: usize, budget: usize, hist: &mut [u64; 256]) -> usize {
     if buf.is_empty() || budget == 0 {
         return 0;
@@ -764,7 +414,6 @@ pub fn sample_into(buf: &[u8], sector_size: usize, budget: usize, hist: &mut [u6
     n
 }
 
-/// Shannon entropy in bits/byte of a 256-bin byte histogram holding `n` counts.
 pub fn shannon(hist: &[u64; 256], n: usize) -> f64 {
     if n == 0 {
         return 0.0;
@@ -777,7 +426,6 @@ pub fn shannon(hist: &[u64; 256], n: usize) -> f64 {
             h -= p * p.log2();
         }
     }
-    // A single-symbol buffer would otherwise render as `-0.0000` in a hex readout.
     if h == 0.0 {
         0.0
     } else {
@@ -785,28 +433,18 @@ pub fn shannon(hist: &[u64; 256], n: usize) -> f64 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// The producer
-// ---------------------------------------------------------------------------
-
-/// Everything the [`Header`] needs that the wipe engine knows and telemetry does not.
 #[derive(Debug, Clone)]
 pub struct WipeSpec {
     pub device: String,
     pub sector_size: u32,
     pub total_sectors: u64,
     pub method: String,
-    /// True for ATA Secure Erase / NVMe Sanitize / crypto-erase against an image
-    /// file, where the command is not issued to any controller. Operator decision 3.
     pub simulated: bool,
     pub passes: u32,
     pub pattern_seed_hex: String,
 }
 
 impl WipeSpec {
-    /// The label that goes on the wire. Operator decision 3: a simulated operation
-    /// carries the word in the field itself, so a consumer cannot render the method
-    /// without rendering the caveat.
     pub fn method_label(&self) -> String {
         if self.simulated && !self.method.to_ascii_lowercase().contains("simulated") {
             format!("simulated:{}", self.method)
@@ -816,28 +454,18 @@ impl WipeSpec {
     }
 }
 
-/// What the stream measured about itself. Returned by [`Telemetry::finish`] and
-/// mirrored into the [`End`] event, so the achieved rate is never something a slide
-/// asserts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Summary {
     pub events: u64,
     pub wall_ms: f64,
     pub bytes_done: u64,
     pub mean_throughput_bps: f64,
-    /// Job average. See [`End::achieved_hz`]: a trailing flush deflates it.
-    /// [`Summary::max_gap_ms`] and [`Summary::met_rate_floor`] are the rate verdict.
     pub achieved_hz: f64,
     pub min_gap_ms: f64,
     pub max_gap_ms: f64,
-    /// True when no gap between consecutive frames exceeded `1000 / MIN_RATE_HZ`.
     pub met_rate_floor: bool,
 }
 
-/// The engine's handle on the stream. Hold one per wipe job.
-///
-/// Contract with the wipe engine, which owns the write loop:
-///
 /// ```ignore
 /// let mut tm = Telemetry::start(spec, sink, None);
 /// for pass in 1..=passes {
@@ -849,11 +477,6 @@ pub struct Summary {
 /// }
 /// let summary = tm.finish("complete");
 /// ```
-///
-/// `wrote` is called once per written chunk and costs one `Instant::now` plus a few
-/// integer updates on the frames it does not emit — at a 1 MiB chunk and 1 GB/s that
-/// is ~1000 calls/s of ~25 ns each. It does **not** hash, allocate, or touch the
-/// device.
 pub struct Telemetry<S: EventSink> {
     sink: S,
     period: Duration,
@@ -868,7 +491,6 @@ pub struct Telemetry<S: EventSink> {
     events: u64,
     cur_pass: u32,
 
-    // Coverage accumulated since the last emitted frame.
     span_lo: u64,
     span_hi: u64,
     have_span: bool,
@@ -882,9 +504,6 @@ pub struct Telemetry<S: EventSink> {
     head_len: u16,
     head_sector: u64,
 
-    // Byte histogram over every chunk written since the last frame, so the frame's
-    // entropy describes the sector range the frame actually claims — and exists even
-    // on a frame forced at a pass boundary, where there is no current chunk.
     hist: [u64; 256],
     hist_n: u64,
 
@@ -895,10 +514,6 @@ pub struct Telemetry<S: EventSink> {
 }
 
 impl<S: EventSink> Telemetry<S> {
-    /// Emits the [`Header`] immediately and starts the clock.
-    ///
-    /// `period` defaults to [`DEFAULT_PERIOD_MS`]. A zero period emits on every
-    /// `wrote` call, which is what the deterministic tests use.
     pub fn start(spec: WipeSpec, mut sink: S, period: Option<Duration>) -> Self {
         let period = period.unwrap_or(Duration::from_millis(DEFAULT_PERIOD_MS));
         let sector_size = spec.sector_size.max(1) as u64;
@@ -955,18 +570,12 @@ impl<S: EventSink> Telemetry<S> {
         }
     }
 
-    /// Record one completed chunk write. Call **after** the bytes are on the medium:
-    /// telemetry that runs ahead of the device is a progress bar, not an instrument.
-    ///
-    /// `buf` is the buffer that was just written. It is read for the hex-pane head
-    /// and, on emitting frames only, for the entropy sample.
     pub fn wrote(&mut self, pass: u32, first_sector: u64, buf: &[u8]) {
         if self.finished {
             return;
         }
         let pass = pass.max(1);
         if pass != self.cur_pass {
-            // Close the previous layer before any of the new pass lands in the span.
             self.emit_now(self.cur_pass);
             self.cur_pass = pass;
             self.have_span = false;
@@ -989,8 +598,6 @@ impl<S: EventSink> Telemetry<S> {
         self.head_len = n as u16;
         self.head_sector = first_sector;
 
-        // Every chunk contributes to the frame's entropy, not just the one that
-        // happens to trip the clock.
         self.hist_n += sample_into(
             buf,
             self.sector_size as usize,
@@ -1003,8 +610,6 @@ impl<S: EventSink> Telemetry<S> {
         }
     }
 
-    /// Force a frame at the end of a pass, so the canvas layer is complete before the
-    /// next pass starts overwriting it.
     pub fn end_pass(&mut self, pass: u32) {
         if self.finished {
             return;
@@ -1012,15 +617,6 @@ impl<S: EventSink> Telemetry<S> {
         self.emit_now(pass.max(1));
     }
 
-    /// Force a frame now, whatever the clock says. For the wipe engine to call at a
-    /// state change worth showing — a method switch, a retry, a verification start.
-    ///
-    /// **Call this immediately before any blocking call longer than the emit
-    /// period.** Measured on this machine: a write loop issuing `sync_data()` every
-    /// 4 MiB produced a 50.05 ms inter-frame gap and missed the 20 Hz floor, because
-    /// a frame can only be emitted from a `wrote` call and the sync sat between two
-    /// of them. Either `tick` before the sync, or sync at a granularity whose
-    /// duration is under the period.
     pub fn tick(&mut self, pass: u32) {
         if self.finished {
             return;
@@ -1030,7 +626,7 @@ impl<S: EventSink> Telemetry<S> {
 
     fn emit_now(&mut self, pass: u32) {
         if !self.have_span {
-            return; // nothing painted since the last frame; an empty range is noise
+            return;
         }
         let now = Instant::now();
         let t_ms = dur_ms(now.duration_since(self.t0));
@@ -1044,10 +640,6 @@ impl<S: EventSink> Telemetry<S> {
             }
         }
 
-        // The frame's own histogram, accumulated over every chunk it covers. A frame
-        // forced at a pass boundary carries no current chunk and would otherwise
-        // publish 0.0000 bits/byte for sectors that in fact hold a high-entropy
-        // pattern — the single most misleading number this instrument could show.
         let entropy = shannon(&self.hist, self.hist_n as usize);
         let esz = self.hist_n.min(u32::MAX as u64) as u32;
         let inst = if gap_ms > 0.0 {
@@ -1091,10 +683,6 @@ impl<S: EventSink> Telemetry<S> {
         self.last_emit_bytes = self.bytes_done;
     }
 
-    /// Emit any pending coverage, then the [`End`], then flush the sink.
-    ///
-    /// `outcome` is `complete`, or `aborted:<reason>` — the caller's words, carried
-    /// verbatim to the certificate writer.
     pub fn finish(mut self, outcome: &str) -> Summary {
         if self.have_span {
             self.emit_now(self.cur_pass);
@@ -1143,14 +731,12 @@ impl<S: EventSink> Telemetry<S> {
         }
     }
 
-    /// Total sectors, as declared in the header. Handy for a caller sanity check.
     pub fn total_sectors(&self) -> u64 {
         self.total_sectors
     }
     pub fn bytes_done(&self) -> u64 {
         self.bytes_done
     }
-    /// Borrow the sink, e.g. to read [`ChannelSink::coalesced_total`] mid-run.
     pub fn sink(&self) -> &S {
         &self.sink
     }
@@ -1159,10 +745,6 @@ impl<S: EventSink> Telemetry<S> {
 fn dur_ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
-
-// ---------------------------------------------------------------------------
-// JSON Lines: writing
-// ---------------------------------------------------------------------------
 
 const HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -1189,8 +771,6 @@ fn esc_into(s: &str, out: &mut String) {
     out.push('"');
 }
 
-/// JSON has no NaN and no Infinity. A non-finite throughput is a division artifact,
-/// not a measurement, and is written as 0 rather than as a token no parser accepts.
 fn f(v: f64, places: usize) -> String {
     if !v.is_finite() {
         return "0".to_string();
@@ -1198,7 +778,6 @@ fn f(v: f64, places: usize) -> String {
     format!("{:.*}", places, v)
 }
 
-/// Serialise one event as a JSON Lines record, newline included.
 pub fn to_json_line(ev: &Event) -> String {
     let mut s = String::with_capacity(1024);
     match ev {
@@ -1268,25 +847,13 @@ pub fn to_json_line(ev: &Event) -> String {
     s
 }
 
-// ---------------------------------------------------------------------------
-// JSON Lines: reading (replay)
-// ---------------------------------------------------------------------------
-
-/// Why a trace line could not be read. Always names the field, because a trace is
-/// read at demo time when nobody is going to debug a parser.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TraceError {
-    /// (line number, message)
     Syntax(u64, String),
-    /// (line number, field name)
     MissingField(u64, String),
-    /// (line number, field name, what was there)
     BadType(u64, String, String),
-    /// (line number, the `ev` value)
     UnknownEvent(u64, String),
-    /// The trace did not open with a header.
     NoHeader,
-    /// The schema string in the header is not one this build reads.
     SchemaMismatch(String),
     Io(String),
 }
@@ -1320,10 +887,6 @@ enum Val {
     Bool(bool),
 }
 
-/// Strict reader for the flat objects this module writes. Deliberately not a general
-/// JSON parser: the format has no nesting and no arrays, so a general parser would be
-/// a hundred lines of capability nobody uses. Unknown keys are ignored, so a later
-/// schema can add a field without breaking an older replayer.
 fn parse_flat(line: &str, lineno: u64) -> Result<Vec<(String, Val)>, TraceError> {
     let b: Vec<char> = line.chars().collect();
     let mut i = 0usize;
@@ -1519,7 +1082,6 @@ fn unhex(s: &str, l: u64) -> Result<(usize, [u8; HEAD_BYTES]), TraceError> {
     Ok((n, out))
 }
 
-/// Parse one JSON Lines record.
 pub fn from_json_line(line: &str, lineno: u64) -> Result<Event, TraceError> {
     let kv = parse_flat(line, lineno)?;
     let ev = need_str(&kv, "ev", lineno)?;
@@ -1537,8 +1099,6 @@ pub fn from_json_line(line: &str, lineno: u64) -> Result<Event, TraceError> {
             period_ms: need_num(&kv, "period_ms", lineno)? as u64,
         })),
         "progress" => {
-            // Fields are read in wire order so a truncated line names the first
-            // field it is actually missing, not whichever the compiler evaluated.
             let mut pr = Progress {
                 seq: need_num(&kv, "seq", lineno)? as u64,
                 t_ms: need_num(&kv, "t_ms", lineno)?,
@@ -1578,7 +1138,6 @@ pub fn from_json_line(line: &str, lineno: u64) -> Result<Event, TraceError> {
     }
 }
 
-/// Streaming reader over a JSON Lines trace. Blank lines are skipped.
 pub struct TraceReader<R: BufRead> {
     r: R,
     lineno: u64,
@@ -1610,8 +1169,6 @@ impl<R: BufRead> Iterator for TraceReader<R> {
     }
 }
 
-/// A whole trace, in memory. A 256 MiB wipe's trace is a few hundred kilobytes, so
-/// the demo loads it whole rather than streaming it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trace {
     pub header: Header,
@@ -1646,7 +1203,6 @@ impl Trace {
         }
     }
 
-    /// Duration the recorded run took, in ms, from the last event's timestamp.
     pub fn duration_ms(&self) -> f64 {
         self.end
             .as_ref()
@@ -1655,7 +1211,6 @@ impl Trace {
             .unwrap_or(0.0)
     }
 
-    /// Event rate the recording actually achieved.
     pub fn achieved_hz(&self) -> f64 {
         let d = self.duration_ms();
         if d > 0.0 {
@@ -1665,7 +1220,6 @@ impl Trace {
         }
     }
 
-    /// Largest gap between consecutive progress frames, in ms.
     pub fn max_gap_ms(&self) -> f64 {
         let mut prev = 0.0f64;
         let mut max = 0.0f64;
@@ -1679,15 +1233,6 @@ impl Trace {
         max
     }
 
-    /// **The invariant that makes lossy backpressure safe.**
-    ///
-    /// Returns every `(pass, first_sector, sector_count)` region of the medium that
-    /// no delivered frame claimed. An empty result means the sector map was painted
-    /// completely: no consumer, however slow, left a region of the canvas showing
-    /// untouched when it had in fact been overwritten.
-    ///
-    /// Sectors beyond `header.total_sectors` are ignored; a wipe that overruns the
-    /// declared capacity is a device-layer defect, not a telemetry one.
     pub fn coverage_gaps(&self) -> Vec<(u32, u64, u64)> {
         let total = self.header.total_sectors;
         let mut gaps = Vec::new();
@@ -1717,15 +1262,6 @@ impl Trace {
     }
 }
 
-/// Replay a recorded trace into a sink, pacing on the recorded `t_ms`.
-///
-/// This is Phase 6's demo path: no device, no engine, no filesystem operation on
-/// stage. `speed` is a multiplier — 1.0 for real time, 2.0 for twice as fast, and
-/// any non-finite or non-positive value for as-fast-as-possible (what tests use).
-///
-/// The sink is the same [`EventSink`] the live engine drives, so a replayed run goes
-/// through the same coalescing policy as a live one. A demo that bypassed the
-/// backpressure path would be a demo of a code path that does not ship.
 pub fn replay<S: EventSink>(trace: &Trace, sink: &mut S, speed: f64) -> usize {
     let paced = speed.is_finite() && speed > 0.0;
     let start = Instant::now();
@@ -1758,18 +1294,11 @@ pub fn replay<S: EventSink>(trace: &Trace, sink: &mut S, speed: f64) -> usize {
     n
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
 
-    /// A tiny deterministic byte source. Not a wipe pattern — the seeded SHAKE-128
-    /// stream is the pattern generator's job and lives in another module. This exists
-    /// so entropy tests are reproducible.
     fn pseudo(seed: u64, n: usize) -> Vec<u8> {
         let mut s = seed | 1;
         let mut out = Vec::with_capacity(n);
@@ -1793,8 +1322,6 @@ mod tests {
             pattern_seed_hex: "00112233".into(),
         }
     }
-
-    // -- entropy ----------------------------------------------------------
 
     #[test]
     fn entropy_of_zeroes_is_zero() {
@@ -1827,8 +1354,6 @@ mod tests {
         assert!(rand < 8.0);
     }
 
-    /// The documented finite-sample bias. If this drifts, the figure in the module
-    /// doc and anything a slide quotes drifts with it.
     #[test]
     fn finite_sample_bias_at_the_budget_is_about_three_thousandths_of_a_bit() {
         let (h, n) = entropy_sampled(&pseudo(0xC0FFEE, ENTROPY_SAMPLE_BYTES), 512, ENTROPY_SAMPLE_BYTES);
@@ -1844,8 +1369,6 @@ mod tests {
         assert!(h > 7.99 && h < 8.0, "got {}", h);
     }
 
-    /// The sample must span the chunk, not read its head. A buffer that is zeroes for
-    /// its first half and random for its second must not measure as either one.
     #[test]
     fn the_entropy_sample_spans_the_chunk_rather_than_its_head() {
         let mut buf = vec![0u8; 512 * 1024];
@@ -1853,8 +1376,6 @@ mod tests {
         buf.extend_from_slice(&tail);
         let (h, n) = entropy_sampled(&buf, 512, ENTROPY_SAMPLE_BYTES);
         assert_eq!(n as usize, ENTROPY_SAMPLE_BYTES);
-        // Half zeroes, half uniform: H = 0.5*log2(2) + 0.5*(log2(512)) ... measured,
-        // and the only claim that matters is that it is neither endpoint.
         assert!(h > 1.0, "head-only sampling would read ~0.0, got {}", h);
         assert!(h < 7.0, "tail-only sampling would read ~8.0, got {}", h);
     }
@@ -1864,8 +1385,6 @@ mod tests {
         assert_eq!(entropy_sampled(&[], 512, ENTROPY_SAMPLE_BYTES), (0.0, 0));
         assert_eq!(entropy_sampled(&[1, 2, 3], 512, 0), (0.0, 0));
     }
-
-    // -- operator decision 3 ---------------------------------------------
 
     #[test]
     fn a_simulated_method_carries_the_word_in_the_field_itself() {
@@ -1893,8 +1412,6 @@ mod tests {
         s.method = "nvme-sanitize (simulated on image)".into();
         assert_eq!(s.method_label(), "nvme-sanitize (simulated on image)");
     }
-
-    // -- the producer -----------------------------------------------------
 
     #[test]
     fn the_header_is_the_first_event_and_declares_the_canvas() {
@@ -1990,10 +1507,6 @@ mod tests {
         assert_eq!(trace.coverage_gaps(), vec![]);
     }
 
-    /// A frame forced at a pass boundary has no "current" chunk. It must still
-    /// publish a real measurement over the sectors it covers. Publishing 0.0000
-    /// bits/byte there would be the single most misleading number this instrument
-    /// could show, because it is exactly what a zero-fill produces.
     #[test]
     fn a_frame_with_no_current_chunk_still_measures_the_sectors_it_covers() {
         let mut sink = CollectSink::new();
@@ -2001,7 +1514,7 @@ mod tests {
         let chunk = pseudo(21, 512 * 1024);
         tm.wrote(1, 0, &chunk);
         tm.wrote(1, 1024, &chunk);
-        tm.end_pass(1); // forced: nothing under the head at this instant
+        tm.end_pass(1);
         tm.finish("complete");
         let ps = sink.progress();
         assert_eq!(ps.len(), 1, "one forced frame at a 1 h period");
@@ -2036,9 +1549,6 @@ mod tests {
         );
     }
 
-    /// The histogram must be reset at every frame, or entropy would be a running
-    /// average over the whole job and a 3-pass wipe would show pass 1's zeroes
-    /// bleeding into pass 3's random.
     #[test]
     fn each_frame_measures_only_its_own_sectors() {
         let mut s = spec();
@@ -2075,19 +1585,8 @@ mod tests {
         }
     }
 
-    /// Real wall-clock: drive a short run at the default period and assert the rate
-    /// floor from the stream's own self-measurement.
     #[test]
     fn the_default_period_clears_the_twenty_hertz_floor() {
-        // This clause times a real emitter against a real clock, so it can only
-        // conclude anything on a host whose scheduler is finer than the budget it
-        // is testing. Windows' default timer granularity is about 15.6 ms, so a
-        // requested 2 ms sleep can take eight times that, and under parallel
-        // `cargo test` load the 50 ms gap budget stops describing this emitter and
-        // starts describing the machine. Calibrate first and refuse the verdict
-        // rather than report a red that is not about the code — the same
-        // "NOT VERIFIED" convention the fixture-backed tests use, for the same
-        // reason: a wrong verdict is worse than a named absence.
         let budget = Duration::from_millis((1000.0 / MIN_RATE_HZ) as u64);
         let mut granularity = Duration::ZERO;
         for _ in 0..5 {
@@ -2136,12 +1635,6 @@ mod tests {
         );
     }
 
-    // -- backpressure -----------------------------------------------------
-
-    /// Drain a receiver on its own thread, taking `per_event_ms` to "repaint" each
-    /// frame, and hand back everything that arrived. This is what a real consumer
-    /// looks like; a test that holds a `Receiver` and never reads it is not a slow
-    /// consumer, it is a dead one, and the two must be distinguished.
     fn drain_slowly(rx: Receiver<Event>, per_event_ms: u64) -> std::thread::JoinHandle<Vec<Event>> {
         std::thread::spawn(move || {
             let mut got = Vec::new();
@@ -2177,8 +1670,6 @@ mod tests {
         let consumer = drain_slowly(rx, 2);
         let mut tm = Telemetry::start(spec(), sink, Some(Duration::ZERO));
         let chunk = vec![0x11u8; 512 * 16];
-        // 128 frames as fast as the loop can emit them, against a consumer that
-        // takes 2 ms each. The queue fills; frames merge rather than disappear.
         for i in 0..128u64 {
             tm.wrote(1, i * 16, &chunk);
         }
@@ -2211,13 +1702,6 @@ mod tests {
         assert!(trace.end.is_some(), "the end event is never coalesced away");
     }
 
-    /// **The deadlock this module had.** A consumer that holds its `Receiver` and
-    /// stops reading is not disconnected, so every "is it still there?" check says
-    /// yes — and an unbounded `send` of the terminal event then waits forever, with
-    /// a half-finished destructive operation behind it. The wipe must complete.
-    ///
-    /// Written so it cannot hang the suite: the wipe runs on its own thread and this
-    /// one waits on a bounded `recv_timeout`.
     #[test]
     fn a_consumer_that_stops_reading_cannot_hang_the_wipe() {
         let (sink, rx) = channel(2);
@@ -2231,7 +1715,6 @@ mod tests {
             let s = tm.finish("complete");
             let _ = done_tx.send(s);
         });
-        // `rx` is alive and never read: the queue is full and stays full.
         let s = done_rx
             .recv_timeout(Duration::from_secs(10))
             .expect("finish() blocked on a stalled consumer: the wipe cannot complete");
@@ -2305,8 +1788,6 @@ mod tests {
         assert_eq!(trace.coverage_gaps(), vec![], "both layers painted whole");
     }
 
-    // -- the recorder and the wire format ---------------------------------
-
     #[test]
     fn every_event_round_trips_through_the_wire_format() {
         let mut sink = CollectSink::new();
@@ -2326,7 +1807,6 @@ mod tests {
                 "re-serialising a parsed event must be byte-identical"
             );
         }
-        // head bytes survive exactly
         match (&sink.events[1], from_json_line(to_json_line(&sink.events[1]).trim(), 1).unwrap()) {
             (Event::Progress(a), Event::Progress(b)) => {
                 assert_eq!(a.head_bytes(), b.head_bytes());
@@ -2481,13 +1961,10 @@ mod tests {
         assert_eq!(t.progress.len(), 1);
     }
 
-    // -- coverage_gaps, the guard on the guard -----------------------------
-
     #[test]
     fn coverage_gaps_finds_a_real_hole() {
         let mut sink = CollectSink::new();
         let mut tm = Telemetry::start(spec(), &mut sink, Some(Duration::ZERO));
-        // Deliberately skip sectors 512..1024.
         tm.wrote(1, 0, &[0u8; 512 * 512]);
         tm.wrote(1, 1024, &[0u8; 512 * 1024]);
         tm.finish("complete");
@@ -2505,11 +1982,8 @@ mod tests {
         assert_eq!(t.coverage_gaps(), vec![(1, 100, 1948)]);
     }
 
-    // -- replay ------------------------------------------------------------
-
     #[test]
     fn a_recorded_trace_replays_with_no_engine_attached() {
-        // Record.
         let mut buf = Vec::new();
         {
             let rec = RecorderSink::new(&mut buf);
@@ -2527,7 +2001,6 @@ mod tests {
         assert_eq!(trace.coverage_gaps(), vec![]);
         assert!(recorded_bytes > 0);
 
-        // Replay, fast, through the same sink type the live engine drives.
         let mut out = CollectSink::new();
         let n = replay(&trace, &mut out, f64::INFINITY);
         assert_eq!(n, 18, "header + 16 frames + end");
@@ -2540,7 +2013,6 @@ mod tests {
             }
             _ => panic!("replay must open with a header and close with an end"),
         }
-        // The replayed stream is the recorded stream, event for event.
         let mut rebuilt = Vec::new();
         for e in &out.events {
             rebuilt.extend_from_slice(to_json_line(e).as_bytes());
@@ -2562,7 +2034,6 @@ mod tests {
         let recorded = trace.duration_ms();
         assert!(recorded >= 75.0, "recorded only {:.1} ms", recorded);
 
-        // 10x speed: must take roughly a tenth of the recorded span, and never longer.
         let mut out = CollectSink::new();
         let t = Instant::now();
         replay(&trace, &mut out, 10.0);
@@ -2599,8 +2070,6 @@ mod tests {
         assert_eq!(seen.coverage_gaps(), vec![], "and the canvas is still whole");
     }
 
-    // -- event size, so the figure in the build report is measured ----------
-
     #[test]
     fn the_wire_size_of_a_frame_is_what_the_build_report_says() {
         let mut sink = CollectSink::new();
@@ -2608,7 +2077,6 @@ mod tests {
         tm.wrote(1, 1_048_576, &pseudo(1, 512 * 256));
         tm.finish("complete");
         let line = to_json_line(&sink.events[1]);
-        // 512 hex characters of head plus the numeric readout.
         assert!(
             line.len() >= 700 && line.len() <= 900,
             "a frame is {} bytes on the wire",

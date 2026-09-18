@@ -1,21 +1,3 @@
-"""The Python half of the shared guard conformance table.
-
-READY TO COMMIT AS tests/test_guard_vectors.py. It is written here rather than
-under tests/ because tests/ was not this task's to write; see the Phase 3 report.
-
-fixtures/guard_vectors.json is the committed contract between the two write-guard
-implementations. `core/device/src/guard/unix.rs` runs every row in its own
-`conformance` module; this file runs the same rows against `fixtures/guard` (the POSIX backend).
-Neither implementation may drift from the table without a test going red.
-
-The expectations in the table were MEASURED from fixtures/guard.py. That is not
-circular: the point of this file is that they stay measured from it. If someone
-edits guard.py, this goes red. If someone edits guard.rs, the Rust test goes red.
-If someone edits the table to make either pass, the OTHER one goes red.
-
-Run: uv run pytest -q tests/test_guard_vectors.py
-"""
-
 from __future__ import annotations
 
 import json
@@ -31,20 +13,6 @@ if str(_REPO) not in sys.path:
 
 from fixtures import guard as G  # noqa: E402
 
-# fixtures/guard_vectors.json is the cross-language conformance table: every row
-# is a POSIX path, a POSIX mode and the code both the Python and the Rust guard
-# must return for it. It was measured against the POSIX backend and it is only
-# meaningful there -- the rows name /dev/disk0, /private/tmp and symlink layouts
-# that either do not exist on Windows or mean something else. Re-pointing the
-# table at Windows paths would not be a port; it would be a second table
-# asserting a second set of behaviours, and it would quietly stop being evidence
-# that the two LANGUAGES agree, which is the only thing this file exists to show.
-#
-# So the table stays POSIX-only and this file says so out loud. The Windows
-# backends are checked against each other's behaviour by
-# tests/test_guard_windows.py and core/device/src/guard/windows.rs, and the
-# guarantees that differ are tabulated in fixtures/guard/__init__.py and
-# docs/architecture.md D7.
 pytestmark = pytest.mark.skipif(
     os.name == "nt",
     reason=(
@@ -141,9 +109,6 @@ def table():
 
 @pytest.fixture(scope="module")
 def lab(table, tmp_path_factory):
-    # tmp_path_factory sits under the system temp directory, which on macOS is
-    # reached through a symlinked ancestor -- which is what makes the two
-    # aliasing control rows real rather than decorative.
     base = str(tmp_path_factory.mktemp("sw-guard-vectors"))
     _build_lab(table["lab"], base)
     real = os.path.realpath(base)
@@ -159,8 +124,6 @@ def lab(table, tmp_path_factory):
 
 
 def test_the_table_is_present_and_not_vacuous(table):
-    """Guard the guard: a truncated table would make every assertion below pass
-    while measuring nothing."""
     assert table["schema"] == "sentinelwipe.guard_vectors/1"
     rows, pol = table["rows"], table["policy_rows"]
     assert len(rows) >= 80, len(rows)
@@ -176,21 +139,6 @@ def test_the_table_is_present_and_not_vacuous(table):
 
 
 def test_every_code_the_python_guard_can_produce_is_accounted_for(table):
-    """The other half of the Rust `every_code_is_accounted_for` check.
-
-    A code is accounted for in exactly one of three ways: a row exercises it,
-    `codes_not_exercised` states why it is unreachable on this host, or
-    `codes_exercised_by_race_test` names a RACING test in each language that
-    reaches it, with the measured census from both.
-
-    The third bucket exists because the second one used to hold
-    DENY_RACE_DETECTED_AT_OPEN and DENY_SYMLINK_COMPONENT_AT_OPEN -- the two
-    clauses guarding the window between the decision and the open -- excused as
-    "not expressible in a static table in either language".  While that excuse
-    stood, all 85 rows passed in both languages against two guards that would
-    truncate a file outside every allowed root under a racing rename.  A clause
-    no test reaches is not a guard, and an excuse is not a measurement.
-    """
     codes = {v for k, v in vars(G).items()
              if k.startswith(("DENY_", "ALLOW_")) and isinstance(v, str)}
     assert len(codes) >= 25, codes
@@ -215,8 +163,6 @@ def test_every_code_the_python_guard_can_produce_is_accounted_for(table):
     for code, entry in raced.items():
         for field in ("rust_test", "python_test", "measured_rust", "measured_python"):
             assert entry.get(field, "").strip(), "%s.%s is empty" % (code, field)
-        # The named tests must EXIST.  A table naming a test nobody wrote is the
-        # same paper excuse wearing a different field name.
         pleaf = entry["python_test"].rsplit("::", 1)[-1]
         assert ("def %s(" % pleaf) in guard_py_tests, \
             "%s.python_test names %s, which is not in tests/test_guard.py" % (code, pleaf)
@@ -251,7 +197,7 @@ def test_every_row_agrees_with_guard_py(table, lab, capsys):
         kw = {} if row["platform"] == "native" else {"_platform": row["platform"]}
         try:
             d = G.authorize(pol, target, conf, mode=row["mode"], env=row["env"], **kw)
-        except Exception as e:                    # authorize must never raise
+        except Exception as e:
             failures.append(f"{name}: authorize RAISED {type(e).__name__}: {e}")
             if fd is not None:
                 os.close(fd)
@@ -327,9 +273,6 @@ def test_every_row_agrees_with_guard_py(table, lab, capsys):
 
 
 def test_the_policy_digest_payload_is_what_the_table_records(table, lab):
-    """The Rust guard cannot compute SHA-256 without a new dependency, so the
-    table records the canonical PAYLOAD both implementations must produce. This
-    asserts guard.py's end of that; core/device/src/guard/unix.rs asserts the other."""
     import hashlib
     checked = 0
     for name, spec in table["policies"].items():

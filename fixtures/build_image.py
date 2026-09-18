@@ -1,49 +1,3 @@
-"""Build a byte-identical-from-seed raw disk image with a planted, hashed corpus.
-
-This is the Phase-1 CLI. It owns no forensic logic of its own: it wires the four
-components together in the one order the contract fixes, and every byte it emits
-leaves through a descriptor issued by ``fixtures.guard``.
-
-    guard   -> the write policy, constructed FIRST, before anything is generated
-    corpus  -> 40 files of known SHA-256, own fixed-Huffman DEFLATE, no zlib
-    plan    -> every extent of every file chosen BEFORE a byte is written
-    fat32   -> the on-disk structure, obeying that plan exactly
-
-Order matters and is asserted below: the policy exists before the image bytes
-do, so there is no window in which a 256 MiB buffer is holding data no allowlist
-has been asked about.
-
-Outputs, both into the ``--out`` directory (gitignored):
-
-    fixture.img              the image
-    fixture.manifest.json    sentinelwipe.fixtures.manifest/1
-
-The tracked ``fixtures/manifest.json`` is NOT written here. It is a short
-pointer to this output plus the expected digests, committed so a checker can
-compare a hash instead of trusting a rebuild. See its ``note`` field.
-
-Determinism: no time, no random, no host stat, no locale, no uuid, no
-PYTHONHASHSEED dependence. Everything derived from --seed via hashlib. The
-manifest is written in BINARY through the guard's raw descriptor with explicit
-b"\\n", so CPython text-mode newline translation cannot move its hash.
-
-Exit status -- the build FAILS on drift, it does not merely mention it:
-
-    0  built, and it matches the digests committed in fixtures/manifest.json
-       (or that record carries none / is for a different seed and size)
-    1  a build-time invariant failed
-    2  bad argument
-    3  the write guard refused --out
-    4  built, but it does NOT match the committed digests. The comparison runs
-       in --quiet as well; --no-check-expected turns this back into 0 for a
-       deliberate fixture change, which then updates the record in the same
-       commit.
-
-Usage:
-    uv run python fixtures/build_image.py --seed sentinelwipe/fixture/v1 \\
-        --size 256MiB --out out
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -94,9 +48,6 @@ _UNITS = {
 
 
 def parse_size(text: str) -> int:
-    """'256MiB' / '268435456' / '256M' -> bytes. Binary and decimal both
-    spelled explicitly, because a fixture size that means two things is a
-    reproducibility hazard."""
     s = str(text).strip().replace("_", "")
     i = 0
     while i < len(s) and (s[i].isdigit()):
@@ -114,43 +65,11 @@ def parse_size(text: str) -> int:
 
 
 def _seed_volume_id(seed: str) -> int:
-    """FAT32 volume serial, derived from the seed so it is a function of the
-    fixture and of nothing else. Never a clock reading -- the usual source for
-    this field, and the usual reason two 'identical' images differ."""
     return int.from_bytes(hashlib.shake_128(
         ("%s|volume-id" % seed).encode("utf-8")).digest(4), "big")
 
 
-# --------------------------------------------------------------------------
-# The residue adapter -- where two components disagreed
-# --------------------------------------------------------------------------
-
-
 def _residue_adapter(placements, residue_fn):
-    """Reconcile plan.make_residue_fn with fat32.build_image.
-
-    plan's residue_fn returns ``None`` for "do not write this cluster";
-    fat32.build_image requires exactly ``nbytes`` and raises otherwise. Both
-    are defensible on their own and they do not compose, so the join is made
-    here, in the caller, explicitly rather than by loosening either side.
-
-    Measured disagreement at 256 MiB / 2048 B clusters: exactly two clusters,
-    4 and 5. plan reserves clusters 2..5 for the root directory chain
-    (ROOT_DIR_CLUSTERS = 4); fat32 measures the chain at 2 clusters for the
-    40 real corpus names and takes 2..3, leaving 4 and 5 free-and-unclaimed
-    and therefore offered to residue. Those two are the head-room plan
-    deliberately keeps empty, so they are written as zeros -- an unwritten
-    cluster, which is what they are.
-
-    The other None case is the one that must never be quietly absorbed: a
-    cluster claimed by a planted extent. plan returns None there as its own
-    last line of defence for the 12 deleted files, whose FAT chains are freed
-    and whose clusters therefore read as FAT-free. If fat32 ever offers one,
-    this raises instead of zero-filling it. That is the 40-to-28 defect, and
-    silence is exactly how it happened last time.
-
-    Returns (fn, stats) where stats counts what actually happened.
-    """
     claimed = plan_mod.claimed_clusters(placements)
     stats = {"residue_written": 0, "root_reserve_zeroed": 0}
 
@@ -170,15 +89,7 @@ def _residue_adapter(placements, residue_fn):
     return fn, stats
 
 
-# --------------------------------------------------------------------------
-# Build
-# --------------------------------------------------------------------------
-
-
 class BuildResult:
-    """What the build measured. Every field here is a measurement, not a
-    parameter that was hoped for."""
-
     __slots__ = ("seed", "geo", "placements", "image", "manifest", "manifest_bytes",
                  "image_sha256", "manifest_sha256", "entropy", "stats",
                  "image_path", "manifest_path", "policy")
@@ -194,10 +105,6 @@ def build(seed: str = DEFAULT_SEED,
           bytes_per_cluster: int = 0,
           write: bool = True,
           progress=None) -> BuildResult:
-    """Generate the fixture. With ``write=False`` nothing touches the disk and
-    no Policy is constructed -- that path exists for the reproducibility test,
-    which builds twice in one process and compares hashes."""
-
     def say(msg: str) -> None:
         if progress is not None:
             progress(msg)
@@ -208,10 +115,6 @@ def build(seed: str = DEFAULT_SEED,
 
     policy = None
     if write:
-        # The guard is constructed FIRST, before a single byte is generated.
-        # Policy() refuses a root that does not exist and never creates its
-        # own, so the directory is made here and the allowlist is asked about
-        # it immediately afterwards.
         try:
             os.makedirs(out_abs, exist_ok=True)
         except OSError as e:
@@ -251,16 +154,6 @@ def build(seed: str = DEFAULT_SEED,
     entropy = corpus_mod.shannon_bits_per_byte(image)
     say("entropy    %.4f bits/byte, measured over all %d bytes" % (entropy, len(image)))
 
-    # Two things Phase 2 would otherwise have to guess, both measured here so
-    # the carver reads them instead of hardcoding them:
-    #
-    #  max_gap_clusters / max_gap_is_inclusive -- FRAG-03's gap is EXACTLY the
-    #  budget, so `gap < budget` silently costs one file. The convention is
-    #  published rather than implied.
-    #
-    #  residue_signature_false_positives -- the 3-byte magics (JPEG, GZIP, BZ2)
-    #  DO occur by chance in the SHAKE residue. Counted on the finished image,
-    #  so a precision figure has a floor to subtract rather than a surprise.
     false_positives = plan_mod.measure_signature_false_positives(placements, image)
     say("residue FP %s" % ", ".join("%s %d" % (k, v)
                                     for k, v in sorted(false_positives.items())))
@@ -296,25 +189,12 @@ def build(seed: str = DEFAULT_SEED,
 
 
 def _encode_manifest(manifest: dict) -> bytes:
-    """JSON -> bytes, with every newline placed by hand.
-
-    json.dumps(indent=2) emits "\\n"; encoding to UTF-8 here and handing the
-    result to os.write means no text layer ever sees it. On Windows a text-mode
-    write would turn each of those into "\\r\\n" and change the manifest hash,
-    which is rule 5. ensure_ascii keeps the bytes independent of any locale.
-    """
     text = json.dumps(manifest, indent=2, ensure_ascii=True, sort_keys=False,
                       separators=(",", ": "))
     return text.encode("utf-8").replace(b"\r\n", b"\n") + b"\n"
 
 
 def _guarded_write(policy, path: str, payload: bytes) -> int:
-    """Every byte of the fixture leaves through a descriptor the guard issued.
-
-    Mode "w": creates the target if absent, truncates it if a previous build
-    left one. The descriptor is a raw int and the caller closes it, so the
-    close is in a finally.
-    """
     fd = guard_mod.open_authorized(policy, path, "w")
     try:
         os.ftruncate(fd, 0)
@@ -329,11 +209,6 @@ def _guarded_write(policy, path: str, payload: bytes) -> int:
     return written
 
 
-# --------------------------------------------------------------------------
-# CLI
-# --------------------------------------------------------------------------
-
-
 MATCH = "match"
 MISMATCH = "mismatch"
 NO_RECORD = "no-record"
@@ -341,14 +216,6 @@ NOT_COMPARABLE = "not-comparable"
 
 
 def _compare_expected(res: BuildResult, expected_path: str) -> tuple:
-    """Compare the build against the committed digest record.
-
-    Returns (verdict, expected_or_None). The verdict is the ONLY thing the
-    exit status is derived from, and it is computed here rather than inside
-    the printer, so --quiet cannot skip the comparison. That was the defect:
-    `make fixtures` printed "committed sha256 match  NO" and exited 0, and in
-    --quiet -- the advertised scripting mode -- it never compared at all.
-    """
     exp = _read_expected(expected_path)
     if exp is None:
         return NO_RECORD, None
@@ -360,7 +227,6 @@ def _compare_expected(res: BuildResult, expected_path: str) -> tuple:
 
 
 def _write_mismatch(res: BuildResult, exp: dict, expected_path: str) -> None:
-    """The two hash pairs, on stderr, in both quiet and loud modes."""
     w = sys.stderr.write
     w("build_image: BUILT FIXTURE DOES NOT MATCH %s\n"
       % os.path.relpath(expected_path, _REPO))
@@ -414,8 +280,6 @@ def _report(res: BuildResult, expected_path: str, verdict: str, exp) -> None:
 
 
 def _read_expected(path: str):
-    """The committed expectation record, or None. Read-only; nothing in the
-    build path writes it."""
     try:
         with open(path, "rb") as fh:
             doc = json.loads(fh.read().decode("utf-8"))
@@ -461,9 +325,6 @@ def main(argv=None) -> int:
         res = build(seed=args.seed, size_bytes=size_bytes, out_dir=args.out,
                     bytes_per_cluster=args.bytes_per_cluster, progress=progress)
     except guard_mod.PolicyError as e:
-        # --out named a place no fixture may be written to. The allowlist said
-        # so before anything was generated, which is the point of building the
-        # policy first.
         sys.stderr.write("build_image: refusing --out %r: %s\n" % (args.out, e))
         return 3
     except guard_mod.GuardError as e:
@@ -474,9 +335,6 @@ def main(argv=None) -> int:
         sys.stderr.write("build_image: %s\n" % e)
         return 1
 
-    # The comparison runs in BOTH modes. Exit status carries it, so `make
-    # fixtures` and any script that shells out here fail on drift instead of
-    # printing "NO" and returning success.
     expected_path = os.path.join(_REPO, "fixtures", "manifest.json")
     verdict, exp = _compare_expected(res, expected_path)
 
@@ -486,7 +344,7 @@ def main(argv=None) -> int:
         sys.stdout.write("%s  %s\n" % (res.image_sha256, res.image_path))
 
     if verdict == MISMATCH:
-        sys.stdout.flush()                 # so the report precedes the stderr block
+        sys.stdout.flush()
         _write_mismatch(res, exp, expected_path)
         if args.no_check_expected:
             sys.stderr.write("build_image: --no-check-expected given; "

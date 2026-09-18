@@ -1,26 +1,7 @@
 #!/usr/bin/env python3
-"""Run the adversarial loop, then rebuild the UI from what it produced.
-
-Phase 4 rewired this file: it used to drive three binaries by argv and is now a
-thin caller of `verify`, which runs the loop with parameter identity enforced
-by construction, signs the certificate, and appends to the chain. This script
-splits the bundle into the files the payload builder reads and nothing more.
-
-This is what makes the frontend part of the product rather than a picture of it:
-the pages ship showing the output of a real run, and `make ui` re-runs the engine
-and re-inlines. Nothing here is a fixture of a fixture.
-
-SAFETY. The wipe never touches out/fixture.img. It runs against a COPY inside a
-scratch directory, with --allow-root pointed at that directory, so the guard's
-containment check is what stops a mistake rather than this script's good
-intentions. The fixture's sha256 is recorded before and re-verified after, and a
-change is a hard failure.
-"""
 import hashlib, json, os, pathlib, shutil, subprocess, sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
-# cargo appends .exe on Windows. Without this the pipeline exits 3 naming a path
-# that is correct on macOS and Linux and has never existed on Windows.
 EXE = ".exe" if os.name == "nt" else ""
 CARVE  = REPO / f"core/target/release/carve{EXE}"
 WIPE   = REPO / f"core/target/release/wipe{EXE}"
@@ -39,8 +20,6 @@ def sha256(p):
     return h.hexdigest()
 
 def run(argv, out=None, label="", ok=(0,)):
-    """Returns the exit code (always in `ok`). A tolerated non-zero is the
-    caller's to handle LOUDLY -- tolerance is for pipelines, not for silence."""
     print(f"  $ {' '.join(str(a) for a in argv[:4])} …" if len(argv) > 4
           else f"  $ {' '.join(str(a) for a in argv)}")
     r = subprocess.run(argv, capture_output=True, text=True)
@@ -75,11 +54,6 @@ def main():
          "--trace", WORK / "telemetry.jsonl", "--period-ms", "8",
          "--out", WORK / "bundle.json"],
         label="verify", ok=(0, 7))
-    # exit 7 is SURVIVORS: an admitted candidate outlived the wipe. The bundle
-    # is still written and the pages still rebuild -- evidence of a failure is
-    # still evidence, and the instrument exists to SHOW it -- but this script
-    # must not pretend the claim held: it re-raises at the end, after the
-    # pages are rebuilt, so a human sees the evidence and automation the red.
 
     after = sha256(IMG)
     if after != before:
@@ -87,9 +61,6 @@ def main():
             "A wipe reached out/fixture.img; stop and investigate.", 9)
     print("refresh: fixture sha256 re-verified unchanged")
 
-    # Split the bundle into the files the payload builder reads. json round-trip
-    # is fine here: these copies feed the DISPLAY payload; the signed artifact
-    # is the bundle itself and is carried through byte-untouched.
     bundle = json.loads((WORK / "bundle.json").read_bytes())
     for key, name in (("carve_pre", "carve_pre.json"), ("carve_post", "carve_post.json"),
                       ("wipe", "wipe.json")):

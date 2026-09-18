@@ -306,7 +306,7 @@ victim byte-unchanged.
 
 ## Limitations, stated rather than discovered
 
-CLAUDE.md rule 1: the tool never claims more than it verified.
+The tool never claims more than it verified.
 
 - **Sampled read-back covers 0.1953% of the medium** (1,024 of 524,288 sectors). The outcome
   code says so — `OVERWRITE_VERIFIED_ON_SAMPLE`, `whole_medium_claim: false`. The largest run

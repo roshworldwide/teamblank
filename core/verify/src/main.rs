@@ -1,16 +1,3 @@
-//! `verify` — the adversarial loop as one command that cannot be run wrong.
-//!
-//! Exit codes, published here and nowhere narrower:
-//!   0  loop complete, ZERO admitted candidates survived, bundle written
-//!   2  usage
-//!   4  the guard refused (allowlist, confirmation, containment)
-//!   5  the wipe failed
-//!   6  ledger failure (canonicalization, signature, chain)
-//!   7  SURVIVORS: at least one admitted candidate outlived the wipe. The
-//!      loop ran to completion and the bundle is still written — evidence of
-//!      a failure is still evidence — but the exit code says the claim did
-//!      not hold.
-
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -29,8 +16,6 @@ fn main() -> ExitCode {
         .skip(1)
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
-    // Auditor mode: nothing destructive, nothing signed — read a bundle and
-    // check the two independent proofs it carries.
     if args.first().map(String::as_str) == Some("--audit") {
         let Some(path) = args.get(1) else {
             eprintln!("verify: --audit needs a bundle path");
@@ -94,11 +79,6 @@ fn main() -> ExitCode {
         return ExitCode::from(2);
     };
 
-    // The guard requires absolute roots — a relative root means a different
-    // directory per cwd, which is an allowlist that moves. Absolutize here,
-    // and let the typed confirmation follow the SAME transformation only when
-    // it equals the typed target: the operator confirmed this target, in
-    // whatever spelling they used, and the guard compares resolved strings.
     let absolutize = |p: &PathBuf| -> PathBuf {
         if p.is_absolute() {
             p.clone()

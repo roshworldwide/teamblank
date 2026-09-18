@@ -1,16 +1,6 @@
-# SENTINELWIPE. Targets land phase by phase; every target here either does the
-# real work or exits non-zero naming the phase that implements it. No target ever
-# reports success for work that has not been done.
-
 .DEFAULT_GOAL := help
 .PHONY: help fixtures clean-fixtures build test ui ui-serve ui-check ui-render app demo verify
 
-# The fixture is generated from a seed and never committed. OUT is gitignored
-# and is the ONLY path the Phase-0 write guard allows the builder to write to.
-# The digests this seed must reproduce are committed in fixtures/manifest.json;
-# `make fixtures` compares against them and EXITS 4 on a mismatch. A deliberate
-# fixture change is rebuilt with CHECK= (which passes --no-check-expected) and
-# updates that record in the same commit.
 SEED ?= sentinelwipe/fixture/v1
 # CHECK=--no-check-expected rebuilds a DELIBERATE change without failing.
 CHECK ?=
@@ -39,8 +29,6 @@ help:
 fixtures:
 	uv run python fixtures/build_image.py --seed "$(SEED)" --size "$(SIZE)" --out "$(OUT)" $(CHECK)
 
-# Reports what it actually removed. A message naming two files it never found
-# is a claim the command did not verify, which is the shape rule 1 forbids.
 clean-fixtures:
 	@n=0; for f in "$(IMAGE)" "$(MANIFEST)"; do \
 	  if [ -f "$$f" ]; then rm -f "$$f" && n=$$((n+1)) && echo "sentinelwipe: removed $$f"; fi; \
@@ -57,31 +45,14 @@ test:
 	cd core && cargo test --release
 	uv run pytest tests/ -q
 
-# The pages are self-contained by design -- one file, no build step, no network,
-# so they open from a USB stick on an air-gapped machine. That makes the payload
-# and the token layer COPIES, so this is the regeneration step AND the drift
-# detector: a page whose gold is one digit off from ui/tokens.css exits 4.
 ui-check:
 	uv run python ui/inline.py
 
-# Renders ui/recover.html in a real browser and measures it: the hero caption
-# is not truncated, the evidence panel does not paint over the control bar, the
-# cascade settles on the files we did NOT recover, and the map is painted in
-# ui/tokens.css's own values rather than forked literals.
-#
-# playwright is a browser and is deliberately NOT a project dependency, so this
-# is its own target and `make test` skips these. --no-project is required:
-# `uv run --with playwright pytest` resolves the console script inside the
-# project venv, which the overlay never reaches, so every test would skip and
-# pytest would still exit 0 -- a green run that checked nothing.
 ui-render:
 	uv run --no-project --with playwright python -m playwright install chromium
 	uv run --no-project --with playwright --with pytest python -m pytest \
 	    tests/test_recover_render.py -q
 
-# Runs the engine and rebuilds the pages from what it produced. The wipe targets
-# a COPY under $(OUT)/ui-run; out/fixture.img is never a target and its sha256 is
-# re-verified afterwards.
 ui: build
 	uv run python ui/refresh.py
 	@echo ""
@@ -90,20 +61,10 @@ ui: build
 	 xdg-open ui/approach.html 2>/dev/null || \
 	 echo "  open these by hand: ui/approach.html  ui/instrument.html"
 
-# file:// is enough for both pages. This target exists for the case where a
-# browser policy blocks local file reads; it serves the SAME files unchanged.
 ui-serve:
 	@echo "sentinelwipe: http://localhost:8787/instrument.html  (ctrl-C to stop)"
 	@cd ui && uv run python -m http.server 8787 --bind 127.0.0.1
 
-# CLAUDE.md's six steps, all real: the loop runs through core/verify with
-# parameter identity by construction, the certificate is Ed25519-signed with
-# the custody statement inside the signed bytes, and the chain head is
-# published. The forge button edits the presented copy of the canonical
-# bytes and the divergence is shown by name.
-# The desktop shell: the two pages in a native window over the platform webview.
-# No Chromium bundle, no network, runs on an air-gapped machine with nothing
-# installed. Needs tauri-cli once: cargo install tauri-cli --locked
 app:
 	@command -v cargo-tauri >/dev/null || { \
 	  echo "sentinelwipe: tauri-cli not installed. Once: cargo install tauri-cli --locked" >&2; exit 3; }
@@ -127,9 +88,6 @@ demo: build
 	@open ui/instrument.html 2>/dev/null || xdg-open ui/instrument.html 2>/dev/null || \
 	 echo "open ui/instrument.html"
 
-# The acceptance loop: carve, wipe, carve again with identical parameters,
-# sign, chain — then audit the bundle from cold, twice: the clean bundle must
-# pass and a forged copy must fail, so a broken auditor cannot pass quietly.
 verify: build
 	@test -f "$(IMAGE)" || $(MAKE) --no-print-directory fixtures
 	@rm -rf $(OUT)/verify-run && mkdir -p $(OUT)/verify-run

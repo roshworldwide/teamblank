@@ -1,70 +1,17 @@
-//! RFC 8785 JSON Canonicalization Scheme — the SENTINELWIPE profile.
-//!
-//! A signature over JSON is meaningless unless the bytes are reproducible, so
-//! everything the ledger signs passes through here first. This module
-//! implements RFC 8785 with ONE deliberate restriction, stated on the record:
-//!
-//!   NUMBERS ARE INTEGERS ONLY, in the interval [-(2^53-1), 2^53-1].
-//!
-//! RFC 8785 §3.2.2.3 requires ECMAScript's IEEE-754 double serialization
-//! (ECMA-262 §7.1.12.1) and points implementers at V8 and Ryu for the general
-//! case. SENTINELWIPE's certificate carries no floating point at all — ratios
-//! are integer numerator/denominator pairs, measured continuous values are
-//! fixed six-decimal STRINGS copied verbatim from the engine's report — so the
-//! only numbers reaching this serializer are integers within the ECMAScript
-//! safe range, for which §3.2.2.3 degenerates to plain decimal digits. The
-//! difficult half of the algorithm is not implemented; it is unreachable, and
-//! `Value` has no float variant so the compiler enforces that.
-//!
-//! What IS implemented, with the section that requires it:
-//!   §3.2.1     no inter-token whitespace
-//!   §3.2.2.2   string escaping: \b \t \n \f \r for U+0008/09/0A/0C/0D, \uhhhh
-//!              with LOWERCASE hex for the remaining controls U+0000..U+001F,
-//!              \\ and \" for backslash and quote, everything else raw UTF-8
-//!   §3.2.2.3   NaN/Infinity cannot occur (no float variant); integers beyond
-//!              the safe range are refused with an error, never wrapped
-//!   §3.2.3     object properties sorted recursively by their RAW (unescaped)
-//!              names as arrays of UTF-16 code units compared as unsigned
-//!              integers; array element order is never changed
-//!   §3.2.4     output is UTF-8
-//!
-//! Lone surrogates, which §3.2.2.2 says MUST terminate a compliant
-//! implementation, cannot reach the serializer: Rust's `String` is valid
-//! UTF-8 by construction. The PARSER enforces the same rule at the boundary —
-//! a `\uD800` escape without its low half is an error, never a replacement
-//! character, because a silently "repaired" key would sign different bytes
-//! than the document the operator read.
-//!
-//! The parser accepts exactly what the serializer emits, plus insignificant
-//! whitespace between tokens. It refuses, by design: any float syntax
-//! (fraction or exponent), duplicate object keys, integers outside the safe
-//! range, and trailing input. Refusal beats coercion everywhere: a document
-//! this module will not parse is a document the ledger will not sign.
-
 use std::fmt;
 
-/// 2^53 − 1. ECMAScript's Number.MAX_SAFE_INTEGER; RFC 8785 inherits it.
 pub const MAX_SAFE_INT: i64 = 9_007_199_254_740_991;
 
 #[derive(Clone, Debug)]
 pub enum Value {
     Null,
     Bool(bool),
-    /// Integers only. There is no float variant on purpose; see module docs.
     Int(i64),
     Str(String),
     Arr(Vec<Value>),
-    /// Insertion order is preserved in memory; §3.2.3 ordering is applied at
-    /// serialization time. Duplicate keys are refused at parse/build time.
     Obj(Vec<(String, Value)>),
 }
 
-/// Equality is JSON-structural, not representational: two objects with the
-/// same properties are the same object regardless of insertion order, because
-/// §3.2.3 erases that order from every signed byte. A derived PartialEq on
-/// the backing Vec was order-sensitive, and the 10,000-certificate property
-/// test caught it on case 15: parse(canonical(v)) returned the sorted form
-/// and compared unequal to a value it was byte-identical with.
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -72,7 +19,7 @@ impl PartialEq for Value {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Int(a), Value::Int(b)) => a == b,
             (Value::Str(a), Value::Str(b)) => a == b,
-            (Value::Arr(a), Value::Arr(b)) => a == b, // array order IS meaning
+            (Value::Arr(a), Value::Arr(b)) => a == b,
             (Value::Obj(a), Value::Obj(b)) => {
                 if a.len() != b.len() {
                     return false;
@@ -95,14 +42,9 @@ impl Eq for Value {}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum JcsError {
-    /// Integer outside [-(2^53-1), 2^53-1] — §3.2.2.3 safe-range profile.
     UnsafeInteger(i64),
-    /// The parser met a fraction or exponent. Floats never enter the ledger.
     FloatRefused { at: usize },
-    /// Two properties with the same raw name — the signature would be over a
-    /// document with an ambiguous reading.
     DuplicateKey { key: String },
-    /// Malformed input at byte offset, with a one-line reason.
     Parse { at: usize, what: &'static str },
 }
 
@@ -124,7 +66,6 @@ impl fmt::Display for JcsError {
 }
 
 impl Value {
-    /// Build an object refusing duplicates at the door.
     pub fn obj(pairs: Vec<(String, Value)>) -> Result<Value, JcsError> {
         for (i, (k, _)) in pairs.iter().enumerate() {
             if pairs[..i].iter().any(|(p, _)| p == k) {
@@ -134,7 +75,6 @@ impl Value {
         Ok(Value::Obj(pairs))
     }
 
-    /// Fetch a property by raw name, wherever §3.2.3 will sort it.
     pub fn get(&self, key: &str) -> Option<&Value> {
         match self {
             Value::Obj(pairs) => pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v),
@@ -143,17 +83,10 @@ impl Value {
     }
 }
 
-/// §3.2.3: compare raw property names as UTF-16 code-unit arrays, code units
-/// as unsigned integers. This DISAGREES with `str`'s own ordering for keys
-/// beyond the BMP: U+10000 encodes as the surrogate pair D800 DC00, and
-/// 0xD800 < 0xE000, so an astral key sorts BEFORE U+E000 under JCS while
-/// byte-wise UTF-8 puts it after. A BTreeMap<String> would sign the wrong
-/// order and every such signature would verify nowhere else.
 fn utf16_lt(a: &str, b: &str) -> std::cmp::Ordering {
     a.encode_utf16().cmp(b.encode_utf16())
 }
 
-/// Serialize to canonical bytes. Errors only on an unsafe integer.
 pub fn canonical(v: &Value) -> Result<Vec<u8>, JcsError> {
     let mut out = Vec::with_capacity(256);
     write_value(v, &mut out)?;
@@ -169,8 +102,6 @@ fn write_value(v: &Value, out: &mut Vec<u8>) -> Result<(), JcsError> {
             if n.abs() > MAX_SAFE_INT {
                 return Err(JcsError::UnsafeInteger(*n));
             }
-            // ECMA-262 §7.1.12.1 over the safe-integer domain: minus sign and
-            // decimal digits, nothing else. (−0 is unrepresentable in i64.)
             out.extend_from_slice(n.to_string().as_bytes());
         }
         Value::Str(s) => write_string(s, out),
@@ -202,7 +133,6 @@ fn write_value(v: &Value, out: &mut Vec<u8>) -> Result<(), JcsError> {
     Ok(())
 }
 
-/// §3.2.2.2, exactly. Lowercase hex in \uhhhh is normative.
 fn write_string(s: &str, out: &mut Vec<u8>) {
     out.push(b'"');
     for c in s.chars() {
@@ -225,11 +155,6 @@ fn write_string(s: &str, out: &mut Vec<u8>) {
     }
     out.push(b'"');
 }
-
-// ---------------------------------------------------------------------------
-// The strict parser. Accepts canonical output plus insignificant whitespace;
-// refuses everything the module documentation says it refuses.
-// ---------------------------------------------------------------------------
 
 pub fn parse(input: &[u8]) -> Result<Value, JcsError> {
     let mut p = Parser { b: input, i: 0 };
@@ -295,12 +220,9 @@ impl<'a> Parser<'a> {
         if self.i == digits_start {
             return Err(self.err("minus sign with no digits"));
         }
-        // JSON forbids leading zeros; canonical form has none.
         if self.i - digits_start > 1 && self.b[digits_start] == b'0' {
             return Err(self.err("leading zero"));
         }
-        // The refusal that defines this profile: any fraction or exponent is
-        // a float, and floats never enter the ledger.
         match self.b.get(self.i) {
             Some(b'.') | Some(b'e') | Some(b'E') => {
                 return Err(JcsError::FloatRefused { at: self.i })
@@ -356,8 +278,6 @@ impl<'a> Parser<'a> {
                         b'u' => {
                             let hi = self.hex4()?;
                             if (0xD800..=0xDBFF).contains(&hi) {
-                                // §3.2.2.2 note: a lone surrogate MUST be an
-                                // error. Demand the low half immediately.
                                 self.eat(b"\\u", "high surrogate without its low half")?;
                                 let lo = self.hex4()?;
                                 if !(0xDC00..=0xDFFF).contains(&lo) {
@@ -378,7 +298,6 @@ impl<'a> Parser<'a> {
                 }
                 0x00..=0x1F => return Err(self.err("raw control character in string")),
                 _ => {
-                    // Consume one UTF-8 encoded code point.
                     let rest = &self.b[self.i..];
                     let txt = std::str::from_utf8(rest)
                         .or_else(|e| {
@@ -453,16 +372,10 @@ impl<'a> Parser<'a> {
 }
 
 
-// ---------------------------------------------------------------------------
-/// Deterministic test corpus, shared by the property test and by
-/// `examples/gen_jcs_vectors.rs`, which writes the committed cross-language
-/// vector file. Public so the example can link it; hidden because it is not
-/// part of the ledger's API.
 #[doc(hidden)]
 pub mod corpus {
     use super::{Value, MAX_SAFE_INT};
 
-    /// xorshift64*: no dependency, same bytes every run on every platform.
     pub struct Rng(pub u64);
     impl Rng {
         fn next(&mut self) -> u64 {
@@ -478,9 +391,6 @@ pub mod corpus {
         }
     }
 
-    /// Keys and strings drawn to hit the sorting edges on purpose: ASCII,
-    /// controls, BMP high range (U+E000), astral (U+10000, U+1F600), and the
-    /// characters RFC 8785 §3.2.2.2 escapes.
     pub fn gen_string(r: &mut Rng) -> String {
         const POOL: &[&str] = &[
             "a", "A", "0", "9", "\u{e000}", "\u{10000}", "\u{1f600}", "\u{20ac}",
@@ -518,9 +428,6 @@ pub mod corpus {
         }
     }
 
-    /// A deliberately NON-canonical rendering of the same value: original
-    /// insertion order, random whitespace, and \u-escaped ASCII sometimes.
-    /// This is the strict parser's diet, and the cross-language input.
     pub fn messy(v: &Value, r: &mut Rng, out: &mut String) {
         let pad = |r: &mut Rng, out: &mut String| {
             for _ in 0..r.below(3) {
@@ -542,7 +449,7 @@ pub mod corpus {
                     } else if u < 0x20 {
                         out.push_str(&format!("\\u{u:04x}"));
                     } else if u < 0x80 && r.below(4) == 0 {
-                        out.push_str(&format!("\\u{u:04X}")); // uppercase hex input
+                        out.push_str(&format!("\\u{u:04X}"));
                     } else if c == '/' && r.below(2) == 0 {
                         out.push_str("\\/");
                     } else {
@@ -583,7 +490,6 @@ pub mod corpus {
     }
 }
 
-// ---------------------------------------------------------------------------
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -595,10 +501,6 @@ mod tests {
         String::from_utf8(canonical(v).unwrap()).unwrap()
     }
 
-    // -- §3.2.2.2 · the RFC's own canonical string, reproduced -------------
-    // RFC 8785 §3.2.3 shows the canonical form of its running sample as
-    //   "string":"€$\u000f\nA'B\"\\\\\"/"
-    // The raw value is: € $ U+000F LF A ' B " \ \ " /
     #[test]
     fn the_rfcs_own_sample_string_serializes_to_its_published_bytes() {
         let raw = "\u{20ac}$\u{000f}\nA'B\"\\\\\"/";
@@ -610,18 +512,12 @@ mod tests {
     fn control_characters_use_the_named_escapes_and_lowercase_hex_for_the_rest() {
         assert_eq!(canon(&s("\u{08}\t\n\u{0c}\r")), "\"\\b\\t\\n\\f\\r\"");
         assert_eq!(canon(&s("\u{00}\u{1f}\u{0b}")), "\"\\u0000\\u001f\\u000b\"");
-        // DEL is NOT a JSON control character and stays raw (§3.2.2.2 scopes
-        // escaping to U+0000..U+001F).
         assert_eq!(canon(&s("\u{7f}")), "\"\u{7f}\"");
-        // Forward slash is emitted raw; the PARSER accepts \/ as input.
         assert_eq!(canon(&s("/")), "\"/\"");
     }
 
-    // -- §3.2.3 · UTF-16 code-unit ordering --------------------------------
     #[test]
     fn astral_keys_sort_before_u_e000_because_surrogates_do() {
-        // U+10000 is D800 DC00 in UTF-16; 0xD800 < 0xE000. Code-POINT order
-        // says the opposite, so a BTreeMap<String> would sign the wrong order.
         let v = Value::obj(vec![
             ("\u{e000}".into(), Value::Int(1)),
             ("\u{10000}".into(), Value::Int(2)),
@@ -658,7 +554,6 @@ mod tests {
         assert_eq!(canon(&v), "[3,{\"a\":1,\"b\":2},1]");
     }
 
-    // -- §3.2.2.3 · the integer profile ------------------------------------
     #[test]
     fn the_safe_range_boundary_is_exact_in_both_directions() {
         assert_eq!(canon(&Value::Int(MAX_SAFE_INT)), "9007199254740991");
@@ -686,8 +581,6 @@ mod tests {
 
     #[test]
     fn minus_zero_input_canonicalizes_to_zero_like_ecmascript_says() {
-        // ECMA-262 §7.1.12.1 prints −0 as "0"; our i64 cannot even hold −0,
-        // so accepting the input and emitting "0" is the whole behaviour.
         let v = parse(b"-0").unwrap();
         assert_eq!(canon(&v), "0");
     }
@@ -698,7 +591,6 @@ mod tests {
             parse(b"{\"k\":1,\"k\":2}"),
             Err(JcsError::DuplicateKey { .. })
         ));
-        // The duplicate check runs on RAW names: "\u0041" and "A" collide.
         assert!(matches!(
             parse(b"{\"\\u0041\":1,\"A\":2}"),
             Err(JcsError::DuplicateKey { .. })
@@ -720,12 +612,10 @@ mod tests {
                 "{bad:?} must error"
             );
         }
-        // A correct pair round-trips to raw UTF-8 of the supplementary char.
         assert_eq!(parse(b"\"\\ud83d\\ude00\"").unwrap(), s("\u{1f600}"));
         assert_eq!(canon(&s("\u{1f600}")), "\"\u{1f600}\"");
     }
 
-    // -- the 10,000-certificate property test -------------------------------
     use super::corpus::{gen_value, messy, Rng};
     
 
@@ -746,9 +636,6 @@ mod tests {
             assert_eq!(c1, c2, "case {i}: canonical bytes drifted");
             assert_eq!(parsed, v, "case {i}: structure drifted");
 
-            // The messy rendering of the SAME value canonicalizes to the
-            // SAME bytes: whitespace, key order and escape spelling are all
-            // erased by the scheme, which is the entire point of it.
             let mut m = String::new();
             messy(&v, &mut r, &mut m);
             let from_messy = parse(m.as_bytes())
@@ -759,7 +646,6 @@ mod tests {
 
     #[test]
     fn the_property_test_is_not_vacuous() {
-        // A generator that only ever emits Null would pass everything above.
         let mut r = Rng(0x5EED_5EED_5EED_5EED);
         let mut kinds = [0u32; 6];
         for _ in 0..10_000 {
@@ -774,7 +660,6 @@ mod tests {
         }
         assert!(kinds.iter().all(|&k| k > 400), "degenerate generator: {kinds:?}");
     }
-    // -- the committed cross-language vectors --------------------------------
     #[test]
     fn the_committed_vectors_are_what_this_implementation_produces() {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -782,7 +667,6 @@ mod tests {
         let bytes = std::fs::read(&path).expect("fixtures/jcs_vectors.json — run             cargo run --release -p sentinelwipe-ledger --example gen_jcs_vectors");
         let doc = parse(&bytes).expect("the vector file parses under the strict parser");
 
-        // The file is a fixed point of the scheme it tests.
         assert_eq!(canonical(&doc).unwrap(), bytes, "the committed file is not canonical");
 
         let arr = |v: &Value| match v {
@@ -796,7 +680,6 @@ mod tests {
 
         let vectors = arr(doc.get("vectors").expect("vectors"));
         let refusals = arr(doc.get("refusals").expect("refusals"));
-        // Non-vacuity: a truncated file must not pass quietly.
         assert!(vectors.len() >= 70, "only {} vectors", vectors.len());
         assert!(refusals.len() >= 12, "only {} refusals", refusals.len());
 
@@ -827,12 +710,6 @@ mod tests {
             assert_eq!(got, class, "refusal {name} changed class");
         }
     }
-    // -- the value-model vectors the Python original committed first ---------
-    // fixtures/canon_vectors.json predates this module: the Python side
-    // (py/sentinelwipe/canon.py) wrote it with a promise in its test file that
-    // "a Rust test reads the same file and asserts the same bytes". This is
-    // that test, keeping that promise. Direction of truth is per-file:
-    // canon_vectors.json was measured from Python; jcs_vectors.json from Rust.
     #[test]
     fn the_python_side_canon_vectors_produce_identical_bytes_here() {
         use sha2::{Digest, Sha256};
@@ -862,8 +739,6 @@ mod tests {
             let expect_sha = st(c.get("sha256").unwrap());
             let expect_len = int(c.get("bytes").unwrap());
 
-            // The canonical string doubles as the value conveyance: parse it,
-            // re-canonicalize, and the fixed point must hold to the byte.
             let v = parse(canon_str.as_bytes())
                 .unwrap_or_else(|e| panic!("case {name}: does not parse here: {e}"));
             let ours = canonical(&v).unwrap();
@@ -879,7 +754,6 @@ mod tests {
     }
 }
 
-/// Lowercase hex without a dependency; sha2 emits raw bytes only.
 #[cfg(test)]
 mod hex {
     pub fn encode_like(d: impl AsRef<[u8]>) -> String {

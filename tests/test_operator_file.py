@@ -1,12 +1,3 @@
-"""The live-demo overlay: a judge's own sentence, planted, carved, then destroyed.
-
-The property that matters is not that planting works. It is that planting cannot move
-any number this project publishes. The forty-file corpus is the subject of every
-measured claim — 33 admitted, 28 of 40 recovered, the 0.9000/0.6500 separation, the
-0.0357 binding margin — so a forty-first file in `counted_set` would invalidate the
-documentation without failing anything.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -29,7 +20,6 @@ SENTENCE = b"A sentence the judge typed at 14:32 that nobody had seen before."
 
 @pytest.fixture
 def pristine(tmp_path):
-    """A private copy of the fixture, so a planted image never leaks into another test."""
     if not (os.path.exists(IMAGE) and os.path.exists(MANIFEST)):
         pytest.skip("out/fixture.img is absent; run `make fixtures`")
     d = tmp_path / "out"
@@ -56,13 +46,6 @@ def test_the_planted_bytes_are_at_the_offset_the_sidecar_claims(pristine):
 
 
 def test_the_crc_proves_the_recovered_bytes_are_the_originals(pristine):
-    """Why ZIP and not JPEG.
-
-    docs/architecture.md is careful that a confidence score says "well-formed object of
-    this type", not "the original bytes" — and names handover_briefing.mov as a case
-    where a perfect structural score sits on a different SHA-256. ZIP's CRC-32 covers
-    the payload, so recovery here is provably byte-exact rather than merely plausible.
-    """
     sc = _plant(pristine)
     img = open(os.path.join(pristine, build_mod.IMAGE_NAME), "rb").read()
     z = zipfile.ZipFile(io.BytesIO(img[sc["offset"]:sc["offset"] + sc["size"]]))
@@ -73,7 +56,6 @@ def test_the_crc_proves_the_recovered_bytes_are_the_originals(pristine):
 
 
 def test_planting_touches_none_of_the_forty(pristine):
-    """The claim the documentation depends on."""
     sc = _plant(pristine)
     man = json.load(open(os.path.join(pristine, build_mod.MANIFEST_NAME)))
     assert len(man["files"]) == 40
@@ -85,7 +67,6 @@ def test_planting_touches_none_of_the_forty(pristine):
 
 
 def test_every_planted_file_still_reads_back_byte_for_byte(pristine):
-    """Stronger than non-overlap: the forty are unchanged, not merely un-straddled."""
     before = open(os.path.join(pristine, build_mod.IMAGE_NAME), "rb").read()
     man = json.load(open(os.path.join(pristine, build_mod.MANIFEST_NAME)))
     _plant(pristine)
@@ -97,18 +78,12 @@ def test_every_planted_file_still_reads_back_byte_for_byte(pristine):
 
 
 def test_it_refuses_to_plant_twice(pristine):
-    """Two payloads and a sidecar describing one is worse than a refusal."""
     _plant(pristine)
     with pytest.raises(plant_mod.PlantError, match="does not match its manifest digest"):
         _plant(pristine, b"a second sentence")
 
 
 def test_it_refuses_a_payload_larger_than_the_free_run(pristine):
-    """Checked against the payload directly.
-
-    Routing 64 MB of random bytes through fixtures/deflate.py to prove a size check
-    would spend a minute of CPU demonstrating the encoder rather than the refusal.
-    """
     oversized = b"\x00" * (64 << 20)
     with pytest.raises(plant_mod.PlantError, match="largest free run"):
         plant_mod.plant(
@@ -118,7 +93,6 @@ def test_it_refuses_a_payload_larger_than_the_free_run(pristine):
 
 
 def test_the_sidecar_records_that_seed_identity_is_broken(pristine):
-    """The operator must not be able to forget. `make fixtures` restores it."""
     sc = _plant(pristine)
     assert sc["seed_identity"].startswith("BROKEN")
     assert sc["image_sha256_before"] != sc["image_sha256_after"]

@@ -1,58 +1,3 @@
-//! `carve` — the operator's handle on the carving engine.
-//!
-//! Image path in. **One** JSON document on stdout, conforming to
-//! `sentinelwipe.carve.report/1` as frozen in `docs/output_schema.md`. Nothing
-//! else on stdout, ever: diagnostics go to stderr, so `carve img > report.json`
-//! is always a valid report and never a report with a progress line in it.
-//!
-//! # Exit codes
-//!
-//! The convention is `grep`'s, which is the one every operator already knows:
-//! 0 means found, 1 means a clean run that found nothing, and 2 and above mean
-//! the run itself did not happen properly.
-//!
-//! | code | meaning |
-//! |---|---|
-//! | 0 | at least one candidate was admitted. The report is on stdout |
-//! | 1 | no candidate was admitted. **Not an error.** The report is on stdout and is complete. This is the expected exit of the post-wipe carve, and that exit *is* the proof the wipe worked |
-//! | 2 | usage error — an unknown option, a missing value, no image path. Nothing on stdout |
-//! | 3 | the image could not be read. Nothing on stdout |
-//! | 4 | internal error — the engine broke an invariant of its own. Nothing on stdout |
-//!
-//! A shell that must not stop on exit 1 should test the code rather than rely on
-//! `set -e`. `make demo` does exactly that.
-//!
-//! # Byte-identical pre-wipe and post-wipe invocations
-//!
-//! The product claim is that the same carver, with the same parameters, is
-//! pointed at the medium before and after the wipe. So every parameter that
-//! changes what the engine does is a command-line option — none is a constant
-//! compiled in, an environment variable, or a default that differs between
-//! runs — and the report republishes all of them in `policy` and in the
-//! diagnostics. The two invocations differ in exactly one flag, `--phase`, and
-//! `run.image_sha256` is what proves the medium changed underneath them.
-//!
-//! ```text
-//! carve --phase pre-wipe  --manifest out/fixture.manifest.json out/fixture.img > pre.json
-//! carve --phase post-wipe --manifest out/fixture.manifest.json out/fixture.img > post.json
-//! ```
-//!
-//! Two-fragment reassembly is one such parameter. It is OFF by default and
-//! `--reassemble` turns it on; `--no-reassemble` states the default explicitly,
-//! so whichever way it is set, the state is on the command line and
-//! `provenance.command` republishes it on both sides. A reassembling demo runs
-//! the same two lines with `--reassemble --cluster-bytes N --max-gap-clusters N`
-//! added to each.
-//!
-//! # The one number that is not in the JSON
-//!
-//! `docs/output_schema.md` is frozen and carries no field for a validation
-//! count, so the cost of the two-fragment searches — every `structure::validate`
-//! call they spent, the failures included — is reported on **stderr** and named
-//! in `provenance.notes` so a reader of the JSON alone is told where it went.
-//! Adding a field for it would be a schema change with the ceremony §10
-//! describes, and a cost figure does not earn that.
-
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -62,15 +7,7 @@ use sentinelwipe_carve::carve::{
 };
 use sentinelwipe_carve::report::{emit, relative_label, EmitMeta, GroundTruth};
 
-/// The schema this binary emits. Bumping it is a schema change with the ceremony
-/// `docs/output_schema.md` §10 describes.
 
-/// Every kind the carver knows, in table order. `kind_policy` publishes all
-/// seven whether or not a record of that kind appears.
-
-
-// Exit codes. Named, because a bare `2` in a match arm is a number nobody can
-// grep for.
 const EXIT_ADMITTED: u8 = 0;
 const EXIT_NO_CANDIDATES: u8 = 1;
 const EXIT_USAGE: u8 = 2;
@@ -184,10 +121,6 @@ NOTES
   as not recovered.
 ";
 
-// ===========================================================================
-// Options off the command line
-// ===========================================================================
-
 struct Cli {
     image: PathBuf,
     image_path_label: Option<String>,
@@ -202,8 +135,6 @@ struct Cli {
 
 enum Parsed {
     Run(Box<Cli>),
-    /// Print this on stdout and exit 0. `--help` and `--version` are the only
-    /// two things other than the report that may reach stdout.
     Print(String),
     Usage(String),
 }
@@ -356,22 +287,7 @@ fn parse(args: &[String]) -> Parsed {
     Parsed::Run(Box::new(cli))
 }
 
-/// The string written to `run.image_path`. Schema §4.3: repo-relative, never
-/// absolute, because a report must not carry a laptop's directory layout.
-/// Does this path name a location from the root of a filesystem, rather than a
-/// location relative to the working directory?
-///
-/// This is deliberately **not** `Path::is_absolute`. On Windows that predicate
-/// requires a drive prefix, so `/private/var/tmp/fixture.img` — a perfectly
-/// ordinary absolute path on the machine the fixture was built on — reports
-/// `is_relative() == true` and would be copied into `run.image_path` whole. The
-/// report would then carry another laptop's directory layout, which is the one
-/// thing `relative_label` exists to prevent. Testing for a root component *or* a
-/// prefix catches POSIX-style and Windows-style roots on either platform.
-
 fn main() -> ExitCode {
-    // An invariant the engine breaks is an internal error with its own exit
-    // code, not a code 101 nobody can distinguish from a signal.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         default_hook(info);
@@ -458,7 +374,6 @@ fn main() -> ExitCode {
     let report = carve(&image, &cli.opts);
     let elapsed = started.elapsed();
 
-    // Ground truth is read AFTER the carve and is never handed to the engine.
     let gt = match &cli.manifest {
         None => None,
         Some(p) => match std::fs::read(p) {
@@ -507,7 +422,6 @@ fn main() -> ExitCode {
         }
     }
 
-    // ---- diagnostics, on stderr ------------------------------------------
     let admitted = report.admitted();
     eprintln!(
         "carve: scanned {} candidates, suppressed {} overlapping, recorded {}",
@@ -537,9 +451,6 @@ fn main() -> ExitCode {
             ra.refused_contiguous,
             ra.budget
         );
-        // The schema is frozen and has no field for a cost. Saying where the
-        // number went is the difference between a missing figure and a hidden
-        // one.
         eprintln!(
             "carve: reassembly cost {} structure validations, {} splice(s) accepted by the \
              validator, {} of them determined and returned. docs/output_schema.md is FROZEN and \
@@ -610,12 +521,6 @@ fn main() -> ExitCode {
     ExitCode::from(EXIT_ADMITTED)
 }
 
-// ===========================================================================
-// Ground truth off the fixture manifest
-// ===========================================================================
-
-/// The manifest's own `kind` label to a carver `Kind`. DOCX is a ZIP container
-/// and carves as `Kind::Zip`; TXT has no signature and no row in the table.
 fn reproducing_command(cli: &Cli) -> String {
     let mut parts = vec!["carve".to_string()];
     parts.push(format!("--phase {}", cli.phase));
@@ -626,9 +531,6 @@ fn reproducing_command(cli: &Cli) -> String {
     if let Some(n) = cli.opts.residue_window {
         parts.push(format!("--residue-window {n}"));
     }
-    // Reassembly is spelled out either way. The pre-wipe and post-wipe carve
-    // must be shown to have run with identical parameters, and a default nobody
-    // wrote down cannot be shown to have been held constant.
     if cli.opts.reassemble {
         parts.push("--reassemble".to_string());
         parts.push(format!("--cluster-bytes {}", cli.opts.cluster_bytes));
@@ -662,12 +564,6 @@ fn reproducing_command(cli: &Cli) -> String {
     parts.join(" ")
 }
 
-// ===========================================================================
-// UTC clock, without a dependency
-// ===========================================================================
-
-/// Days since 1970-01-01 to (year, month, day). Howard Hinnant's
-/// `civil_from_days`, which is exact for the whole proleptic Gregorian range.
 fn civil_from_days(z: i64) -> (i64, u64, u64) {
     let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -696,19 +592,9 @@ fn utc_now() -> String {
     )
 }
 
-// ===========================================================================
-// The minimal JSON reader for the fixture manifest. CLAUDE.md forbids serde;
-// this is the same reader the crate's integration tests and
-// examples/gen_sample_output.rs carry, and it reads one file this project
-// wrote itself.
-// ===========================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    // These moved to sentinelwipe_carve::report in the Phase-4 emitter
-    // extraction; the test module reaches them explicitly rather than
-    // through super::*, which no longer re-exports them.
     use sentinelwipe_carve::report::{esc, f, relative_label, stats, Json, SCHEMA};
     use sentinelwipe_carve::confidence::STRUCTURAL_BREACH_POINT;
     use std::path::Path;
@@ -785,8 +671,6 @@ mod tests {
 
     #[test]
     fn the_reassembly_state_is_spellable_in_both_directions() {
-        // A default nobody can write down cannot be shown to have been held
-        // constant across the wipe, so BOTH states have a flag.
         assert!(run(&["--reassemble", "i"]).opts.reassemble);
         assert!(!run(&["--no-reassemble", "i"]).opts.reassemble);
         assert!(!run(&["--reassemble", "--no-reassemble", "i"]).opts.reassemble);
@@ -801,7 +685,6 @@ mod tests {
             run(&[&["--phase", "post-wipe"][..], &args[..], &["out/fixture.img"][..]].concat());
         assert_eq!(pre.opts, post.opts, "the engine parameters must be identical");
         assert_ne!(pre.phase, post.phase);
-        // And the reproducing command republishes the geometry on both sides.
         for c in [&pre, &post] {
             let cmd = reproducing_command(c);
             assert!(cmd.contains("--reassemble"), "{cmd}");
@@ -812,7 +695,6 @@ mod tests {
 
     #[test]
     fn the_two_demo_invocations_differ_in_exactly_one_flag() {
-        // The product claim: same carver, same parameters, before and after.
         let pre = run(&["--phase", "pre-wipe", "-o", "pre.json", "out/fixture.img"]);
         let post = run(&["--phase", "post-wipe", "-o", "post.json", "out/fixture.img"]);
         assert_eq!(pre.opts, post.opts, "the engine parameters must be identical");
@@ -879,15 +761,10 @@ mod tests {
 
     #[test]
     fn an_absolute_path_never_reaches_the_report() {
-        // A POSIX-style root. On Windows this has a root and no drive prefix, so
-        // `Path::is_absolute` is false for it and an earlier version of this
-        // function copied it into the report verbatim.
         let label = relative_label(Path::new("/private/var/tmp/somewhere/fixture.img"), None);
         assert!(!label.starts_with('/'), "got {label:?}");
         assert_eq!(label, "fixture.img");
 
-        // A Windows-style root. Only asserted where the path parser understands
-        // it: on Unix `C:\a\b.img` is one ordinary relative filename.
         #[cfg(windows)]
         {
             let win = relative_label(Path::new(r"D:\somewhere\else\fixture.img"), None);
@@ -924,8 +801,6 @@ mod tests {
 
     #[test]
     fn the_json_escaper_survives_a_validator_detail_string() {
-        // Validator details are quoted verbatim into the report and can carry
-        // quotes and backslashes from a filename.
         let s = esc("gzip: 28-byte header naming \"carve\\session.log\"");
         assert_eq!(
             s,
@@ -938,7 +813,7 @@ mod tests {
     #[test]
     fn the_utc_clock_agrees_with_known_epochs() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(19_723), (2024, 1, 1)); // a leap year start
+        assert_eq!(civil_from_days(19_723), (2024, 1, 1));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
     }
 
@@ -982,8 +857,6 @@ mod tests {
 
     #[test]
     fn the_report_is_one_json_document_with_all_ten_required_keys() {
-        // A tiny image with a real object in it, carved through the shipped
-        // engine and emitted through the shipped writer.
         let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
         let mut img = vec![0u8; 512];
         let mut g = vec![0x1F, 0x8B, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xFF];
@@ -1027,15 +900,11 @@ mod tests {
         }
         assert_eq!(doc.get("schema").unwrap().s(), SCHEMA);
         assert_eq!(doc.get("ground_truth").unwrap(), &Json::Null);
-        // Rust prints a non-finite f64 as `inf`/`-inf`/`NaN`, none of which any
-        // JSON parser accepts. Matched against the serialized VALUE tokens, so
-        // the prose in provenance.notes that names the hazard is not a hit.
         for bad in [" inf", " -inf", " NaN"] {
             assert!(!json.contains(bad), "a non-finite number reached the report: {bad:?}");
         }
         assert!(json.ends_with("}\n"));
 
-        // counts add up, and admission is the one published comparison
         let counts = doc.get("counts").unwrap();
         let recs = doc.get("candidates").unwrap().arr();
         assert_eq!(counts.get("records").unwrap().u(), recs.len() as u64);
@@ -1059,8 +928,6 @@ mod tests {
         )));
     }
 
-    /// The smallest GZIP this project builds by hand, same construction as the
-    /// engine's own tests.
     fn tiny_gzip(payload: &[u8]) -> Vec<u8> {
         let mut g = vec![0x1F, 0x8B, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xFF];
         let n = payload.len() as u16;
@@ -1079,7 +946,6 @@ mod tests {
         let payload: Vec<u8> = (0u32..3000).map(|i| (i * 7 % 251) as u8).collect();
         let obj = tiny_gzip(&payload);
 
-        // Two extents on the cluster grid with a three-cluster gap of filler.
         let mut img = vec![0u8; C];
         img.extend_from_slice(&obj[..2 * C]);
         img.extend((0..3 * C).map(|i| ((i as u32 * 37) % 251) as u8 | 1));
@@ -1145,8 +1011,6 @@ mod tests {
             "the two extents are not separated by a gap"
         );
 
-        // The cost is NOT in the schema, and the report says so rather than
-        // leaving a reader to assume there was none.
         assert!(
             !json.contains("\"validations\""),
             "a validation count reached the frozen schema"
@@ -1172,7 +1036,6 @@ mod tests {
 
     #[test]
     fn an_empty_image_still_emits_a_complete_report() {
-        // The post-wipe empty-table state: a valid report, not an error.
         let cli = run(&["wiped.img"]);
         let rep = carve(&[], &cli.opts);
         let meta = EmitMeta {
@@ -1194,9 +1057,6 @@ mod tests {
                 assert!(matches!(p.get(k), Some(Json::Num(_))));
             }
         }
-        // Rust prints a non-finite f64 as `inf`/`-inf`/`NaN`, none of which any
-        // JSON parser accepts. Matched against the serialized VALUE tokens, so
-        // the prose in provenance.notes that names the hazard is not a hit.
         for bad in [" inf", " -inf", " NaN"] {
             assert!(!json.contains(bad), "a non-finite number reached the report: {bad:?}");
         }

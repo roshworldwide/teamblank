@@ -1,56 +1,3 @@
-//! Generator for `fixtures/sample_output.json`, the frozen golden sample of the
-//! carve report schema defined in `docs/output_schema.md`.
-//!
-//! ```text
-//! cargo run --release -p sentinelwipe-carve --example gen_sample_output
-//! ```
-//!
-//! ## Why this exists
-//!
-//! CLAUDE.md rule 2: every number that appears anywhere traces to a measurement,
-//! and there are no illustrative values, not even in a mock. A hand-written
-//! sample report would put 56 fabricated numbers in front of the frontend, and
-//! a frozen mystery file nobody can regenerate is the same defect a year later.
-//! So the sample is GENERATED, from the frozen fixture, through the shipped
-//! `structure::validate` and the shipped `confidence::confidence` — the same two
-//! calls `tests/residue_separation.rs` makes, in the same order, on the same
-//! byte spans.
-//!
-//! Ground truth (paths, kinds, offsets, extents, sizes, SHA-256) is READ from
-//! `out/fixture.manifest.json`, never transcribed. The gate, the weights and the
-//! ladder rungs are READ from `confidence.rs` consts, never written as literals.
-//!
-//! ## What it is NOT
-//!
-//! This is not a carve run. `carve.rs` does not exist yet. This program does not
-//! search the image for objects and then report what it found; it takes the two
-//! populations the fixture manifest already defines — the 35 planted carvable
-//! files and the residue candidates the shipped scanner finds outside every
-//! planted extent — and scores each one, so the emitted report exercises every
-//! field of the schema with real values. `provenance.is_carve_run` is `false` in
-//! the output for exactly this reason, and the record count is NOT a recall
-//! number. See the notes the program writes into `provenance.notes`.
-//!
-//! ## Determinism
-//!
-//! The output is byte-identical across runs given the same fixture: no
-//! timestamps, no durations, no host paths, no map iteration order. Records are
-//! sorted by byte offset. Every float is serialized with exactly six decimal
-//! places. The schema's optional `timing` block is deliberately emitted as
-//! `null` here, because a duration is the one measurement that would make the
-//! golden sample differ from itself.
-//!
-//! ## Self-check
-//!
-//! SHA-256 is hand-rolled below (CLAUDE.md forbids a new dependency; `crc32` in
-//! `structure/mod.rs` is the same call). It is not trusted on its own: the
-//! program hashes the bytes it assembled for each of the 35 planted objects and
-//! asserts the digest equals the one `fixtures/build_image.py` independently
-//! recorded in the manifest. That single assertion simultaneously proves the
-//! hash implementation, proves the assembled extents are the planted file, and
-//! proves each validator's `end` landed exactly on the object's last byte. If it
-//! fires, the program writes nothing.
-
 use sentinelwipe_carve::confidence::{
     confidence, entropy_band, kind_defines_footer, shannon_entropy, size_bounds, Confidence,
     ENTROPY_UNKNOWN, MIN_CONFIDENCE, MIN_ENTROPY_SAMPLE, NON_STRUCTURE_CEILING,
@@ -65,22 +12,12 @@ const IMAGE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../out/fixture
 const MANIFEST_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../out/fixture.manifest.json");
 const OUT_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/sample_output.json");
 
-/// Image-relative paths, so the report never carries this machine's directories.
 const IMAGE_REL: &str = "out/fixture.img";
 const MANIFEST_REL: &str = "out/fixture.manifest.json";
 
-/// Bytes of unrelated image appended after a planted object's last extent, so
-/// that `end` is a claim the validator has to make rather than the slice length
-/// handing it the answer. Identical to `tests/residue_separation.rs`.
 const TAIL: usize = 8192;
 
-/// The schema identifier written into every report. Bumping it is a schema change.
 const SCHEMA: &str = "sentinelwipe.carve.report/1";
-
-// ===========================================================================
-// SHA-256, hand-rolled. FIPS 180-4. Verified against the manifest's 35
-// independently-computed digests before anything is written.
-// ===========================================================================
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -171,12 +108,6 @@ fn sha256_hex(data: &[u8]) -> String {
     }
     s
 }
-
-// ===========================================================================
-// The minimal JSON reader. Same reader `tests/residue_separation.rs` and
-// `tests/structure_media_fixture.rs` carry; CLAUDE.md forbids serde and an
-// example cannot import a test crate.
-// ===========================================================================
 
 #[derive(Debug, Clone, PartialEq)]
 enum Json {
@@ -328,13 +259,6 @@ impl<'a> P<'a> {
     }
 }
 
-// ===========================================================================
-// Ground truth off the manifest
-// ===========================================================================
-
-/// The manifest's `kind` string to a carver `Kind`. DOCX is a ZIP container and
-/// carves as `Kind::Zip`; TXT has no signature and is out of scope. Identical to
-/// `tests/residue_separation.rs::kind_of`.
 fn kind_of(s: &str) -> Option<Kind> {
     match s {
         "JPEG" => Some(Kind::Jpeg),
@@ -356,7 +280,6 @@ struct Planted {
     size: u64,
     sha256: String,
     recoverable: String,
-    /// (byte_offset, byte_length) in LOGICAL order.
     extents: Vec<(u64, u64)>,
 }
 
@@ -428,11 +351,6 @@ fn largest_planted(files: &[Planted], kind: Kind) -> u64 {
         .unwrap_or(0)
 }
 
-// ===========================================================================
-// The two signature-layer observations, taken from the SHIPPED signature module.
-// Identical to `tests/residue_separation.rs`.
-// ===========================================================================
-
 fn header_matches(kind: Kind, buf: &[u8]) -> bool {
     SIGNATURES.iter().any(|s| {
         s.kind == kind && buf.len() >= s.header.len() && &buf[..s.header.len()] == s.header
@@ -446,9 +364,6 @@ fn footer_in_sequence(buf: &[u8], kind: Kind, end: u64) -> bool {
     next_footer(buf, kind, sig.header.len() as u64, end).is_some()
 }
 
-/// The published ladder rung name for a (kind, sig_ok, footer_found) triple.
-/// Derived by comparing the value `signature_integrity` returned against the
-/// four published rung consts, so a renamed rung cannot drift from its value.
 fn rung_name(v: f64) -> &'static str {
     if v == SIG_HEADER_AND_FOOTER {
         "header-and-footer"
@@ -462,10 +377,6 @@ fn rung_name(v: f64) -> &'static str {
         panic!("signature_integrity returned {v} which is not a published rung")
     }
 }
-
-// ===========================================================================
-// One report record
-// ===========================================================================
 
 struct Rec {
     kind: Kind,
@@ -485,8 +396,6 @@ struct Rec {
     admitted: bool,
     reason_code: Option<&'static str>,
     reason: Option<String>,
-    /// `Some` only when this record was matched to a manifest entry:
-    /// (path, manifest kind, manifest `expected_recoverable`, sha256 matches).
     gt: Option<(String, String, String, bool)>,
 }
 
@@ -496,8 +405,6 @@ impl Rec {
     }
 }
 
-/// The bytes a carver holds for one planted object: its extents in LOGICAL
-/// order, then unrelated image bytes so `end` is a real claim.
 fn assembled(img: &[u8], p: &Planted) -> Vec<u8> {
     let mut v = Vec::with_capacity(p.size as usize + TAIL);
     for (o, l) in &p.extents {
@@ -509,8 +416,6 @@ fn assembled(img: &[u8], p: &Planted) -> Vec<u8> {
     v
 }
 
-/// Split a recovered length back into extents, following the planted extent
-/// layout. `end` is a length in LOGICAL bytes; the extents are physical spans.
 fn extents_for(p: &Planted, end: u64) -> Vec<(u64, u64)> {
     let mut out = Vec::new();
     let mut left = end;
@@ -583,10 +488,6 @@ fn score_residue(img: &[u8], cand: &Candidate, window: u64) -> Rec {
         offset: cand.header_at,
         length: end - cand.header_at,
         extents: vec![(cand.header_at, end - cand.header_at)],
-        // The structure walker established no end for any residue candidate, so
-        // the span is a signature-layer span: header to terminator when the
-        // scanner found one, otherwise the fallback window. Never a validator's
-        // claim about where an object stops.
         assembly: "signature-span",
         sha256: sha256_hex(data),
         entropy: shannon_entropy(data),
@@ -604,10 +505,6 @@ fn score_residue(img: &[u8], cand: &Candidate, window: u64) -> Rec {
     }
 }
 
-/// The rejection reason. `reason` is one line for the operator; `reason_code` is
-/// the machine form the UI groups by. The structural half is
-/// `structure::validate`'s own `detail` string, quoted verbatim and never
-/// paraphrased, because it is the string that names the check and the offset.
 fn set_reason(r: &mut Rec) {
     if r.admitted {
         r.reason_code = None;
@@ -625,10 +522,6 @@ fn set_reason(r: &mut Rec) {
     ));
 }
 
-// ===========================================================================
-// JSON writing, hand-rolled. CLAUDE.md forbids serde.
-// ===========================================================================
-
 fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len() + 8);
     for c in s.chars() {
@@ -645,12 +538,8 @@ fn esc(s: &str) -> String {
     o
 }
 
-/// EVERY float in the report goes through here: exactly six decimal places, so
-/// the file is byte-stable and no field is silently more precise than another.
-/// Display rounding is the UI's business, not the wire format's.
 fn f(x: f64) -> String {
     let s = format!("{x:.6}");
-    // -0.000000 is the same number as 0.000000 and must not depend on sign bits.
     if s == "-0.000000" {
         "0.000000".to_string()
     } else {
@@ -716,10 +605,6 @@ impl W {
     }
 }
 
-// ===========================================================================
-// main
-// ===========================================================================
-
 fn main() {
     let img = std::fs::read(IMAGE_PATH).unwrap_or_else(|e| {
         panic!(
@@ -735,7 +620,6 @@ fn main() {
     let manifest_sha = sha256_hex(&manbytes);
     let image_sha = sha256_hex(&img);
 
-    // Ground truth the manifest states about itself. Read, never transcribed.
     let man_image_sha = man.get("image_sha256").unwrap().s().to_string();
     assert_eq!(
         image_sha, man_image_sha,
@@ -746,11 +630,8 @@ fn main() {
     let ranges = planted_ranges(&man);
     let all_files = man.get("files").unwrap().arr();
 
-    // ---- records ---------------------------------------------------------
     let mut recs: Vec<Rec> = files.iter().map(|p| score_planted(&img, p)).collect();
 
-    // The SHIPPED scanner over the whole image; anything outside a planted
-    // extent is residue by the same rule the manifest's counts used.
     let residue: Vec<Candidate> = scan(&img)
         .into_iter()
         .filter(|c| !in_planted(&ranges, c.header_at))
@@ -762,7 +643,6 @@ fn main() {
         set_reason(r);
     }
 
-    // ---- self-checks, before anything is written -------------------------
     let mut hash_matches = 0usize;
     for r in &recs {
         if let Some((path, _, _, ok)) = &r.gt {
@@ -797,7 +677,6 @@ fn main() {
             .then(a.kind.as_str().cmp(b.kind.as_str()))
     });
 
-    // ---- counts, all literally counted from `recs` ------------------------
     let n_admitted = recs.iter().filter(|r| r.admitted).count();
     let n_rejected = recs.len() - n_admitted;
     let n_sha_match = recs
@@ -816,7 +695,6 @@ fn main() {
     ];
     let assemblies = ["contiguous", "reassembled", "signature-span"];
 
-    // ---- distributions and margins, all computed --------------------------
     let adm: Vec<f64> = recs
         .iter()
         .filter(|r| r.admitted)
@@ -843,7 +721,6 @@ fn main() {
         .map(|r| r.c.structural_validity)
         .fold(f64::NEG_INFINITY, f64::max);
 
-    // ---- reachability, counted off the manifest ---------------------------
     let n_planted_total = all_files.len() as u64;
     let count_reach = |tag: &str| {
         all_files
@@ -855,9 +732,6 @@ fn main() {
     let n_bifragment = count_reach("bifragment");
     let n_unreachable = count_reach("unrecoverable-by-design");
 
-    // Why each unreachable file is unreachable, DERIVED from the manifest row
-    // rather than named: no signature table row for its kind, more than two
-    // extents, or extents whose physical order is not their logical order.
     let mut unreachable: Vec<(String, String, String)> = Vec::new();
     for fj in all_files {
         if fj.get("expected_recoverable").unwrap().s() != "unrecoverable-by-design" {
@@ -894,14 +768,10 @@ fn main() {
     }
     assert_eq!(unreachable.len() as u64, n_unreachable);
 
-    // =======================================================================
-    // Emit
-    // =======================================================================
     let mut w = W::new();
     w.line(0, "{");
     w.kv_s(2, "schema", SCHEMA, true);
 
-    // ---- provenance ----
     w.line(2, "\"provenance\": {");
     w.kv_s(4, "producer", "core/carve/examples/gen_sample_output.rs", true);
     w.kv_s(
@@ -951,7 +821,6 @@ fn main() {
     w.line(4, "]");
     w.line(2, "},");
 
-    // ---- run ----
     w.line(2, "\"run\": {");
     w.kv_s(4, "phase", "pre-wipe", true);
     w.kv_s(4, "image_path", IMAGE_REL, true);
@@ -962,7 +831,6 @@ fn main() {
     w.kv_os(4, "timing", None, false);
     w.line(2, "},");
 
-    // ---- policy ----
     w.line(2, "\"policy\": {");
     w.kv_s(
         4,
@@ -994,7 +862,6 @@ fn main() {
     w.kv_f(4, "entropy_unknown", ENTROPY_UNKNOWN, false);
     w.line(2, "},");
 
-    // ---- kind_policy ----
     w.line(2, "\"kind_policy\": {");
     for (i, k) in kinds.iter().enumerate() {
         let b = entropy_band(*k);
@@ -1019,7 +886,6 @@ fn main() {
     }
     w.line(2, "},");
 
-    // ---- counts ----
     w.line(2, "\"counts\": {");
     w.kv_u(4, "records", recs.len() as u64, true);
     w.kv_u(4, "admitted", n_admitted as u64, true);
@@ -1059,7 +925,6 @@ fn main() {
     w.line(4, "}");
     w.line(2, "},");
 
-    // ---- score_distribution ----
     w.line(2, "\"score_distribution\": {");
     for (name, (n, mn, mx, me), comma) in [
         ("admitted", (an, amin, amax, amean), true),
@@ -1078,7 +943,6 @@ fn main() {
     }
     w.line(2, "},");
 
-    // ---- margin ----
     w.line(2, "\"margin\": {");
     w.kv_f(4, "lowest_admitted", amin, true);
     w.kv_f(4, "highest_rejected", rmax, true);
@@ -1100,7 +964,6 @@ fn main() {
     );
     w.line(2, "},");
 
-    // ---- ground_truth ----
     w.line(2, "\"ground_truth\": {");
     w.kv_s(4, "manifest_path", MANIFEST_REL, true);
     w.kv_s(4, "manifest_sha256", &manifest_sha, true);
@@ -1135,7 +998,6 @@ fn main() {
     );
     w.line(2, "},");
 
-    // ---- candidates ----
     w.line(2, "\"candidates\": [");
     for (i, r) in recs.iter().enumerate() {
         w.line(4, "{");

@@ -1,34 +1,4 @@
 #!/usr/bin/env python3
-"""The presentation server: serves ui/ and runs the real engine on request.
-
-Start this once before presenting, then drive the demo from the browser:
-
-    python ui/serve.py
-
-It binds 127.0.0.1 only, uses nothing outside the standard library, and makes
-no outbound connection of any kind. An air-gapped machine runs it unchanged.
-
-WHY IT EXISTS. ui/instrument.html can replay a recorded run from a file:// URL
-with no server at all, and that stays true. But a page opened from file:// can
-never start a process, so the RUN button needs something local to ask. This is
-that something and nothing more: three subprocess calls in a fixed order, with
-the trace file tailed while the wipe runs so the browser sees frames as they
-are measured rather than after the fact.
-
-SAFETY, and it is the same rule the rest of the repo follows. The wipe NEVER
-targets out/fixture.img. It runs against a copy inside out/live-run, with
---allow-root pointed at that directory, so the guard's containment check is
-what stops a mistake rather than this file's good intentions. The fixture's
-sha256 is taken before and re-verified after; a change is a hard failure that
-is reported to the browser and logged here.
-
-Endpoints:
-    GET  /                  -> ui/index.html
-    GET  /<file>            -> anything under ui/, served literally
-    GET  /api/status        -> can the engine run on this machine, and why not
-    GET  /api/run           -> Server-Sent Events, one event per phase and per
-                               telemetry frame, ending in the full reports
-"""
 from __future__ import annotations
 
 import hashlib
@@ -47,8 +17,6 @@ import webbrowser
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 UI = REPO / "ui"
-# ui/ on the path so `import usb` works however this file was invoked --
-# python ui/serve.py puts it there, `python -m` and an IDE runner do not.
 if str(UI) not in sys.path:
     sys.path.insert(0, str(UI))
 EXE = ".exe" if os.name == "nt" else ""
@@ -61,9 +29,6 @@ WORK = REPO / "out/live-run"
 
 HOST, PORT = "127.0.0.1", 8787
 
-# One run at a time. A second RUN press while the engine is working is refused
-# rather than queued: two wipes against one target is not a thing to be clever
-# about.
 _RUN_LOCK = threading.Lock()
 
 
@@ -76,7 +41,6 @@ def sha256(path: pathlib.Path) -> str:
 
 
 def readiness() -> dict:
-    """Everything that has to be true before RUN can mean anything."""
     missing = []
     for label, path in (("carve", CARVE), ("wipe", WIPE),
                         ("verify", VERIFY)):
@@ -95,24 +59,6 @@ def readiness() -> dict:
 
 
 class Runner:
-    """Drives `verify`, which is the whole loop in one process.
-
-    Phase 4 replaced three binaries called by argv with one that carves, wipes,
-    carves again, signs the certificate and appends to the chain. Calling that
-    here rather than re-orchestrating the three is not a convenience: `verify`
-    enforces parameter identity between the two carves BY CONSTRUCTION, which
-    is the entire claim the second carve exists to support. Re-driving the
-    binaries separately would hand that guarantee back to this file, and this
-    file is not where it belongs.
-
-    Frames still reach the browser live, because the engine writes its trace as
-    it works and this tails the file while the process runs. The phase strip is
-    inferred from that trace -- no trace yet means the first carve is running,
-    a trace being appended to means the wipe is, frames stopping while the
-    process still lives means the second carve is -- and every elapsed figure
-    says which clock produced it.
-    """
-
     def __init__(self, emit):
         self.emit = emit
 
@@ -157,14 +103,10 @@ class Runner:
         t_run = time.perf_counter()
         sent = 0
         t_carve_pre = 0.0
-        # stdout to a FILE, never a pipe: an undrained pipe fills its OS buffer,
-        # blocks the child, and deadlocks the tail loop against a process that
-        # is itself waiting on us.
         with open(outf, "w", encoding="utf-8") as so:
             with open(errf, "w", encoding="utf-8") as se:
                 proc = subprocess.Popen(argv, stdout=so, stderr=se, text=True)
 
-                # the first carve owns all the time before any trace exists
                 while not trace.exists() and proc.poll() is None:
                     time.sleep(0.002)
                 t_carve_pre = time.perf_counter() - t_run
@@ -185,7 +127,7 @@ class Runner:
                                 try:
                                     ev = json.loads(line)
                                 except json.JSONDecodeError:
-                                    continue          # a half-written line
+                                    continue
                                 if ev.get("ev") == "progress":
                                     sent += 1
                                     self.emit("frame", ev)
@@ -204,10 +146,6 @@ class Runner:
                                         self.emit("frame", ev)
                                 break
                             time.sleep(0.002)
-                    # This window ends when the PROCESS ends, not when the
-                    # wipe does, so it silently contains the second carve. It
-                    # is not published as a duration; the engine reports the
-                    # wipe exactly and the remainder is attributed below.
                     t_tail = time.perf_counter() - t_wipe
                     self.emit("phase", {"name": "wipe", "state": "end"})
                     self.emit("phase", {"name": "carve_post", "state": "begin"})
@@ -215,10 +153,6 @@ class Runner:
         rc = proc.returncode
         elapsed = time.perf_counter() - t_run
 
-        # 0 is the claim holding. 7 is SURVIVORS: an admitted candidate outlived
-        # the wipe. The bundle is still written and the page still shows it,
-        # because evidence of a failure is still evidence -- but it is reported
-        # as a failure, never quietly.
         if rc not in (0, 7) or not bundle_path.exists():
             self.emit("failed", {
                 "message": "verify exited %d: %s" % (
@@ -243,7 +177,6 @@ class Runner:
             "limits": wipe["limits"], "run": wipe["run"],
             "authorization": wipe["authorization"],
         })
-        # what is left after the first carve and the engine's own wipe figure
         engine_wipe_s = wipe["overwrite"]["duration_ns"] / 1e9
         remainder = elapsed - t_carve_pre - engine_wipe_s
         self.emit("carve_post", {
@@ -251,10 +184,6 @@ class Runner:
             "elapsed_s": round(remainder, 6) if remainder > 0 else None,
             "source": "server clock, remainder"})
 
-        # The ledger, with the canonical bytes produced the same way
-        # ui/build_payload.py produces them, so the page hashes exactly what the
-        # engine signed. If that import fails the page is told it has no
-        # canonical bytes rather than shown something close to them.
         ledger = {"signed_certificate": bundle["signed_certificate"],
                   "chain": bundle["chain"]}
         try:
@@ -289,7 +218,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=str(UI), **kw)
 
-    def log_message(self, fmt, *args):      # one line per request, not three
+    def log_message(self, fmt, *args):
         if self.path.startswith("/api/"):
             sys.stderr.write(f"serve: {self.path}\n")
 
@@ -304,9 +233,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/favicon.ico":
-            # No icon ships with the pages. Answering 204 keeps the browser
-            # console clean, which matters because "no console errors" is a
-            # thing this demo claims out loud.
             self.send_response(204)
             self.send_header("Content-Length", "0")
             self.end_headers()
@@ -325,10 +251,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._usb_restore()
         return super().do_GET()
 
-    # ---- removable media --------------------------------------------------
-    # Read-only, all three. ui/usb.py opens every volume handle "rb" and there
-    # is no write path in it: this half of the product recovers, it never wipes.
-    # The wipe is demonstrated against a loopback image and nothing else.
     def _letter(self):
         q = urllib.parse.urlparse(self.path).query
         return urllib.parse.parse_qs(q).get("letter", [""])[0]
@@ -348,8 +270,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             usb.WORK.mkdir(parents=True, exist_ok=True)
             (usb.WORK / "enrolment.json").write_text(
                 json.dumps(e, indent=2), encoding="utf-8")
-            # the file list goes back so the page can name what will and will
-            # not come back BEFORE anything is deleted
             return self._json(e)
         except (ValueError, PermissionError, FileNotFoundError) as exc:
             return self._json({"error": str(exc)}, 400)
@@ -357,12 +277,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self._json({"error": str(exc)}, 500)
 
     def _usb_restore(self):
-        """Put the recovered files back on the stick. The one write path.
-
-        Safe because of the ORDER: this runs only after the volume has been
-        imaged, the image carved, and every object extracted and verified on
-        local disk. usb.restore() refuses if that extraction is not there.
-        """
         letter = self._letter()
         try:
             import usb
@@ -407,7 +321,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 last = [0.0]
 
                 def prog(done, total, secs):
-                    # throttled: the browser does not need 2,000 events
                     if secs - last[0] < 0.12:
                         return
                     last[0] = secs
@@ -430,10 +343,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                                   usb.WORK / "evidence.img")
                 emit("compare", res)
 
-                # The recovered objects as real files. Never onto the volume
-                # they came from -- extract() refuses a destination on the
-                # source drive, because writing there can overwrite bytes not
-                # yet carved.
                 ex = usb.extract(res["hits"], usb.WORK / "evidence.img",
                                  usb.WORK / "recovered", source_letter=letter)
                 emit("extracted", {k: ex[k] for k in ("dir", "count", "verified")})
@@ -470,8 +379,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             try:
                 Runner(emit).go()
             except BrokenPipeError:
-                pass                                   # the tab went away
-            except Exception as exc:                   # report, never a 500 page
+                pass
+            except Exception as exc:
                 try:
                     emit("failed", {"message": str(exc)})
                 except Exception:
